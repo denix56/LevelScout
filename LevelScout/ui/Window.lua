@@ -1,7 +1,8 @@
 -- ui/Window.lua: the LevelScout window. One movable panel with four tabs:
 --   Route   the current step and what follows
 --   Zones   where leveling is best right now
---   Quests  what the route leaves out, and why
+--   Quests  what the route leaves out, and why; a search box finds any quest to accept by
+--           name and makes it (with its chain) the plan
 --   Class   class quest chains to pick (the title glows while one is new)
 -- It draws from ns.Engine.view only. It uses the game's own look: the tooltip border and
 -- background, the quest "!" and "?" icons, the quest-log highlight, gold titles. Every piece
@@ -17,6 +18,8 @@ local DEFAULT_W, MIN_W, MAX_W = 330, 260, 640
 local WIDTH = DEFAULT_W -- the content width; follows settings.width once the window is built
 local PAD = 10
 local HEADER_H, SUMMARY_H, BANNER_H, TABS_H, FOOTER_H = 30, 40, 30, 24, 20
+local SEARCH_H = 28 -- the Quests tab's search box
+UI.SEARCH_DELAY = 0.15 -- seconds after the last key before the search runs
 local PROGRESS_H = 3 -- the bar shown while a plan is being made
 local ROW_H, ROW_CURRENT_H, SECTION_H = 36, 46, 22
 local LINE_H = 13 -- each extra line of detail on a row
@@ -625,8 +628,76 @@ local LISTS = {
     { "ignored", "Skipped by you", "Click to bring it back." },
 }
 
+-- The quest picked by name being followed (Engine.PickQuest), on top of the Quests tab.
+local function followingRow(c, view)
+    return {
+        h = ROW_H, current = true, pill = "SHOWN", icon = ICON.shown, title = Format.QuestName(c.name, c.level),
+        detail = chainSummary(c, view.plan),
+        tip = function()
+            return { { "Quest: " .. Format.QuestName(c.name, c.level) },
+                { "This is the plan shown: the quest and its chain. When it is done, LevelScout goes back to leveling." },
+                { "Right-click: back to the leveling plan", color = C.faint } }
+        end,
+        onClick = function(mouse) if mouse == "RightButton" then Engine.EndChain() end end,
+    }
+end
+
+local pickFound -- (defined with the search box: makes a found quest the plan)
+
+-- Is something typed in the search box (two letters at least)? The Quests tab then lists what
+-- it found instead of what the route leaves out.
+local function searching()
+    return #((state.query or ""):gsub("[^%w]", "")) >= 2
+end
+
+-- What the search box found (state.results, for state.query).
+local function foundRows()
+    local out = {}
+    local results = state.resultsFor == state.query and state.results or nil
+    if not results then
+        out[#out + 1] = { h = ROW_H, title = "Searching...", dim = true }
+        return out
+    end
+    if #results == 0 then
+        out[#out + 1] = { h = ROW_H, pill = "TIP", icon = ICON.tip, title = "No quest you can accept matches",
+            detail = "Typos and case do not matter. Quests for a higher level, or whose earlier quests are not done, are not listed.", dim = true }
+        return out
+    end
+    out[#out + 1] = { section = string.format("Quests you can accept  %s%d|r", hex(C.faint), #results), h = SECTION_H }
+    for i, r in ipairs(results) do
+        local where = r.zone and zoneName(r.zone) or nil
+        local detail = (r.giver or "?") .. (where and ("  |cff5f646e·|r  " .. where) or "")
+        if (r.chain or 1) > 1 then detail = detail .. "  |cff5f646e·|r  " .. hex(C.accent) .. "chain of " .. r.chain .. "|r" end
+        out[#out + 1] = {
+            h = ROW_H, pill = "FIND", icon = ICON.accept, title = Format.QuestName(r.name, r.level), detail = detail,
+            right = (r.minLevel or 0) > 0 and ("L" .. r.minLevel) or nil,
+            tip = function()
+                local lines = { { Format.QuestName(r.name, r.level) } }
+                if r.giver then lines[#lines + 1] = { "Given by " .. r.giver .. (where and (" in " .. where) or "") } end
+                if (r.chain or 1) > 1 then
+                    lines[#lines + 1] = { string.format("Part of a chain: %d quests still to do, all planned", r.chain) }
+                    for k, n in ipairs(r.chainNames or {}) do
+                        if k > 10 then lines[#lines + 1] = { "  ...", color = C.dim }; break end
+                        lines[#lines + 1] = { "  " .. n, color = C.dim }
+                    end
+                end
+                lines[#lines + 1] = { (i == 1 and "Click (or Enter): " or "Click: ") .. "make it the plan", color = C.faint }
+                return lines
+            end,
+            onClick = function() pickFound(r) end,
+        }
+    end
+    return out
+end
+
 local function questRows(view)
     local out = {}
+    local c = view.chain
+    if c and c.kind == "quest" then out[#out + 1] = followingRow(c, view) end
+    if searching() then
+        for _, row in ipairs(foundRows()) do out[#out + 1] = row end
+        return out
+    end
     local lists = view.plan and view.plan.lists
     if not lists then return out end
     for _, def in ipairs(LISTS) do
@@ -666,7 +737,7 @@ end
 local function classRows(view)
     local out = {}
     local c = view.chain
-    if c then
+    if c and c.kind ~= "quest" then
         out[#out + 1] = { section = "Following", h = SECTION_H }
         out[#out + 1] = {
             h = ROW_H, current = true, pill = "SHOWN", icon = ICON.shown, title = Format.QuestName(c.name, c.level),
@@ -1119,6 +1190,57 @@ local function build()
     tabs.rule = tex(tabs, "ARTWORK", C.line)
     tabs.rule:SetPoint("BOTTOMLEFT"); tabs.rule:SetPoint("BOTTOMRIGHT"); tabs.rule:SetHeight(1)
 
+    -- the Quests tab's search box: any quest to accept, by name (Engine.FindQuests); the one
+    -- picked becomes the plan with its chain (Engine.PickQuest)
+    local search = CreateFrame("Frame", nil, root)
+    search:SetHeight(SEARCH_H)
+    local made, box = pcall(CreateFrame, "EditBox", nil, search, "InputBoxTemplate")
+    if not made or not box then box = CreateFrame("EditBox", nil, search) end
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(60)
+    box:SetHeight(20)
+    box:SetPoint("LEFT", PAD + 6, 0)
+    box:SetPoint("RIGHT", -PAD, 0)
+    if box.SetFontObject and not made then box:SetFontObject("GameFontHighlightSmall") end
+    box.hint = text(search, "GameFontHighlightSmall", C.faint)
+    box.hint:SetPoint("LEFT", box, "LEFT", 2, 0)
+    box.hint:SetText("Find a quest to plan, by name")
+    local function runSearch()
+        local query = state.query or ""
+        state.results = searching() and Engine.FindQuests(query) or nil
+        state.resultsFor = query
+        state.scroll = 0
+        UI.Refresh()
+    end
+    box:SetScript("OnTextChanged", function(self)
+        local query = self:GetText() or ""
+        if query == state.query then return end
+        state.query = query
+        box.hint[query == "" and "Show" or "Hide"](box.hint)
+        local asked = query
+        Game.After(UI.SEARCH_DELAY, function() if state.query == asked then runSearch() end end)
+        UI.Refresh()
+    end)
+    pickFound = function(r)
+        Engine.PickQuest(r.id)
+        state.query, state.results, state.resultsFor = "", nil, nil
+        box:SetText("")
+        box.hint:Show()
+        box:ClearFocus()
+        state.tab, state.scroll = "route", 0
+        UI.Refresh()
+    end
+    box:SetScript("OnEnterPressed", function(self)
+        local first = searching() and state.resultsFor == state.query and state.results and state.results[1]
+        if first then pickFound(first) else self:ClearFocus() end
+    end)
+    box:SetScript("OnEscapePressed", function(self)
+        self:SetText("")
+        self:ClearFocus()
+    end)
+    search.box = box
+    root.search = search
+
     -- list
     local list = CreateFrame("Frame", nil, root)
     list:EnableMouseWheel(true)
@@ -1214,7 +1336,7 @@ end
 local EMPTY = {
     route = { "Nothing to do here right now", "Open Zones to see where leveling is better." },
     zones = { "No zone fits this level yet", "Zones appear here once quests are available." },
-    quests = { "Nothing is left out", "Every available quest here is in the route." },
+    quests = { "Nothing is left out", "Every available quest here is in the route. Type above to find any quest to plan." },
     class = { "No class quest to pick right now", "Class quests appear here when they become available. The tab's title glows when one does." },
 }
 
@@ -1265,6 +1387,14 @@ local function layout(view)
         root.tabs:SetPoint("TOPLEFT", INSET, y); root.tabs:SetPoint("TOPRIGHT", -INSET, y)
         root.tabs:Show()
         y = y - TABS_H
+    end
+    root.search:ClearAllPoints()
+    if not collapsed and state.tab == "quests" then
+        root.search:SetPoint("TOPLEFT", INSET, y); root.search:SetPoint("TOPRIGHT", -INSET, y)
+        root.search:Show()
+        y = y - SEARCH_H
+    else
+        root.search:Hide()
     end
     local h = collapsed and ROW_CURRENT_H or listHeight()
     root.list:ClearAllPoints()

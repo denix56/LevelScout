@@ -442,6 +442,15 @@ H.suite("Engine and window (real data)", function()
             if calls == 1 then return {} end
             return { { nodeID = 2, state = 0 }, { nodeID = 4, state = 1 }, { nodeID = 5, state = 2 } }
         end }
+        -- the zones were ranked a minute ago: the plan made at once is still the shown route only,
+        -- on screen before the zones are ranked again
+        M.clock = M.clock + 60000
+        local knownWhenRanked
+        local rank = ns.Zones.Rank
+        ns.Zones.Rank = function(...)
+            if knownWhenRanked == nil then knownWhenRanked = view.flightsKnown == true end
+            return rank(...)
+        end
         M.fire("TAXIMAP_OPENED")
         eq(LevelScoutCharDB.knownNodes, {}, "nothing listed yet")
         ok(not ns.Async.IsRunning("plan"))
@@ -450,6 +459,8 @@ H.suite("Engine and window (real data)", function()
         ok(ns.Async.IsRunning("plan"), "planned at once: no wait")
         ok(M.settle())
         ok(view.flightsKnown)
+        eq(knownWhenRanked, true, "the route with the flight points was shown before the zones were ranked")
+        ns.Zones.Rank = rank
         eq(view.status, "ready")
         -- closed: no more looks
         M.fire("TAXIMAP_CLOSED")

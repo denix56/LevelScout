@@ -535,9 +535,10 @@ end
 
 local VIA_ZONE, VIA_GIVER = 1, 2
 
--- The five fields of a quest record the index reads (7 classes, 8 zone, 13 starters, 16 and 17
--- prerequisites), picked out of the packed string without decoding the quest.
-local INDEX_FIELDS = "^" .. ("[^|]*|"):rep(6) .. "([^|]*)|([^|]*)|" .. ("[^|]*|"):rep(4) .. "([^|]*)|"
+-- The fields of a quest record the index reads (1 name, 3 required level, 5 side, 6 races,
+-- 7 classes, 8 zone, 13 starters, 16 and 17 prerequisites), picked out of the packed string
+-- without decoding the quest.
+local INDEX_FIELDS = "^([^|]*)|[^|]*|([^|]*)|[^|]*|([^|]*)|([^|]*)|([^|]*)|([^|]*)|" .. ("[^|]*|"):rep(4) .. "([^|]*)|"
     .. ("[^|]*|"):rep(2) .. "([^|]*)|([^|]*)"
 
 -- The maps an NPC or object stands on (its spots are the record's last field), in the order of
@@ -566,6 +567,8 @@ function Data.BuildIndex(checkpoint)
     if not Data.usable then return nil end
     local byMap, followUps, byItem, n = {}, {}, {}, 0
     local classMask = {} -- [questId] = the classes mask, for quests only some classes can take
+    -- the quest search (Data.FindQuests): every named quest's id, name, required level, races, side
+    local find = { ids = {}, names = {}, min = {}, races = {}, side = {} }
     local giverMaps = {} -- [kind .. id] = entityMaps, for this pass only
     local merge = mode == "merge" and ns.Merge or nil
     local stats = merge and merge.NewStats()
@@ -589,16 +592,17 @@ function Data.BuildIndex(checkpoint)
     for i = 1, #all do
         local questId = all[i]
         n = n + 1
-        local zone, starters, preAll, preAny, startSpots, classes
+        local zone, starters, preAll, preAny, startSpots, classes, name, min, races, side
         local rec = merge and packed.quests[questId] -- already built: read it like a fixture
         if merge and rec == nil then
-            zone, starters, preAll, preAny, startSpots, classes = merge.QuestIndex(questId, stats)
+            zone, starters, preAll, preAny, startSpots, classes, name, min, races, side = merge.QuestIndex(questId, stats)
         else
             rec = raw("quests", questId)
             if rec then
-                classes, zone, starters, preAll, preAny = rec:match(INDEX_FIELDS)
+                name, min, side, races, classes, zone, starters, preAll, preAny = rec:match(INDEX_FIELDS)
                 if not zone then -- a short record: read it the long way
                     local f = split(rec)
+                    name, min, side, races = f[1] or "", f[3] or "", f[5] or "", f[6] or ""
                     classes, zone, starters, preAll, preAny = f[7] or "", f[8] or "", f[13] or "", f[16] or "", f[17] or ""
                 end
                 local s = spotsOf(questId)
@@ -631,6 +635,11 @@ function Data.BuildIndex(checkpoint)
             follows(preAny, questId)
             local mask = tonumber(classes)
             if mask and mask > 0 then classMask[questId] = mask end
+            if name and name ~= "" then
+                local k = #find.ids + 1
+                find.ids[k], find.names[k], find.min[k] = questId, name, tonumber(min) or 0
+                find.races[k], find.side[k] = tonumber(races) or 0, side or ""
+            end
         end
         if checkpoint and n % 50 == 0 then checkpoint() end
     end
@@ -645,7 +654,7 @@ function Data.BuildIndex(checkpoint)
         merge.LoadDropTables() -- (once, here, rather than in the middle of the first plan)
         merge.ReleaseQuestCache()
     end
-    Data._index = { byMap = byMap, followUps = followUps, byItem = byItem, classMask = classMask, questCount = n }
+    Data._index = { byMap = byMap, followUps = followUps, byItem = byItem, classMask = classMask, find = find, questCount = n }
     return Data._index
 end
 
@@ -691,6 +700,61 @@ function Data.ClassQuests(class)
         end
     end
     table.sort(out)
+    return out
+end
+
+Data.FIND_CHECK = 300 -- best-scoring quests checked in full by Data.FindQuests, at most
+
+--- Quests this character can accept now whose name matches `text` (ns.Find: typos and case
+--- do not matter), best match first: { questId, ... }, at most `max`.
+--- ctx = { level, faction, raceId, class, completed = {[id]=true}, inLog = {[id]=true} } (as for
+--- Data.IsAvailable). The index rules out most quests (level, side, race, class, done, in the
+--- log); the best-scoring rest are decoded and checked in full: available, seen in Forever, not
+--- repeatable.
+function Data.FindQuests(text, ctx, max)
+    local index = Data._index
+    local f = index and index.find
+    local Find = ns.Find
+    if not (f and Find) then return {} end
+    local query = Find.Query(text)
+    if not query then return {} end
+    local enum = world.enum or {}
+    local raceMask = enum.raceMaskById and ctx.raceId and enum.raceMaskById[ctx.raceId]
+    local classBit = enum.classKeys and ctx.class and enum.classKeys[ctx.class]
+    local side = ctx.faction == "Alliance" and "a" or (ctx.faction == "Horde" and "h" or nil)
+    local completed, inLog, level = ctx.completed or {}, ctx.inLog or {}, ctx.level or 0
+    local hits = {}
+    for i = 1, #f.ids do
+        local id = f.ids[i]
+        if not completed[id] and not inLog[id] and f.min[i] <= level then
+            local races, ok = f.races[i], true
+            if races ~= 0 and raceMask then ok = band(races, raceMask) ~= 0
+            elseif f.side[i] ~= "" and side then ok = f.side[i] == side end
+            local cmask = index.classMask[id]
+            if ok and cmask and classBit and not hasBit(cmask, classBit) then ok = false end
+            if ok then
+                local score = Find.Score(query, f.names[i])
+                if score > 0 then hits[#hits + 1] = { id = id, score = score, min = f.min[i] } end
+            end
+        end
+    end
+    table.sort(hits, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        if a.min ~= b.min then return a.min > b.min end -- (nearer our level first)
+        return a.id < b.id
+    end)
+    local out = {}
+    for n, h in ipairs(hits) do
+        if n > Data.FIND_CHECK then break end -- (the best ones only are decoded and checked)
+        local q = Data.GetQuest(h.id)
+        -- (a quest without a required level in the data: not one 5 or more levels above us)
+        local levelOk = q and ((q.minLevel > 0 and q.minLevel <= level) or (q.minLevel <= 0 and q.level - level < 5))
+        if levelOk and not (q.flags.repeatable or q.flags.daily or q.flags.weekly or q.flags.event)
+            and not ns.Model.Unconfirmed(q) and Data.IsAvailable(h.id, ctx) then
+            out[#out + 1] = h.id
+            if #out >= (max or 10) then break end
+        end
+    end
     return out
 end
 

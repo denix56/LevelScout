@@ -645,6 +645,22 @@ around the minimap; the options menu can hide it), and the entry in the minimap 
   position counts. Click a zone to plan it.
 - **Quests**: what the route leaves out, by reason. Click a quest to point at its giver; click a
   quest you skipped to bring it back.
+  - **Search box** on top: type part of a quest's name to find it among the quests you can
+    accept now (`Engine.FindQuests`, `Data.FindQuests`): your side, race and class, not done,
+    not in the log, prerequisites done, seen in Forever, not repeatable, and your level: its
+    required level, or, where the data has none, not 5 or more levels above you. Case,
+    punctuation and spaces do not matter, and a few typos per word are forgiven (1 in words of
+    4-6 letters, 2 in longer ones; `core/Find.lua`): the name itself first, then the typed text
+    inside it, the whole name with typos, then every typed word at the start of a word of the
+    name or within its typos. The index keeps every quest's name, required level, side and
+    races (read in its one pass at login), so a search decodes only the best 300 matches
+    (`Data.FIND_CHECK`); it takes 10-60 ms and runs 0.15 s after the last key. Up to 12 are
+    listed, each with its giver, zone and the size of its chain.
+  - Click one (Enter: the best): it becomes the plan with its chain (`Engine.PickQuest`,
+    `Classes.ChainOf`: the quests linked to it by prerequisites, follow-ups, next in chain,
+    breadcrumbs and either-or siblings, up to 40, through quests this character can take),
+    followed like a class quest chain (only its quests) until done: the title reads
+    "Quest: [level] name", and the Quests tab shows it on top (right-click: back to leveling).
 - **Options**: re-plan, let LevelScout pick the zone, lock, size (4, 7 or 12 rows, or "Custom" after dragging the corner grip; picking it again returns to the presets), scale, reset
   position.
 
@@ -856,10 +872,11 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    Open a flight master's map. While it is open (no `/ls replan` needed) the route should be
    planned again with the flight points it lists, and when the way to the current step starts
    with a flight, its destination should be marked on that same map, not only on the next
-   opening. The points are read when the map opens, again every 0.3 s while it is open
-   (`Engine.TAXI_LOOKS`, 6 times: the list can fill a moment late) and once more when it closes,
-   from the flight map's own map, the zone's map and the maps above it. New points re-plan the
-   shown route at once (`Engine.ReplanNow`: no debounce, the zones ranked right after), and its
+   opening. The points are read when the map opens, again every 0.3 s for as long as it is open
+   (`Engine.TAXI_LOOKS`: a point just discovered can be listed a moment late) and once more when
+   it closes, from the flight map's own map, the zone's map and the maps above it. New points
+   re-plan the shown route at once (`Engine.ReplanNow`: no debounce, and only the shown route,
+   however old the ranking: the zones are ranked right after), and its
    way to the current step is taken at once (`Guide.Follow`, `fresh`), without the usual settling.
    `/dump LevelScoutCharDB.knownNodes` should list node ids.
 7. Enter a dungeon: the window should say it is paused, and the waypoint should go.
@@ -892,6 +909,11 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    (four tabs now) and that the glow is visible but not distracting. This relies on `QUEST_REMOVED`
    passing the quest id and on `C_QuestLog.IsQuestFlaggedCompleted`, neither checked on this
    client.
+13. Quest search. On the Quests tab, click the box and type part of a quest's name with a typo
+   ("missng diplomt"): the list should show it within a moment, with its giver and chain. Typing
+   should not stall the game. Enter, or a click, makes it the plan ("Quest: [level] name"). Check
+   that Escape clears the box and leaves it, and that keys typed there do not also move the
+   character (the box must take the keyboard while it has focus).
 
 ### QuestieDB as a runtime dependency
 

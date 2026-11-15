@@ -662,10 +662,11 @@ end
 
 -- The QuestieDB fields the index reads (a scalar row and five of the quest's table fields).
 local IK_QUEST = { "zoneOrSort", "startedBy", "preQuestGroup", "preQuestSingle", "questLevel", "requiredLevel",
-    "objectives", "triggerEnd", "requiredClasses" }
+    "objectives", "triggerEnd", "requiredClasses", "name", "requiredRaces" }
 
 --- What the index needs of a quest, without building its record: zone (uiMap), starters,
---- preAll, preAny (as in the record), its start spots (as questSpots.s) and its classes mask. Adds the quest to
+--- preAll, preAny (as in the record), its start spots (as questSpots.s), its classes mask, and
+--- for the quest search its name, required level, races mask and side. Adds the quest to
 --- `stats` (Merge.NewStats) the way Merge.CountRecord adds its full record.
 function Merge.QuestIndex(id, stats)
     if not universe[id] or excluded[id] then return nil end
@@ -696,7 +697,11 @@ function Merge.QuestIndex(id, stats)
         if zos > 0 and dungeon then stats.dungeonArea[id] = zos end
     end
     local classes = (q and q.requiredClasses) or tonumber(qc and qc[QC.classes]) or 0
-    return zoneOf(id, zos), startersOf(q, qc, qf), preAll, preAny, startSpotsOf(id), classes
+    local name = clean((qf and nz(qf[QF.title])) or (q and q.name) or (qc and qc[QC.title]) or "")
+    local _, min = levelsOf(q, qc, qf)
+    local races = (q and q.requiredRaces) or tonumber(qc and qc[QC.races]) or 0
+    local side = sideOf(races, (qf and qf[QF.side] ~= "" and qf[QF.side]) or (qc and qc[QC.side]))
+    return zoneOf(id, zos), startersOf(q, qc, qf), preAll, preAny, startSpotsOf(id), classes, name, min, races, side
 end
 
 -------------------------------------------------------------------------------- entities

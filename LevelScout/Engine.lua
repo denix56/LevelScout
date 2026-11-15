@@ -45,6 +45,7 @@ local plannedRested = 0          -- rested pool the shown plan was made with
 local travel                     -- the ns.Travel object of the shown plan: the way to the current step (ns.Guide)
 local front                      -- keys of stops the player stands at, for the next plan to bring forward
 local rankAfter                  -- a plan made at once (Engine.ReplanNow): the zones are ranked right after it
+local quickNow                   -- the next plan is the shown route only, however old the ranking (Engine.ReplanNow)
 local freshWay                   -- the next plan's way to the current step is taken at once (Guide.Follow)
 local frontAsked = {}            -- [key] = the quest log and level it was last asked for with (asked once each)
 
@@ -520,17 +521,24 @@ end
 -- leveling goes on in.
 local function chainView(chain, plan, after)
     local facts = Classes.Facts(chain, plan)
-    return { id = chain.id, name = plan.chainName, level = plan.chainLevel, sig = chain.sig, set = chain.set,
+    return { id = chain.id, kind = chardb.chainKind or "class", name = plan.chainName, level = plan.chainLevel, sig = chain.sig, set = chain.set,
         quests = chain.quests, left = plan.chainQuests, laterLevel = facts.laterLevel,
         after = after, afterName = mapName(after) }
 end
 
 -- The chain followed has nothing left to plan: say why, and where leveling goes on.
+-- The title of the plan shown while a chain is followed: "Class quest: [30] Name" for a class
+-- quest chain, "Quest: [28] Name" for a quest (and its chain) picked by name.
+local function chainTitle(plan)
+    local label = chardb.chainKind == "quest" and "Quest: " or "Class quest: "
+    return label .. ns.Format.QuestName(plan.chainName, plan.chainLevel)
+end
+
 local function chainEnded(e, zoneName)
     local name = e.name or "The class quest"
     local back = zoneName and ("Back to leveling in " .. zoneName .. ".") or "Back to the leveling plan."
     if e.why == "done" then
-        ns.Print("Class quest done: |cffffd100%s|r. %s", name, back)
+        ns.Print("%s done: |cffffd100%s|r. %s", e.kind == "quest" and "Quest" or "Class quest", name, back)
     elseif e.why == "later" then
         ns.Print("|cffffd100%s|r: the rest of the chain opens at level %d. %s", name, e.level, back)
     elseif e.why == "group" then
@@ -565,7 +573,10 @@ local function run()
     lastRun = Game.Now()
     local view = Engine.view
     local now = Game.Now()
-    if now - lastRank > Engine.RERANK_EVERY or #view.ranked == 0 then full = true end
+    -- (a plan made at once for the player looking at it is the shown route only: the zones follow)
+    if (not quickNow and now - lastRank > Engine.RERANK_EVERY) or #view.ranked == 0 then full = true end
+    if quickNow then full = false end
+    quickNow = false
     if view.status ~= "ready" then setStatus("planning", "Planning") end
     view.busy = true
     view.progress = Engine.PROGRESS and { fraction = 0, text = "Planning" } or nil
@@ -603,7 +614,11 @@ local function run()
         -- When it has nothing left, the zones take over again in this same job.
         local active, chainPlan, ended
         if chardb.chain then
-            for _, c in ipairs(Classes.Chains(ctx)) do if c.id == chardb.chain then active = c end end
+            if chardb.chainKind == "quest" then
+                active = Classes.ChainOf(chardb.chain, ctx) -- a quest picked by name, and its chain
+            else
+                for _, c in ipairs(Classes.Chains(ctx)) do if c.id == chardb.chain then active = c end end
+            end
             local tried
             if active and #active.open > 0 then
                 tried = Classes.Plan(active, ctx)
@@ -622,12 +637,12 @@ local function run()
             end
             if not chainPlan then
                 local facts = active and Classes.Facts(active, tried) or {}
-                ended = { id = chardb.chain, name = chardb.chainName or (active and active.name),
+                ended = { id = chardb.chain, kind = chardb.chainKind, name = chardb.chainName or (active and active.name),
                     why = (not active and "done") or (facts.groupName and "group") or (facts.laterLevel and "later") or "stuck",
                     level = facts.laterLevel, groupName = facts.groupName }
             elseif not view.plan then
                 view.plan, view.zone, view.chain = chainPlan, nil, chainView(active, chainPlan, chardb.zone)
-                view.zoneName = "Class quest: " .. ns.Format.QuestName(chainPlan.chainName, chainPlan.chainLevel)
+                view.zoneName = chainTitle(chainPlan)
                 view.moveOn, view.itinerary = { suggest = false }, nil
                 view.level, view.here = state.level, state.map
                 view.logCount, view.capacity, view.groupSize = #state.log, state.capacity, state.groupSize
@@ -737,8 +752,7 @@ local function run()
             chardb.route = #result.plan.steps > 0 and { zone = result.zone, order = result.plan.order } or nil
         end
         view.ranked, view.plan, view.zone = result.ranked, result.plan, result.zone
-        view.zoneName = chain and ("Class quest: " .. ns.Format.QuestName(result.plan.chainName, result.plan.chainLevel))
-            or mapName(result.zone)
+        view.zoneName = chain and chainTitle(result.plan) or mapName(result.zone)
         if chain then
             chardb.chainName = result.plan.chainName
             -- the chain's order, for the first plan of the next session (see the chain above)
@@ -777,7 +791,7 @@ local function run()
             end
         end
         if result.ended then
-            chardb.chain, chardb.chainRoute = nil, nil
+            chardb.chain, chardb.chainRoute, chardb.chainKind = nil, nil, nil
             chainEnded(result.ended, view.zoneName)
         end
         markOffers()
@@ -819,11 +833,11 @@ end
 -- again when its next part opens).
 local function leaveChain()
     local c = Engine.view.chain
-    if c and c.id == chardb.chain and c.sig then
+    if c and c.id == chardb.chain and c.sig and c.kind ~= "quest" then
         local rec = chainRecord(c.id)
         rec.seen, rec.told = c.sig, c.sig
     end
-    chardb.chain, chardb.chainRoute, Engine.view.chain = nil, nil, nil
+    chardb.chain, chardb.chainRoute, chardb.chainKind, Engine.view.chain = nil, nil, nil, nil
 end
 
 --- Show a zone (nil: let LevelScout choose). A class quest chain being followed is left.
@@ -845,8 +859,59 @@ function Engine.SetChain(id)
     local rec = chainRecord(id)
     rec.never, rec.seen, rec.told = nil, offer.sig, offer.sig
     for _, q in ipairs(offer.quests or {}) do chardb.ignored[q] = nil end
-    chardb.chain, chardb.chainName = id, offer.name
+    chardb.chain, chardb.chainName, chardb.chainKind, chardb.chainRoute = id, offer.name, "class", nil
     Engine.view.plan = nil
+    Engine.Replan()
+end
+
+-- What Data.FindQuests and Classes.ChainOf need to know about the character, from the game.
+local function findContext()
+    local player, pctx = Game.GetPlayer(), Game.GetPlayerContext()
+    local log, inLog = {}, {}
+    for _, q in ipairs(Game.GetQuestLog()) do log[q.id], inLog[q.id] = q, true end
+    local avail = { faction = pctx.faction, raceId = pctx.raceId, class = pctx.class, completed = completed or {}, inLog = inLog }
+    return { level = player.level or 1, avail = avail, log = log }
+end
+
+Engine.FIND_MAX = 12 -- quests listed for a search
+
+--- Quests the character can accept now whose name matches `text` (typos and case aside),
+--- best first: { { id, name, level, minLevel, giver, zone (map id), chain = quests in its chain
+--- still to do (1: on its own) }, ... }.
+function Engine.FindQuests(text)
+    if not (chardb and Data.IsIndexBuilt()) then return {} end
+    local fctx = findContext()
+    local found = Data.FindQuests(text, { level = fctx.level, faction = fctx.avail.faction, raceId = fctx.avail.raceId,
+        class = fctx.avail.class, completed = fctx.avail.completed, inLog = fctx.avail.inLog }, Engine.FIND_MAX)
+    local out = {}
+    for _, id in ipairs(found) do
+        local q = Data.GetQuest(id)
+        local chain = Classes.ChainOf(id, fctx)
+        local giver = q.starters[1]
+        local who = giver and (giver.kind == "npc" and Data.GetNpc(giver.id) or (giver.kind == "object" and Data.GetObject(giver.id))) or nil
+        out[#out + 1] = { id = id, name = q.name, level = q.level, minLevel = q.minLevel, giver = who and who.name,
+            zone = q.zone ~= 0 and q.zone or nil, chain = chain and #chain.quests or 1,
+            chainNames = chain and (function()
+                local names = {}
+                for _, cid in ipairs(chain.quests) do
+                    local cq = Data.GetQuest(cid)
+                    names[#names + 1] = cq and ns.Format.QuestName(cq.name, cq.level) or tostring(cid)
+                end
+                return names
+            end)() or nil }
+    end
+    return out
+end
+
+--- Make a quest the plan, with the chain it belongs to (Classes.ChainOf): it is followed like a
+--- class quest chain (only its quests) until it is done. The quest is no longer skipped.
+function Engine.PickQuest(id)
+    if not chardb then return end
+    local q = Data.GetQuest(id)
+    if not q then return end
+    chardb.ignored[id] = nil
+    chardb.chain, chardb.chainName, chardb.chainKind, chardb.chainRoute = id, q.name, "quest", nil
+    Engine.view.plan, Engine.view.chain = nil, nil
     Engine.Replan()
 end
 
@@ -893,7 +958,8 @@ end
 function Engine.ReplanNow()
     if not started then return end
     Async.Stop("plan")
-    pending, rankAfter, freshWay = false, true, true
+    pending, rankAfter, freshWay, quickNow = false, true, true, true
+    if #Engine.view.ranked == 0 then quickNow = false end -- (nothing ranked yet: the first plan ranks)
     run()
 end
 
@@ -959,7 +1025,7 @@ function handlers.QUEST_REMOVED(questId)
             if Game.IsQuestCompleted(questId) ~= false then return end -- done, or the client cannot tell
             local q = Data.GetQuest(questId)
             ns.Print("You dropped |cffffd100%s|r: back to the leveling plan.", q and q.name or ("quest " .. questId))
-            chardb.chain, chardb.chainRoute, Engine.view.chain = nil, nil, nil
+            chardb.chain, chardb.chainRoute, chardb.chainKind, Engine.view.chain = nil, nil, nil, nil
             Engine.view.plan = nil
             Engine.Replan()
         end)
@@ -1092,7 +1158,8 @@ function handlers.PLAYER_ENTERING_WORLD()
     Engine.ResetMemory()
     Engine.Replan(true)
 end
-Engine.TAXI_LOOKS = 6     -- looks at the flight map's points while it is open (the list can fill a moment late)
+Engine.TAXI_LOOKS = 200   -- looks at the flight map's points while it is open, at most (a point just
+                          -- discovered can be listed a moment late): every TAXI_EVERY seconds until it closes
 Engine.TAXI_EVERY = 0.3   -- seconds between them
 
 -- Record the flight points the open flight map shows. Returns true when one is new, false
@@ -1193,6 +1260,7 @@ function Engine.Start()
     -- the class quest chain being followed (its lowest quest id), and what was said about each
     chardb.chain = type(chardb.chain) == "number" and chardb.chain or nil
     chardb.chainName = type(chardb.chainName) == "string" and chardb.chainName or nil
+    chardb.chainKind = (chardb.chainKind == "quest" or chardb.chainKind == "class") and chardb.chainKind or nil
     chardb.classChains = type(chardb.classChains) == "table" and chardb.classChains or {}
     -- the followed chain's order at logout: { chain, order = { "P:123", ... } }
     local cr = chardb.chainRoute

@@ -37,6 +37,79 @@ local function nameOf(ids, quests)
     return best and best.name or nil
 end
 
+-- One chain's state for this character from its quests (`members`, sorted ids; `quests` =
+-- { [id] = quest record }): see Classes.Chains. false when nothing of it is left to do.
+local function analyse(root, members, quests, ctx)
+    local Data, Model = ns.Data, ns.Model
+    local avail = ctx.avail
+    local completed = avail.completed or {}
+    local left, set, open, reach, nextLevel, inLog, level = {}, {}, {}, {}, nil, false, nil
+    local function waits(lv)
+        if lv > ctx.level and (not nextLevel or lv < nextLevel) then nextLevel = lv end
+    end
+    for _, id in ipairs(members) do
+        local q = quests[id]
+        if not completed[id] then
+            local entry = ctx.log[id]
+            local ok, why = true, nil
+            if not entry then ok, why = Data.IsAvailable(id, avail) end
+            if entry or not never(why) then
+                left[#left + 1], set[id] = id, true
+                if q.minLevel <= ctx.level then reach[#reach + 1] = id end
+                local isOpen = entry ~= nil or (ok and not Model.Unconfirmed(q) and q.minLevel <= ctx.level)
+                if isOpen then
+                    open[#open + 1] = id
+                    if entry then inLog = true end
+                    if not level or q.minLevel < level then level = q.minLevel end
+                else
+                    waits(q.minLevel)
+                end
+            end
+        end
+    end
+    if #left == 0 then return false end
+    return { id = root, quests = left, set = set, open = open, sig = table.concat(open, ","),
+        level = level, nextLevel = nextLevel, inLog = inLog,
+        name = nameOf(#reach > 0 and reach or left, quests) or ("Quest " .. root) }
+end
+
+Classes.CHAIN_MAX = 40 -- quests at most in a chain found from one quest (Classes.ChainOf)
+
+--- The chain a quest belongs to, for this character: the quests linked to it (prerequisites,
+--- follow-ups, next in chain, breadcrumbs, either-or siblings), followed out from it up to
+--- CHAIN_MAX quests, through quests this character can take or has done. In the shape of
+--- Classes.Chains' chains, under `anchor` as its id. nil when nothing of it is left to do.
+function Classes.ChainOf(anchor, ctx)
+    local Data = ns.Data
+    local avail = ctx.avail
+    local quests, members, queue, seen, head = {}, {}, { anchor }, { [anchor] = true }, 1
+    while queue[head] and #members < Classes.CHAIN_MAX do
+        local id = queue[head]
+        head = head + 1
+        local q = Data.GetQuest(id)
+        local takes = q and not repeats(q)
+        if takes and id ~= anchor and not (avail.completed or {})[id] and not ctx.log[id] then
+            local _, why = Data.IsAvailable(id, avail)
+            if never(why) then takes = false end -- another race's or class's: not followed further
+        end
+        if takes then
+            quests[id], members[#members + 1] = q, id
+            local links = Data.GetFollowUps(id)
+            for _, list in ipairs({ q.preAll, q.preAny, q.exclusive }) do
+                for _, l in ipairs(list) do links[#links + 1] = l end
+            end
+            links[#links + 1] = q.nextInChain
+            links[#links + 1] = q.breadcrumbFor
+            for _, l in ipairs(links) do
+                if l and l > 0 and not seen[l] then seen[l] = true; queue[#queue + 1] = l end
+            end
+        end
+        if ctx.checkpoint then ctx.checkpoint() end
+    end
+    table.sort(members)
+    return analyse(anchor, members, quests, ctx) or nil
+end
+
 --- The class quest chains this character has not finished: quests only some classes can take
 --- (this one among them), grouped by what leads to what (prerequisites, next in chain,
 --- breadcrumbs, either-or siblings). ctx from ns.Zones.Context.
@@ -89,43 +162,17 @@ function Classes.Chains(ctx)
     local out = {}
     for root, members in pairs(groups) do
         table.sort(members)
-        local left, set, open, reach, nextLevel, inLog, level = {}, {}, {}, {}, nil, false, nil
-        local function waits(lv)
-            if lv > ctx.level and (not nextLevel or lv < nextLevel) then nextLevel = lv end
-        end
-        for _, id in ipairs(members) do
-            local q = quests[id]
-            if not completed[id] then
-                local entry = ctx.log[id]
-                local ok, why = true, nil
-                if not entry then ok, why = Data.IsAvailable(id, avail) end
-                if entry or not never(why) then
-                    left[#left + 1], set[id] = id, true
-                    if q.minLevel <= ctx.level then reach[#reach + 1] = id end
-                    local isOpen = entry ~= nil or (ok and not Model.Unconfirmed(q) and q.minLevel <= ctx.level)
-                    if isOpen then
-                        open[#open + 1] = id
-                        if entry then inLog = true end
-                        if not level or q.minLevel < level then level = q.minLevel end
-                    else
-                        waits(q.minLevel)
-                    end
-                end
-            end
-            if ctx.checkpoint then ctx.checkpoint() end
-        end
-        if #left > 0 then
-            out[#out + 1] = { id = root, quests = left, set = set, open = open, sig = table.concat(open, ","),
-                level = level, nextLevel = nextLevel, inLog = inLog,
-                name = nameOf(#reach > 0 and reach or left, quests) or ("Quest " .. root) }
-        end
+        out[#out + 1] = analyse(root, members, quests, ctx)
+        if ctx.checkpoint then ctx.checkpoint() end
     end
-    table.sort(out, function(a, b)
+    local kept = {}
+    for _, c in ipairs(out) do if c then kept[#kept + 1] = c end end
+    table.sort(kept, function(a, b)
         local la, lb = a.level or math.huge, b.level or math.huge
         if la ~= lb then return la < lb end
         return a.id < b.id
     end)
-    return out
+    return kept
 end
 
 --- Plan one chain from where the character stands (ctx.start, ctx.startMap). `seed` and
