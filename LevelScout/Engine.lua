@@ -516,6 +516,15 @@ local function announce()
     end
 end
 
+-- What the window shows of the chain followed (view.chain), from its plan. `after`: the zone
+-- leveling goes on in.
+local function chainView(chain, plan, after)
+    local facts = Classes.Facts(chain, plan)
+    return { id = chain.id, name = plan.chainName, level = plan.chainLevel, sig = chain.sig, set = chain.set,
+        quests = chain.quests, left = plan.chainQuests, laterLevel = facts.laterLevel,
+        after = after, afterName = mapName(after) }
+end
+
 -- The chain followed has nothing left to plan: say why, and where leveling goes on.
 local function chainEnded(e, zoneName)
     local name = e.name or "The class quest"
@@ -587,6 +596,47 @@ local function run()
                 publish()
             end
         end
+        -- Class quest chains. The one picked (chardb.chain) is the plan shown while it has steps
+        -- (planned like a dungeon, without the search: see Classes.Plan). It is planned before
+        -- the zones are ranked: on the first plan of a session (login, /reload) it is shown at
+        -- once, in the order saved with the character, and the zones are ranked behind it.
+        -- When it has nothing left, the zones take over again in this same job.
+        local active, chainPlan, ended
+        if chardb.chain then
+            for _, c in ipairs(Classes.Chains(ctx)) do if c.id == chardb.chain then active = c end end
+            local tried
+            if active and #active.open > 0 then
+                tried = Classes.Plan(active, ctx)
+                chainPlan = tried
+                -- the shown order (or the one saved with the character) is kept unless a new
+                -- one is clearly better, as for a zone
+                local was = view.plan
+                local order = (was and was.chain == active.id and #was.steps > 0) and was.order or nil
+                local savedChain = chardb.chainRoute
+                if not was and savedChain and savedChain.chain == active.id then order = savedChain.order end
+                if tried and order then
+                    local kept = Classes.Plan(active, ctx, order, was and frontKeys or nil)
+                    if kept and #kept.steps > 0 and (kept.fronted or not Zones.PreferFresh(kept, tried)) then chainPlan = kept end
+                end
+                if chainPlan and #chainPlan.steps == 0 then chainPlan = nil end
+            end
+            if not chainPlan then
+                local facts = active and Classes.Facts(active, tried) or {}
+                ended = { id = chardb.chain, name = chardb.chainName or (active and active.name),
+                    why = (not active and "done") or (facts.groupName and "group") or (facts.laterLevel and "later") or "stuck",
+                    level = facts.laterLevel, groupName = facts.groupName }
+            elseif not view.plan then
+                view.plan, view.zone, view.chain = chainPlan, nil, chainView(active, chainPlan, chardb.zone)
+                view.zoneName = "Class quest: " .. ns.Format.QuestName(chainPlan.chainName, chainPlan.chainLevel)
+                view.moveOn, view.itinerary = { suggest = false }, nil
+                view.level, view.here = state.level, state.map
+                view.logCount, view.capacity, view.groupSize = #state.log, state.capacity, state.groupSize
+                view.updated = Game.Now()
+                travel = ctx.travel
+                setStatus("ready", nil)
+                publish()
+            end
+        end
         -- The bar: ranking the zones is most of a full re-plan, then the check of the shown
         -- route, then the itinerary. A quick re-plan is the shown zone's plan and that check.
         phase(0, full and Engine.SHARE_RANK or 0.7, full and "Ranking zones" or "Planning the route")
@@ -602,34 +652,9 @@ local function run()
             local p = map and planOf(map)
             return p ~= nil and #p.steps > 0
         end
-        -- Class quest chains. The one picked (chardb.chain) is the plan shown while it has steps
-        -- (planned like a dungeon, without the search: see Classes.Plan). When it has none left,
-        -- the zones take over again in this same job.
         local chains = Classes.Chains(ctx)
         local best = 0
         for _, z in ipairs(ranked) do if z.plan.score > best then best = z.plan.score end end
-        local active, chainPlan, ended
-        if chardb.chain then
-            for _, c in ipairs(chains) do if c.id == chardb.chain then active = c end end
-            local tried
-            if active and #active.open > 0 then
-                tried = Classes.Plan(active, ctx)
-                chainPlan = tried
-                local was = view.plan
-                if tried and was and was.chain == active.id and #was.steps > 0 then
-                    -- the shown order is kept unless a new one is clearly better (as for a zone)
-                    local kept = Classes.Plan(active, ctx, was.order, frontKeys)
-                    if kept and (kept.fronted or not Zones.PreferFresh(kept, tried)) then chainPlan = kept end
-                end
-                if chainPlan and #chainPlan.steps == 0 then chainPlan = nil end
-            end
-            if not chainPlan then
-                local facts = active and Classes.Facts(active, tried) or {}
-                ended = { id = chardb.chain, name = chardb.chainName or (active and active.name),
-                    why = (not active and "done") or (facts.groupName and "group") or (facts.laterLevel and "later") or "stuck",
-                    level = facts.laterLevel, groupName = facts.groupName }
-            end
-        end
         if chainPlan then
             -- where leveling goes on afterwards: the chosen zone while it has steps, else the best-ranked
             local after = (chardb.zone and open(chardb.zone)) and chardb.zone or (ranked[1] and ranked[1].map) or nil
@@ -712,15 +737,13 @@ local function run()
             chardb.route = #result.plan.steps > 0 and { zone = result.zone, order = result.plan.order } or nil
         end
         view.ranked, view.plan, view.zone = result.ranked, result.plan, result.zone
-        local chainName = chain and result.plan.chainName
-        view.zoneName = chain and ("Class quest: " .. (ns.Format and ns.Format.QuestName(chainName, result.plan.chainLevel) or chainName))
+        view.zoneName = chain and ("Class quest: " .. ns.Format.QuestName(result.plan.chainName, result.plan.chainLevel))
             or mapName(result.zone)
         if chain then
-            chardb.chainName = chainName
-            local facts = Classes.Facts(chain, result.plan)
-            view.chain = { id = chain.id, name = chainName, level = result.plan.chainLevel, sig = chain.sig, set = chain.set, quests = chain.quests,
-                left = result.plan.chainQuests, laterLevel = facts.laterLevel,
-                after = result.chainAfter, afterName = mapName(result.chainAfter) }
+            chardb.chainName = result.plan.chainName
+            -- the chain's order, for the first plan of the next session (see the chain above)
+            chardb.chainRoute = { chain = chain.id, order = result.plan.order }
+            view.chain = chainView(chain, result.plan, result.chainAfter)
         else
             view.chain = nil
         end
@@ -754,7 +777,7 @@ local function run()
             end
         end
         if result.ended then
-            chardb.chain = nil
+            chardb.chain, chardb.chainRoute = nil, nil
             chainEnded(result.ended, view.zoneName)
         end
         markOffers()
@@ -800,7 +823,7 @@ local function leaveChain()
         local rec = chainRecord(c.id)
         rec.seen, rec.told = c.sig, c.sig
     end
-    chardb.chain, Engine.view.chain = nil, nil
+    chardb.chain, chardb.chainRoute, Engine.view.chain = nil, nil, nil
 end
 
 --- Show a zone (nil: let LevelScout choose). A class quest chain being followed is left.
@@ -936,7 +959,7 @@ function handlers.QUEST_REMOVED(questId)
             if Game.IsQuestCompleted(questId) ~= false then return end -- done, or the client cannot tell
             local q = Data.GetQuest(questId)
             ns.Print("You dropped |cffffd100%s|r: back to the leveling plan.", q and q.name or ("quest " .. questId))
-            chardb.chain, Engine.view.chain = nil, nil
+            chardb.chain, chardb.chainRoute, Engine.view.chain = nil, nil, nil
             Engine.view.plan = nil
             Engine.Replan()
         end)
@@ -1171,6 +1194,13 @@ function Engine.Start()
     chardb.chain = type(chardb.chain) == "number" and chardb.chain or nil
     chardb.chainName = type(chardb.chainName) == "string" and chardb.chainName or nil
     chardb.classChains = type(chardb.classChains) == "table" and chardb.classChains or {}
+    -- the followed chain's order at logout: { chain, order = { "P:123", ... } }
+    local cr = chardb.chainRoute
+    local crValid = type(cr) == "table" and type(cr.chain) == "number" and type(cr.order) == "table"
+    for _, key in ipairs(crValid and cr.order or {}) do
+        if type(key) ~= "string" then crValid = false break end
+    end
+    chardb.chainRoute = crValid and cr or nil
     chardb.seenBuffs = type(chardb.seenBuffs) == "table" and chardb.seenBuffs or {}
     chardb.mutedBuffs = type(chardb.mutedBuffs) == "table" and chardb.mutedBuffs or {}
     chardb.pace = type(chardb.pace) == "table" and chardb.pace or {}  -- this character's pace

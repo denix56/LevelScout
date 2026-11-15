@@ -525,14 +525,17 @@ until it is done, then the zones take over again.
   there; opening the tab marks them all seen (`Engine.ChainsSeen`).
 - **Following it**: the window's title is "Class quest: [level] name", the summary counts the chain's
   quests left. The move-on banner and the itinerary are off. The shown order is kept unless a
-  new one is 5% better, as for a zone. The zone chosen before stays chosen and is where leveling
+  new one is 5% better, as for a zone. The chain is planned before the zones are ranked; on
+  the first plan of a session (login, /reload) it is shown at once, in the order saved with the
+  character (`chainRoute`), and the zones are ranked behind it. The zone chosen before stays chosen and is where leveling
   goes on ("Then: back to leveling in ...", the best-ranked zone when none was chosen). Picking
   a zone on the Zones tab, or "Back to the leveling plan" in the options menu, leaves the chain.
 - **The end**: when the chain's plan has no steps. Chat says why: done, the rest opens at level
   N, the next part is a group quest, or nothing more of it can be planned. Leveling goes on in
   the same job. A quest of the chain that leaves the log and is not done 2 seconds later
   (`C_QuestLog.IsQuestFlaggedCompleted`) was dropped: the chain is left, and offered again.
-- **Saved with the character**: `chain` (the chain followed), `chainName`, and per chain
+- **Saved with the character**: `chain` (the chain followed), `chainName`, `chainRoute` (its
+  order: { chain, order }), and per chain
   `classChains[id]` = { told (chat said so for this `sig`), seen (the Class tab was open with
   this `sig`), never }.
 

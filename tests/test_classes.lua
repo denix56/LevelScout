@@ -424,6 +424,36 @@ H.suite("Class quests (real data)", function()
         eq(LevelScoutFrame.title.text, view.zoneName)
     end)
 
+    test("after a /reload the chain is on screen at once, in its saved order, before the zones are ranked", function()
+        local ns = startWith({ 1638 })
+        ns.Engine.SetChain(1638)
+        ok(M.settle())
+        local saved = LevelScoutCharDB
+        eq(saved.chainRoute.chain, 1638)
+        eq(saved.chainRoute.order, ns.Engine.view.plan.order, "the order is saved with the character")
+        -- /reload: the addon starts again with the same saved variables
+        local db = LevelScoutDB
+        ns = E.installGame()
+        C_QuestLog.GetAllCompletedQuestIDs = function() return { 783, 5261, 1638 } end
+        M.set("LevelScoutDB", db)
+        M.set("LevelScoutCharDB", saved)
+        E.noSearch(ns)
+        local seen
+        local rank = ns.Zones.Rank
+        ns.Zones.Rank = function(...)
+            local plan = ns.Engine.view.plan
+            if seen == nil then seen = plan and { chain = plan.chain, order = plan.order, title = LevelScoutFrame.title.text } or false end
+            return rank(...)
+        end
+        M.login()
+        ok(M.settle())
+        ok(seen, "a route was on screen when the zones were ranked")
+        eq(seen.chain, 1638, "the chain's")
+        eq(seen.order, saved.chainRoute.order, "in the order it had")
+        contains(seen.title, "Class quest: ")
+        eq(ns.Engine.view.plan.chain, 1638)
+    end)
+
     test("Back to the leveling plan, or a zone picked, leaves the chain", function()
         local ns = startWith({ 1638 })
         local view = ns.Engine.view
