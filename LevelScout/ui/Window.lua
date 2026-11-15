@@ -225,7 +225,6 @@ local function grouped(steps)
             last.xp = last.xp + step.xp
             last.levelUp = step.levelUp or last.levelUp
             last.needLevel = step.needLevel or last.needLevel
-            last.extra = (last.extra and step.extra) or nil
             for _, q in ipairs(step.quests) do last.quests[#last.quests + 1] = q end
         else
             local copy = {}
@@ -325,7 +324,6 @@ local function chainTip(o, clicks)
         end
         if f.groupName then lines[#lines + 1] = { f.groupName .. " needs a group: the plan stops before it.", color = C.warn } end
         if f.laterLevel then lines[#lines + 1] = { string.format("The rest of the chain needs level %d.", f.laterLevel), color = C.warn } end
-        lines[#lines + 1] = { "Quests on the way come along when they add little time.", color = C.faint }
         for _, l in ipairs(clicks or {}) do lines[#lines + 1] = { l, color = C.faint } end
         return lines
     end
@@ -436,8 +434,6 @@ local function routeRows(view)
             out[#out + 1] = { section = "Low value from here", h = SECTION_H, warn = true }
         end
         local detail, lines = Format.StepDetail(step)
-        -- a class quest plan: a quest that is not of the chain, taken along because it is on the way
-        if view.chain and step.extra then detail = prefixed(detail, hex(C.faint) .. "On the way|r  |cff5f646e·|r  ") end
         local base, trip = detail, nil
         local here = step.loc
         -- (the zone the step is in, not the map its spots were recorded on: a camp can come

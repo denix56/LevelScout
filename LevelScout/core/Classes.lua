@@ -1,6 +1,5 @@
 -- core/Classes.lua: class quest chains. Which ones this character can work on now, and the
--- plan for one of them: the chain and its lead-up, with quests on the way (see Planner.Plan,
--- ctx.chain). Pure Lua: reads ns.Data and the other core modules only.
+-- plan for one of them: the chain and its lead-up, nothing else (see Planner.Plan, ctx.chain). Pure Lua: reads ns.Data and the other core modules only.
 
 local _, ns = ...
 
@@ -158,7 +157,7 @@ end
 function Classes.Facts(chain, plan)
     local f = {}
     for i, step in ipairs(plan and plan.steps or {}) do
-        if step.group and not step.extra and not f.eliteStep then f.eliteStep, f.eliteName = i, step.quests[1] and step.quests[1].name end
+        if step.group and not f.eliteStep then f.eliteStep, f.eliteName = i, step.quests[1] and step.quests[1].name end
     end
     local lists = plan and plan.lists or {}
     for _, e in ipairs(lists.group or {}) do

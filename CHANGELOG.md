@@ -5,8 +5,8 @@
 - **Class quests**: when a class quest chain becomes available (and the leveling route does not
   already do it), chat says so once and the new Class tab's title glows until you open it. Pick a
   chain there to make it the plan; its tooltip says where it starts, how long it takes, what it
-  pays and what it costs against leveling. Quests on the way come along when they add little
-  time. When the chain is done (or its rest waits for a level or a group), LevelScout goes back
+  pays and what it costs against leveling. While you follow a chain, only its quests are
+  planned. When the chain is done (or its rest waits for a level or a group), LevelScout goes back
   to leveling. Right-click a chain: don't suggest it again. The options menu has "Back to the
   leveling plan".
 - **Quest levels**: accept and turn-in steps show each quest's level, "[12] Name", in the window,

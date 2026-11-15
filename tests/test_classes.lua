@@ -33,8 +33,8 @@ end
 
 -- The warrior chain: Call to Arms (or its either-or sibling Other Path, far away) > Steel
 -- Trial (slow: six boars for little XP) > Proof of Steel, and Grand Trial at level 14.
--- Errand starts and ends where the chain goes and costs two talks: on the way. Long Hunt starts
--- there too but takes twenty kills. Far Away is in the other zone.
+-- Errand starts and ends where the chain goes and costs two talks; Long Hunt starts there too.
+-- Far Away is in the other zone. None of them belongs in the chain's plan.
 local function fixture(more)
     local curve = {}
     for i = 1, 60 do curve[i] = i * 100 end
@@ -47,7 +47,6 @@ local function fixture(more)
             preAll = "32" }),
         [42] = quest({ name = "Other Path", classes = WARRIOR, xp = 100, zone = 2, starts = "n110", ends = "n110", exclusive = "30" }),
         [40] = quest({ name = "Arcane Lesson", classes = MAGE, xp = 300, starts = "n100", ends = "n100" }),
-        -- (pays less than Errand: Errand takes the time share first, and this one no longer fits)
         [41] = quest({ name = "For Everyone", classes = EVERY_CLASS, xp = 100, starts = "n100", ends = "n100" }),
         [60] = quest({ name = "Errand", xp = 200, starts = "n100", ends = "n101" }),
         [50] = quest({ name = "Long Hunt", xp = 900, starts = "n100", ends = "n100", objectives = "c200:20:C" }),
@@ -162,27 +161,19 @@ H.suite("Class quests (core)", function()
         eq(ns.Classes.Facts(chain, plan).laterLevel, 14, "Grand Trial waits for level 14")
     end)
 
-    test("quests on the way come along within the time share; long and far ones stay out, unlisted", function()
-        local ns = load()
-        local ctx = context(ns)
-        local chain = ns.Classes.Chains(ctx)[1]
-        local plan = ns.Classes.Plan(chain, ctx)
-        ok(indexOf(plan, "P:60") and indexOf(plan, "T:60"), "Errand: two talks where the chain goes: "
-            .. table.concat(plan.order, " ") .. string.format(" (%.0f s)", plan.seconds))
-        for _, step in ipairs(plan.steps) do
-            local id = step.quests[1] and step.quests[1].id
-            if id == 60 then eq(step.extra, true, "an Errand step is marked as on the way") end
-            if id == 31 then eq(step.extra, nil, "a chain step is not") end
+    test("a chain's plan takes the chain only: not a quest at one of its stops, not one in the log", function()
+        local ns = load({ [90] = quest({ name = "Courier", xp = 600, starts = "n100", ends = "n101" }) })
+        local log = { { id = 90, title = "Courier", level = 10, isComplete = true, objectives = {} } }
+        local ctx = context(ns, { log = log })
+        local plan = ns.Classes.Plan(ns.Classes.Chains(ctx)[1], ctx)
+        local chain = { [30] = true, [31] = true, [32] = true }
+        for _, key in ipairs(plan.order) do
+            local id = tonumber(key:match("^[PT]:(%d+)$"))
+            ok(not id or chain[id], "only the chain's quests: " .. table.concat(plan.order, " "))
         end
-        eq(indexOf(plan, "P:50"), nil, "Long Hunt adds far more than a tenth of the chain's time")
-        eq(indexOf(plan, "P:20"), nil, "Far Away is not on the way")
-        ok(not listedAnywhere(plan, 50) and not listedAnywhere(plan, 20) and not listedAnywhere(plan, 60),
-            "quests that are not of the chain are not listed")
-        local extra = 0
-        for _, step in ipairs(plan.steps) do
-            if step.extra then extra = extra + step.travel + step.seconds end
+        for _, id in ipairs({ 60, 41, 50, 90 }) do
+            ok(not listedAnywhere(plan, id), "the others are not listed either")
         end
-        ok(extra <= ns.Planner.CHAIN_EXTRA_SHARE * plan.seconds + 1e-6, "the extras take at most their share")
     end)
 
     test("a zone's route that does a quest of the chain already does the chain", function()

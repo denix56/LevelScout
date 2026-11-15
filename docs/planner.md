@@ -499,11 +499,10 @@ until it is done, then the zones take over again.
   take at the best zone's XP per hour.
 - **The plan** (`Classes.Plan`, `Planner.Plan` with `ctx.chain`): like a dungeon plan, from where
   you stand. The chain's quests and every quest that has to be done first (8 links back) are
-  must-dos: placed whatever they pay, never dropped as slow. Then quests on the way: in the log
-  and worked or turned in within 80 yards of one of the chain's stops, or starting within 80
-  yards of one. They are added best XP per second first while together they add at most 10% to
-  the chain's time (`Planner.CHAIN_EXTRA_SHARE`), and are not listed when they stay out. No
-  search: the route is built, improved and put in order as usual. A quest of the chain for a
+  must-dos: placed whatever they pay, never dropped as slow. Nothing else is taken, not even a
+  quest whose giver stands at one of the chain's stops, nor one in the log (decided 2026-11-15:
+  an extra quest taken at a chain stop could lead away from the chain once accepted); the quests
+  left out are not listed. No search: the route is built, improved and put in order as usual. A quest of the chain for a
   higher level waits under "Later"; an elite one is routed or listed as any elite quest is.
 - **The Class tab**: the chain followed ("Following"; right-click: back to the leveling plan),
   the chains on offer ("Available", lowest level first, the new ones marked "New" while the tab
@@ -517,7 +516,6 @@ until it is done, then the zones take over again.
   new one is 5% better, as for a zone. The zone chosen before stays chosen and is where leveling
   goes on ("Then: back to leveling in ...", the best-ranked zone when none was chosen). Picking
   a zone on the Zones tab, or "Back to the leveling plan" in the options menu, leaves the chain.
-  Steps of quests on the way read "On the way".
 - **The end**: when the chain's plan has no steps. Chat says why: done, the rest opens at level
   N, the next part is a group quest, or nothing more of it can be planned. Leveling goes on in
   the same job. A quest of the chain that leaves the log and is not done 2 seconds later
