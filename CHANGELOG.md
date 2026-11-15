@@ -2,6 +2,10 @@
 
 ## 0.1.1
 
+- **Zones tab**: a zone's XP per hour is now for the next two hours when you start with that
+  zone and take the best way on after it ("then Westfall"), and the zones are listed by that. A
+  short zone is no longer marked down for running out, and a far zone's trip weighs less. The
+  tooltip still has the zone's own first-hour figure.
 - **Class quests**: when a class quest chain becomes available (and the leveling route does not
   already do it), chat says so once and the new Class tab's title glows until you open it (the tab is there
   only while it has something). Pick a
