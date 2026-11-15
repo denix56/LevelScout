@@ -840,8 +840,15 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    of its flight master (chat: "Learned flight point: <name>"); otherwise the tip asks you to
    open the flight map. This relies on the `UI_INFO_MESSAGE` event carrying the game's
    `ERR_NEWTAXIPATH` text, which is not verified on this client.
-   Open a flight master's map once, then `/ls replan`. Travel estimates should start using
-   flight paths (`/dump LevelScoutCharDB.knownNodes` should list node ids).
+   Open a flight master's map. While it is open (no `/ls replan` needed) the route should be
+   planned again with the flight points it lists, and when the way to the current step starts
+   with a flight, its destination should be marked on that same map, not only on the next
+   opening. The points are read when the map opens, again every 0.3 s while it is open
+   (`Engine.TAXI_LOOKS`, 6 times: the list can fill a moment late) and once more when it closes,
+   from the flight map's own map, the zone's map and the maps above it. New points re-plan the
+   shown route at once (`Engine.ReplanNow`: no debounce, the zones ranked right after), and its
+   way to the current step is taken at once (`Guide.Follow`, `fresh`), without the usual settling.
+   `/dump LevelScoutCharDB.knownNodes` should list node ids.
 7. Enter a dungeon: the window should say it is paused, and the waypoint should go.
 8. Watch the frame rate while it plans (`/ls replan`). It should not hitch.
 9. Learning. Solo, on a "kill N" quest, kill four mobs in a row, then `/ls learn`: expect

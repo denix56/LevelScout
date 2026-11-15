@@ -1,6 +1,6 @@
 # LevelScout
 
-## Unreleased
+## 0.1.1
 
 - **Class quests**: when a class quest chain becomes available (and the leveling route does not
   already do it), chat says so once and the new Class tab's title glows until you open it. Pick a
@@ -16,6 +16,9 @@
 - While LevelScout knows none of your flight paths, a step in another zone says it is planned on
   foot for that reason ("on foot: flight paths not known yet"), and chat says once to open a
   flight master's map.
+- Opening a flight master's map re-plans with its flight points at once, while the map is open,
+  and the flight to take is marked on that same opening (before: after closing it, and on the
+  next opening).
 - A quest no Forever player has seen counts as existing when a quest that needs it has been
   seen, so chains with such a gap are planned through it.
 

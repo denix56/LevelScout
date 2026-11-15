@@ -264,14 +264,30 @@ end
 
 --- Flight nodes this character can use, read while the flight map is open:
 --- { [taxiNodeId] = true }, or nil when the client does not say.
+-- Asked for a zone's map, the game may list only that zone's flight points: the flight map's
+-- own map (a continent) and the maps above the player's zone are asked too.
 function Game.GetTaxiNodes()
+    local getAll = api("C_TaxiMap", "GetAllTaxiNodes")
+    if type(getAll) ~= "function" then return nil end
+    local maps, seen = {}, {}
+    local function add(id) if id and not seen[id] then seen[id] = true; maps[#maps + 1] = id end end
+    local flightMap = rawget(_G, "FlightMapFrame")
+    if type(flightMap) == "table" and type(flightMap.GetMapID) == "function" then add(safe(flightMap.GetMapID, flightMap)) end
     local mapId = safe(api("C_Map", "GetBestMapForUnit"), "player")
-    local nodes = mapId and safe(api("C_TaxiMap", "GetAllTaxiNodes"), mapId)
-    if type(nodes) ~= "table" then return nil end
+    local getInfo = api("C_Map", "GetMapInfo")
+    for _ = 1, 4 do -- the zone, then its parents up to the continent
+        if not mapId or mapId == 0 then break end
+        add(mapId)
+        local info = safe(getInfo, mapId)
+        mapId = type(info) == "table" and info.parentMapID or nil
+    end
     local out, any = {}, false
-    for _, n in ipairs(nodes) do
-        -- Enum.FlightPathState: 0 current, 1 reachable, 2 unreachable (not discovered)
-        if type(n) == "table" and n.nodeID and n.state ~= 2 then out[n.nodeID], any = true, true end
+    for _, id in ipairs(maps) do
+        local nodes = safe(getAll, id)
+        for _, n in ipairs(type(nodes) == "table" and nodes or {}) do
+            -- Enum.FlightPathState: 0 current, 1 reachable, 2 unreachable (not discovered)
+            if type(n) == "table" and n.nodeID and n.state ~= 2 then out[n.nodeID], any = true, true end
+        end
     end
     return any and out or nil
 end

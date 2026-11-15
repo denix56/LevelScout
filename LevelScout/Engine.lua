@@ -44,6 +44,8 @@ local xpBonus, xpBuffs = 0, {}   -- last XP buffs read out of combat
 local plannedRested = 0          -- rested pool the shown plan was made with
 local travel                     -- the ns.Travel object of the shown plan: the way to the current step (ns.Guide)
 local front                      -- keys of stops the player stands at, for the next plan to bring forward
+local rankAfter                  -- a plan made at once (Engine.ReplanNow): the zones are ranked right after it
+local freshWay                   -- the next plan's way to the current step is taken at once (Guide.Follow)
 local frontAsked = {}            -- [key] = the quest log and level it was last asked for with (asked once each)
 
 Engine.REMIND_SLEEPING_BAG = 600 -- seconds before the sleeping-bag buff ends
@@ -210,7 +212,9 @@ local function pointedStillThere(view)
     return false
 end
 
-publish = function()
+-- `fresh`: the way to the current step is worked out again and taken at once, even for the
+-- same step (new flight points: see Engine.ReplanNow).
+publish = function(fresh)
     local view = Engine.view
     local step = view.plan and view.plan.steps[1] or nil
     if step and step.fromBag then
@@ -224,10 +228,10 @@ publish = function()
     if stop and stop.at ~= 1 then stop = nil end
     local keep = pointedStillThere(view)
     if (view.status == "ready" or view.status == "planning") and stop then
-        Guide.Follow({ loc = stop.loc }, "New flight point: " .. stop.name, travel, keep)
+        Guide.Follow({ loc = stop.loc }, "New flight point: " .. stop.name, travel, keep, fresh)
     elseif view.status == "ready" or view.status == "planning" then
         -- the waypoint: the step, or the flight master or harbour the way to it starts at
-        Guide.Follow(step, step and ns.StepTitle and ns.StepTitle(step) or nil, travel, keep)
+        Guide.Follow(step, step and ns.StepTitle and ns.StepTitle(step) or nil, travel, keep, fresh)
     else
         Guide.Follow(nil)
     end
@@ -756,8 +760,15 @@ local function run()
         markOffers()
         announce()
         setStatus("ready", nil)
-        publish()
+        local fresh = freshWay
+        freshWay = false
+        publish(fresh)
         if more then startItinerary(result) end
+        -- a plan made at once for the shown route: the zones are ranked next
+        if rankAfter then
+            rankAfter = false
+            if not result.full then pendingFull = true end
+        end
         if pending then return end
         if pendingFull then Engine.Replan(true) end
     end)
@@ -771,6 +782,7 @@ function Engine.Replan(full)
     pending = true
     local wait = math.max(Engine.DEBOUNCE, lastRun + Engine.MIN_GAP - Game.Now())
     Game.After(wait, function()
+        if not pending then return end -- (Engine.ReplanNow ran it already)
         if Async.IsRunning("plan") then
             pending = false
             Game.After(Engine.DEBOUNCE, function() Engine.Replan() end)
@@ -850,6 +862,16 @@ function Engine.ChainNever(id, never)
     end
     markOffers()
     publish()
+end
+
+--- Plan again at once, without the usual wait: the shown route first (its way to the current
+--- step taken at once), the zones right after it. For a change the player is looking at
+--- now: flight points read off an open flight map.
+function Engine.ReplanNow()
+    if not started then return end
+    Async.Stop("plan")
+    pending, rankAfter, freshWay = false, true, true
+    run()
 end
 
 --- Plan from scratch: the shown route (and the one saved with the character) and the kept
@@ -1047,15 +1069,40 @@ function handlers.PLAYER_ENTERING_WORLD()
     Engine.ResetMemory()
     Engine.Replan(true)
 end
-function handlers.TAXIMAP_OPENED()
+Engine.TAXI_LOOKS = 6     -- looks at the flight map's points while it is open (the list can fill a moment late)
+Engine.TAXI_EVERY = 0.3   -- seconds between them
+
+-- Record the flight points the open flight map shows. Returns true when one is new, false
+-- when none is, nil when the game shows none (yet).
+local function readTaxi()
     local nodes = Game.GetTaxiNodes()
-    if not nodes then return end
+    if not nodes then return nil end
     local changed = false
     for id in pairs(nodes) do
         if not chardb.knownNodes[id] then chardb.knownNodes[id], changed = true, true end
     end
     Engine.view.flightNote = nil
-    if changed then Engine.Replan(true) end
+    return changed
+end
+
+-- The flight map opened: its points are read at once and a few times more while it is open,
+-- and anything new is planned with at once, so the route (and the flight to take, marked on
+-- the map: ns.FlightMap) changes while the map is still open.
+local taxiOpen = false
+function handlers.TAXIMAP_OPENED()
+    taxiOpen = true
+    local looks = 0
+    local function look()
+        if not taxiOpen then return end
+        looks = looks + 1
+        if readTaxi() then Engine.ReplanNow() end
+        if looks < Engine.TAXI_LOOKS then Game.After(Engine.TAXI_EVERY, look) end
+    end
+    look()
+end
+function handlers.TAXIMAP_CLOSED()
+    taxiOpen = false
+    if readTaxi() then Engine.ReplanNow() end -- (a list that came only at the last moment)
 end
 
 -- The flight node of our side closest to the player: id, name, yards.
@@ -1088,7 +1135,7 @@ function handlers.UI_INFO_MESSAGE(_, message)
         if not chardb.knownNodes[id] then
             chardb.knownNodes[id] = true
             ns.Print("Learned flight point: %s", tostring(name))
-            Engine.Replan(true)
+            Engine.ReplanNow()
         end
     else
         Engine.view.flightNote = "New flight point found. Open the flight map once so LevelScout can use it."
