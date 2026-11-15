@@ -516,7 +516,8 @@ until it is done, then the zones take over again.
   an extra quest taken at a chain stop could lead away from the chain once accepted); the quests
   left out are not listed. No search: the route is built, improved and put in order as usual. A quest of the chain for a
   higher level waits under "Later"; an elite one is routed or listed as any elite quest is.
-- **The Class tab**: the chain followed ("Following"; right-click: back to the leveling plan),
+- **The Class tab**, shown only while it has something (a chain followed, on offer or turned
+  off; the other tabs share the width): the chain followed ("Following"; right-click: back to the leveling plan),
   the chains on offer ("Available", lowest level first, the new ones marked "New" while the tab
   stays open; click: plan it, right-click: don't suggest it again; the tooltip gives where it
   starts, its quests and time, the zones, XP, the leveling time it costs and what needs a group

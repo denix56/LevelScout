@@ -3,7 +3,8 @@
 --   Zones   where leveling is best right now
 --   Quests  what the route leaves out, and why; a search box finds any quest to accept by
 --           name and makes it (with its chain) the plan
---   Class   class quest chains to pick (the title glows while one is new)
+--   Class   class quest chains to pick (the title glows while one is new); only while there
+--           is something on it
 -- It draws from ns.Engine.view only. It uses the game's own look: the tooltip border and
 -- background, the quest "!" and "?" icons, the quest-log highlight, gold titles. Every piece
 -- of game art is optional: without it the window falls back to plain colours.
@@ -932,6 +933,24 @@ local function visibleRows() return SIZES[settings.size or 2][2] end
 local function listHeight() return settings.listH or (visibleRows() * ROW_H + (ROW_CURRENT_H - ROW_H)) end
 
 -- Everything whose width was set when the window was built follows the window's width.
+-- The tabs side by side, as wide as the window. The Class tab only while it has something: a
+-- class quest chain followed, on offer, or turned off.
+local function hasClass(view)
+    return (view.chain ~= nil and view.chain.kind ~= "quest") or #(view.chains or {}) > 0
+end
+local function placeTabs()
+    local shown = {}
+    for _, b in ipairs(root.tabButtons) do
+        if b.key ~= "class" or state.classShown then shown[#shown + 1] = b else b:Hide() end
+    end
+    for i, b in ipairs(shown) do
+        b:SetSize(WIDTH / #shown, TABS_H)
+        b:ClearAllPoints()
+        b:SetPoint("LEFT", (i - 1) * WIDTH / #shown, 0)
+        b:Show()
+    end
+end
+
 local function applyWidth()
     WIDTH = math.max(MIN_W, math.min(MAX_W, settings.width or DEFAULT_W))
     root:SetWidth(WIDTH + 2 * INSET)
@@ -939,12 +958,7 @@ local function applyWidth()
     root.summaryText:SetWidth(WIDTH - 120)
     root.banner:SetSize(WIDTH, BANNER_H)
     root.banner.label:SetWidth(WIDTH - 90)
-    local n = #root.tabButtons
-    for i, b in ipairs(root.tabButtons) do
-        b:SetSize(WIDTH / n, TABS_H)
-        b:ClearAllPoints()
-        b:SetPoint("LEFT", (i - 1) * WIDTH / n, 0)
-    end
+    placeTabs()
     root.empty:SetWidth(WIDTH - 4 * PAD)
     root.emptySub:SetWidth(WIDTH - 4 * PAD)
 end
@@ -1426,6 +1440,9 @@ function UI.Refresh()
         root.summaryText:SetText(ready and plan and Format.PlanSummary(plan) or (view.message or ""))
         root.rate:Hide(); root.rateSub:Hide()
     end
+    -- the Class tab goes while it has nothing (and the window leaves it if it was open)
+    state.classShown = hasClass(view)
+    if not state.classShown and state.tab == "class" then state.tab, state.scroll = "route", 0 end
     local m = view.moveOn or {}
     if m.suggest then
         -- with an itinerary the gain is over its horizon (going there first against staying here first)

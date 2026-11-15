@@ -394,7 +394,23 @@ H.suite("Class quests (real data)", function()
         end
         ok(inRoute, "A Warrior's Training is in Elwynn's route")
         eq(offered(ns, 1638), nil)
-        ok(not LevelScoutFrame.tabButtons[CLASS_TAB].glowing, "nothing new on the Class tab")
+        eq(#view.chains, 0)
+        local tab = LevelScoutFrame.tabButtons[CLASS_TAB]
+        ok(not tab:IsShown(), "nothing on the Class tab: no Class tab")
+        ok(LevelScoutFrame.tabButtons[3]:IsShown())
+        eq(LevelScoutFrame.tabButtons[1].width, LevelScoutFrame.tabButtons[3].width)
+        local three = LevelScoutFrame.tabButtons[1].width
+        -- a chain on offer: the tab is there, the others narrower; gone again when there is none
+        view.chains = { { id = 1, name = "Test", sig = "1", count = 1, seconds = 60, xp = 100, zones = {}, facts = {}, new = true } }
+        ns.UI.Refresh()
+        ok(tab:IsShown())
+        ok(LevelScoutFrame.tabButtons[1].width < three)
+        click(tab)
+        eq(ns.UI.state.tab, "class")
+        view.chains = {}
+        ns.UI.Refresh()
+        ok(not tab:IsShown())
+        eq(ns.UI.state.tab, "route", "its tab gone, the window is back on the route")
     end)
 
     test("an available chain: one line in chat, the Class tab glows until it is opened", function()
