@@ -127,11 +127,17 @@ function Model.Build(questId, ctx)
     elseif tag == "dungeon" or tag == "raid" then
         -- Finished already (in the log, complete): only the turn-in is left, and that is a walk
         -- like any other. It is planned wherever the turn-in is (`leftover`).
-        if not (entry and entry.isComplete) then
+        if entry and entry.isComplete then
+            m.leftover, tag = true, nil
+        elseif tag == "dungeon" and #q.objectives == 0 then
+            -- Nothing in it is done inside: a talk on the way (the paladins' Test of
+            -- Righteousness starts with one in Ironforge, filed as a dungeon quest). Planned
+            -- like any other.
+            tag = nil
+        else
             m.status = "dungeon"
             return m
         end
-        m.leftover, tag = true, nil
     end
     if tag == "elite" then
         if ctx.routeElite then m.elite = true else m.status = "group" end
@@ -216,6 +222,23 @@ function Model.Build(questId, ctx)
     end
     if entry and entry.isComplete then return m end
     if inDungeon then
+        -- A class quest done only partly inside (D.partial: the objectives done there): it is
+        -- accepted before the run and kept in the log after it, the rest being done elsewhere.
+        -- Its turn-in is not planned here (`keep`: placed at the door, not shown as a step) and
+        -- its reward is not counted. Once its part inside is done it has nothing to do here.
+        local inside = D.partial and D.partial[questId]
+        if inside then
+            local left = false
+            for _, i in ipairs(inside) do
+                local live = entry and entry.objectives and entry.objectives[i]
+                if not (live and live.finished) then left = true end
+            end
+            if not left then m.status = "dungeon"; return m end
+            -- (`must`: it pays nothing here, but taking it in is why it is in this plan: the
+            -- planner never drops it as slow)
+            m.keep, m.must, m.xp, m.xpLow, m.xpHigh = true, true, 0, nil, nil
+            m.turnin, m.turninName, m.turninGuessed = D.loc, D.name, nil
+        end
         -- Everything the quest asks for happens during one run. All of the dungeon's quests
         -- share that run: it is one stop, done once.
         m.tasks[1] = { kind = "dungeon", key = "D" .. D.id, loc = D.loc, label = D.name, elite = true,

@@ -81,9 +81,10 @@ local function fixture(more)
     }
 end
 
-local function load(more)
+local function load(more, edit)
     M.install()
     local ns = { data = fixture(more) }
+    if edit then edit(ns.data) end
     H.loadAddon(H.runtimeFiles(), ns)
     ns.Data.Init({ faction = "Alliance", class = "WARRIOR", clientBuild = "1.60.1.70888" })
     ns.Data.BuildIndex()
@@ -202,6 +203,50 @@ H.suite("Class quests (core)", function()
         eq({ unconfirmed(82), unconfirmed(83) }, { true, true }, "nothing after them is seen")
         eq(unconfirmed(84), true, "Either needs only one of Maybe and Errand")
         eq({ unconfirmed(86), unconfirmed(87) }, { false, false }, "through a follow-up confirmed in turn")
+    end)
+
+    test("class quests done inside a dungeon: taken in before the run; one done only partly there is kept", function()
+        -- Test Keep (dungeon 900): its own quest Keep Business. Keep Oath (warrior) is done
+        -- wholly inside, Steel Relic (warrior) partly: a shard from the Keep Guards inside, and
+        -- boars outside. Relic Rumor leads to it: a talk filed as a dungeon quest.
+        local ns = load({
+            [97] = quest({ name = "Keep Business", xp = 500, starts = "n100", ends = "n100", objectives = "c206:1:C" }),
+            [94] = quest({ name = "Relic Rumor", classes = WARRIOR, flags = "d", xp = 100, starts = "n100", ends = "n101" }),
+            [95] = quest({ name = "Steel Relic", classes = WARRIOR, xp = 800, starts = "n101", ends = "n100", preAny = "94",
+                objectives = "i301:1:C;c200:2:C" }),
+            [96] = quest({ name = "Keep Oath", classes = WARRIOR, xp = 700, starts = "n100", ends = "n100", objectives = "c205:3:C" }),
+        }, function(data)
+            data.npcs[205] = "Keep Guard|12|12|1|0||"
+            data.npcs[206] = "Keep Boss|13|13|1|0||"
+            data.items[301] = "Relic Shard|205:50:f||"
+            data.world.dungeons[900] = { name = "Test Keep", lo = 8, hi = 14, min = 6, ent = S(1, 80, 20), bosses = 3,
+                quests = "97", confirmed = "97" }
+            data.world.inside = { npc = { [205] = 900, [206] = 900 } }
+        end)
+        local inside = ns.Zones.ClassInside("WARRIOR")[-900]
+        eq(inside[95], { full = false, objectives = { 1 } })
+        eq(inside[96], { full = true, objectives = { 1 } })
+        local ctx = context(ns)
+        local plan = ns.Zones.PlanOne(-900, ctx)
+        local run = indexOf(plan, "W:D900")
+        ok(run, "the run: " .. table.concat(plan.order, " "))
+        ok(indexOf(plan, "T:94") and indexOf(plan, "T:94") < indexOf(plan, "P:95"), "the talk before it is planned, then the quest")
+        ok(indexOf(plan, "P:95") < run, "Steel Relic is taken in")
+        eq(indexOf(plan, "T:95"), nil, "and kept: its boars are elsewhere")
+        local step = plan.steps[indexOf(plan, "P:95")]
+        eq(step.keep, true)
+        contains(ns.Format.StepDetail(step), "the rest is done elsewhere")
+        ok(indexOf(plan, "P:96") < run and indexOf(plan, "T:96") > run, "Keep Oath: done inside, turned in after")
+        ok(indexOf(plan, "T:97") > run)
+        -- its shard found already: nothing left of it in the dungeon
+        local log = { { id = 95, title = "Steel Relic", level = 10, isComplete = false,
+            objectives = { { finished = true, have = 1, need = 1 }, { finished = false, have = 0, need = 2 } } } }
+        plan = ns.Zones.PlanOne(-900, context(ns, { log = log, completed = { [94] = true } }))
+        eq(indexOf(plan, "W:D900") ~= nil, true)
+        eq(indexOf(plan, "P:95"), nil)
+        for _, s in ipairs(plan.steps) do
+            for _, q in ipairs(s.quests) do ok(q.id ~= 95, "Steel Relic is not in the dungeon's plan") end
+        end
     end)
 
     test("one of several prerequisites: the follow-up follows whichever of them is planned", function()

@@ -98,6 +98,7 @@ function Format.StepDetail(step)
         if step.target then bits[#bits + 1] = step.target end
         if step.guessed then bits[#bits + 1] = "turn-in place is a guess" end
         if step.needLevel and step.kind == "accept" then bits[#bits + 1] = "needs level " .. step.needLevel end
+        if step.keep then bits[#bits + 1] = "for the run; the rest is done elsewhere" end
         if step.ready then bits[#bits + 1] = "|cff59ff59ready to turn in|r" end
     else
         local parts = step.parts or {}

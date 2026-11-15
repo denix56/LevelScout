@@ -9,6 +9,10 @@
   planned. When the chain is done (or its rest waits for a level or a group), LevelScout goes back
   to leveling. Right-click a chain: don't suggest it again. The options menu has "Back to the
   leveling plan".
+- **Class quests in dungeons**: a dungeon's plan takes your class quests that need something
+  from inside it, with their lead-up, so you have them when you go in. One that is only partly
+  done there (The Test of Righteousness: lumber in the Deadmines, a hammer in Shadowfang Keep)
+  is accepted before the run and kept for the rest.
 - **Quest levels**: accept and turn-in steps show each quest's level, "[12] Name", in the window,
   the waypoint's title and the minimap button's tooltip.
 - A quest that needs one of several quests first is planned after whichever of them the route

@@ -694,6 +694,16 @@ function Data.ClassQuests(class)
     return out
 end
 
+--- The dungeon (its id in world.dungeons) an NPC or object (kind "npc" | "object") stands in
+--- and nowhere else; nil when it stands outside or this is not known. From QuestieDB's spawn
+--- areas (needs BuildIndex); fixtures may list them in world.inside = { npc = {[id] = dungeonId}, object = {...} }.
+function Data.InstanceOf(kind, id)
+    if not Data.usable then return nil end
+    if mode == "merge" then return ns.Merge.InstanceOf(kind, id) end
+    local inside = world.inside
+    return inside and inside[kind] and inside[kind][id] or nil
+end
+
 --- Quests unlocked by this one (needs BuildIndex).
 function Data.GetFollowUps(questId)
     local index = Data._index

@@ -1610,6 +1610,7 @@ local function describe(r, plan)
             step.xp = node.kind == "T" and (lv and Model.QuestXPAt(m, lv) or (m.xp or 0)) or 0
             step.needLevel = m.gate and (r.level + m.gate) or nil
             step.target = node.kind == "P" and m.pickupName or m.turninName
+            step.keep = m.keep or nil -- kept in the log after a dungeon run (its turn-in goes below)
             step.fromBag = node.kind == "P" and m.fromBag or nil -- started from an item in the bags: no place to go
             step.guessed = node.kind == "T" and m.turninGuessed or nil
             step.quests = { { id = m.id, name = m.name, level = m.level } }
@@ -1632,6 +1633,17 @@ local function describe(r, plan)
         while nextUp and xp >= nextUp do d = d + 1; nextUp = ups[d + 1] end
         if d > 0 and (r.level + d) ~= (lv or r.level) then step.levelUp = r.level + d end -- this step levels us up
         steps[#steps + 1] = step
+    end
+    -- The turn-in of a quest kept in the log after a dungeon run (Model: `keep`) is no step: its
+    -- time goes to the step after it, so every step's `t` stays as it was.
+    for i = #steps, 1, -1 do
+        local s = steps[i]
+        if s.kind == "turnin" and s.keep then
+            local after = steps[i + 1]
+            if after then after.travel = after.travel + s.travel + s.seconds end
+            remove(steps, i)
+            remove(order, i)
+        end
     end
     plan.steps, plan.order = steps, order
     plan.seconds, plan.xp = t, xp

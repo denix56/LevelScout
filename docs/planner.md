@@ -467,6 +467,18 @@ Zones tab). This reverses the original design, which left dungeons out.
 - Zone plans still never include dungeon quests, with one exception: a dungeon or raid quest
   that is in the log and complete has only its turn-in left, and that is planned like any other
   turn-in (in the zone where it is, or carried along in an itinerary).
+- **Class quests done inside** (`Zones.ClassInside`): a class quest of this class with an
+  objective that can only be done in the dungeon (every NPC or object for it stands there and
+  nowhere else, `Data.InstanceOf`, from QuestieDB's spawn areas; a dungeon whose door was not
+  matched is matched by name for this) is planned with that dungeon, whatever dungeon it is
+  filed under, with its lead-up. Done wholly inside, it is a dungeon quest like the others.
+  Done only partly inside (`keep`), it is accepted before the run ("for the run; the rest is
+  done elsewhere") and kept in the log: no turn-in step, no reward counted, never dropped as
+  slow; once its part inside is done, it has nothing more to do there. Example: the paladins'
+  The Test of Righteousness (1654) needs lumber from the Deadmines and a hammer from Shadowfang
+  Keep: either dungeon's plan takes it in.
+- A quest filed as a dungeon quest but with no objectives (a talk, like the first Test of
+  Righteousness in Ironforge) is planned like any other quest: nothing of it is done inside.
 - A dungeon plan also takes such a finished quest when it is not on the dungeon's own list (a
   follow-up started inside, like Return of the Ring): when its turn-in is on the map of the
   dungeon's door or on the map you stand on, or the quest belongs to the door's zone. Where

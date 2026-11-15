@@ -721,6 +721,25 @@ function Merge.Npc(id)
         concat(order, " ") }, "|")
 end
 
+--- The dungeon (its id in the dungeon table, world.dungeons) an NPC or object (kind "npc" or
+--- "object") stands in, from the areas of its QuestieDB spawns: nil when it has a spawn outside
+--- every dungeon, or none known. Needs Merge.DungeonsFrom (the index) to have run.
+function Merge.InstanceOf(kind, id)
+    local areaDungeon = Merge.areaDungeon
+    if not areaDungeon then return nil end
+    local entity = kind == "npc" and L.Npc or (kind == "object" and L.Object or nil)
+    if not (entity and entity.Exists(id)) then return nil end
+    local spawns = list(entity.Get(id, "spawns"))
+    local found
+    for areaId in pairs(spawns) do
+        local d = areaDungeon[areaId]
+        if not d then return nil end -- (also stands outside: not a dungeon's own)
+        found = found or d
+    end
+    if not found and kind == "npc" then found = areaDungeon[entity.Get(id, "zoneID") or 0] end
+    return found
+end
+
 --- `name|spots`, or nil.
 function Merge.Object(id)
     local exists = L.Object.Exists(id)
@@ -845,6 +864,22 @@ function Merge.DungeonsFrom(stats, exists)
         end
         areasOf[id] = areas
         for a in pairs(areas) do anyArea[a] = true end
+    end
+    -- Which dungeon an area is (for Merge.InstanceOf). A dungeon whose door was not matched
+    -- above (the Deadmines, the Stockade, ...) is matched to QuestieDB's dungeon of the same
+    -- name here; its quest list below stays as it was (ForeverDB's confirmed quests).
+    Merge.areaDungeon = {}
+    for id, areas in pairs(areasOf) do
+        for a in pairs(areas) do Merge.areaDungeon[a] = id end
+        if not next(areas) then
+            local want = norm(F.dungeons[id].n)
+            for areaId, entry in pairs(Merge.dungeonEntries) do
+                if want ~= "" and norm(entry[1]) == want then
+                    Merge.areaDungeon[areaId] = id
+                    for _, alt in ipairs(list(entry[2])) do Merge.areaDungeon[alt] = id end
+                end
+            end
+        end
     end
     -- The dungeon quests filed under one of those areas.
     local inArea = {} -- [areaId] = { questId, ... }
