@@ -263,11 +263,19 @@ planner a copy of what was learned when the plan started (`gather`), so every pa
 (each zone, the kept order, the zones of the itinerary planned again from a projected state) uses
 the same figures. `Zones.Project` copies the learned tables into the projected state as they are.
 
+**Active time** (`Tracker.Active`): every duration below (pace, the step log) is counted in
+active time, not on the wall clock. Once a second (`Tracker.OnMove`) the player counts as active
+when they moved at least a yard (`STILL_YARDS`), or are blocked from walking (in combat, on a
+flight or a boat, dead, swimming, in a vehicle), or their position is unknown. Standing still
+counts for its first 15 seconds (`IDLE_GRACE`: talking, looting, reading a quest); the rest is
+idle and left out (away, tabbed out, waiting around). Without looks at the player the active
+clock runs with the real clock.
+
 **Pace** (per character, `LevelScoutCharDB.pace`): seconds per kill, per collected item and per
 object, as a ratio to ForeverDB's median for the level band (`Cost.Pace`).
 
-- A sample is the time between two counts of the same objective in the quest log, when both
-  happened within 240 seconds and 250 yards. A kill sample is divided by the usual scaling for the
+- A sample is the active time between two counts of the same objective in the quest log, when
+  both happened within 240 active seconds and 250 yards. A kill sample is divided by the usual scaling for the
   mob's level difference (`Cost.KillSeconds`), so it compares like with like. Elites are left out.
 - The estimate is the running mean of log(own / typical). The typical pace counts as 3 samples
   (`PACE_PRIOR`); after 20 samples (`PACE_MEMORY`) older ones fade. A sample counts as at most 4
@@ -341,10 +349,14 @@ each line as it is written.
   that left the top for another reason (new route, skipped quest, zone change) is dropped, as is
   one that took over two hours, and the one being timed when planning pauses (inside an instance,
   position unknown: `Tracker.Interrupt`).
-- A line: `k` kind, `w` action, `p` planned seconds, `pt` its travel part, `a` seconds taken,
-  `lv` level, `g` group size, `e` elite step, `n` planned kills, `d` mob level minus own level
-  (when the step started). The newest 300 are kept.
-- `/ls learn` shows the median of taken / planned, overall and by kind of step.
+- A line: `k` kind, `w` action, `p` planned seconds, `pt` its travel part, `a` active seconds
+  taken, `at` and `aw` the part of those until the step's place was first reached and the rest
+  (60 yards of a camp, `ARRIVE_WORK`; 25 of an NPC, `ARRIVE_TALK`; nil when it was not seen
+  reached), `lv` level, `g` group size, `e` elite step, `n` planned kills, `d` mob level minus
+  own level (when the step started). The newest 300 are kept.
+- `/ls learn` shows the median of taken / planned, overall and by kind of step, and for the steps
+  timed in two parts: getting there against the planned travel, and the time at the stop
+  against the time planned there.
 - Both ends are read when a plan is published, up to about 3 seconds after the fact. Time spent
   on something other than the first step counts towards it. Once pace and travel speed are
   learned, the planned times already include them, so the log then shows what is left over.
@@ -365,7 +377,12 @@ times by kind of step, used by the search.
   - `Learn.TalkFactor`: one for accepting and turning in (`INTERACT_SECONDS`);
   - `Learn.WorkFactor`: one per kind of work (what `ELITE_KILL_FACTOR`, the group speed-up and
     the level-difference scaling would be if fitted).
-- Fitted by recursive least squares (`Learn.AddStep`), one finished step at a time:
+- A step timed in two parts (`at`, `aw`), both planned at least 5 seconds (`SPLIT_MIN`), is
+  learned as two observations (`Tracker.Learn`): the travel against the planned travel (only
+  the travel factor is in play) and the work against the planned work (only the stop's
+  factors). So a slow walk is not taken for slow killing, or the other way round. A step not
+  seen reached is learned as a whole, as before.
+- Fitted by recursive least squares (`Learn.AddStep`), one finished step (or part) at a time:
   - weights start at 0 (no correction) with a prior variance of 0.05 each, so the first steps move
     them only a little;
   - older steps fade by 1% with each new one (about 100 remembered);

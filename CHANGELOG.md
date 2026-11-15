@@ -17,6 +17,10 @@
 - **Quest search**: a box on the Quests tab finds any quest you can accept now by name, even
   with typos or in any case. Pick one (or press Enter) and it becomes the plan, with its whole
   chain.
+- **Learning from play counts active time only**: standing still for more than 15 seconds (away,
+  tabbed out) no longer counts towards kill pace or step times. Each step's time is split into
+  getting there and the work at the place, and each part corrects its own estimate (travel,
+  or the kind of work). `/ls learn` shows both.
 - **Quest levels**: accept and turn-in steps show each quest's level, "[12] Name", in the window,
   the waypoint's title and the minimap button's tooltip.
 - A quest that needs one of several quests first is planned after whichever of them the route
