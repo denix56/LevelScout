@@ -136,7 +136,11 @@ end
 local SEP = "  |cff5f646e·|r  "
 
 -- "fly Lakeshire to Darkshire", "boat Menethil Harbor to Theramore Isle", "take the Freewind Post lift"
+-- (a flight master not known yet: "unlock Lakeshire and fly to Darkshire")
 local function rideText(leg)
+    if leg.kind == "fly" and leg.from.unlock then
+        return string.format("unlock %s and fly to %s", leg.from.name or "?", leg.to.name or "?")
+    end
     if leg.kind == "fly" then return string.format("fly %s to %s", leg.from.name or "?", leg.to.name or "?") end
     if leg.from.name and leg.to.name then
         return string.format("%s %s to %s", (leg.transport or "boat"):lower(), leg.from.name, leg.to.name)
@@ -165,7 +169,8 @@ function Format.TripTitle(trip)
     local leg = trip and trip.first
     if not leg then return nil end
     if leg.kind == "fly" then
-        return string.format("Flight master: %s, fly to %s", leg.from.name or "?", leg.to.name or "?")
+        return string.format(leg.from.unlock and "New flight master: %s, fly to %s" or "Flight master: %s, fly to %s",
+            leg.from.name or "?", leg.to.name or "?")
     end
     if leg.from.name and leg.to.name then
         return string.format("%s: %s, ride to %s", leg.transport or "Boat", leg.from.name, leg.to.name)
@@ -186,7 +191,7 @@ function Format.TripLegs(trip)
             local nextLeg = trip.legs[i + 1]
             if leg.seconds >= 1 then
                 if nextLeg and nextLeg.kind == "fly" then
-                    text = "Walk to the flight master in " .. (leg.to.name or "?")
+                    text = (leg.to.unlock and "Walk to the new flight master in " or "Walk to the flight master in ") .. (leg.to.name or "?")
                 elseif nextLeg then
                     text = leg.to.name and string.format("Walk to the %s in %s", (nextLeg.transport or "boat"):lower(), leg.to.name)
                         or ("Walk to the " .. (nextLeg.name or "boat"))

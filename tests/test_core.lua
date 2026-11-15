@@ -179,6 +179,42 @@ H.suite("Core numbers", function()
         eq({ alliance:Seconds(ns.Geo.WorldLoc(0, 0, 0), ns.Geo.WorldLoc(1, 0, 0)) }, { ns.Travel.NO_ROUTE, "unknown" })
     end)
 
+    test("travel: a flight can start at a flight master of our side that is not known yet, never end at one", function()
+        local ns = load()
+        ns.Geo.Init(ns.data.world)
+        local a, b = ns.Geo.Loc(1, 10, 50), ns.Geo.Loc(2, 90, 50) -- at West, at East
+        local walk = 1800 * 1.25 / 7
+        -- knowing only East: walk to West, unlock it, fly on
+        local t = ns.Travel.New(ns.data.world, { speed = 7, side = "a", knownNodes = { [2] = true } })
+        local secs, mode = t:Seconds(a, b)
+        eq(mode, "fly")
+        near(secs, 20 + 40, 0.01)
+        local route = t:Route(a, b)
+        near(route.seconds, secs, 0.01, "the same choice")
+        local fly = route.legs[2]
+        eq({ fly.kind, fly.from.name, fly.from.unlock, fly.to.name, fly.to.unlock }, { "fly", "West", true, "East", nil })
+        eq(route.legs[1].to.unlock, true, "the walk goes to the new flight master")
+        if ns.Format then
+            eq(ns.Format.TripTitle({ first = fly }), "New flight master: West, fly to East")
+            eq(ns.Format.TripText({ rides = { fly }, seconds = 60 }):match("^[^|]+"), "unlock West and fly to East  ")
+        end
+        -- the other way: no flight to a point that is not known
+        local back, how = t:Seconds(b, a)
+        eq(how, "walk")
+        near(back, walk, 0.01)
+        -- known points are told as before
+        local both = ns.Travel.New(ns.data.world, { speed = 7, side = "a", knownNodes = { [1] = true, [2] = true } })
+        eq(both:Route(a, b).legs[2].from.unlock, nil)
+        -- not the other side's flight masters, not without a side, not with no point known, not switched off
+        local function mode_(opts) return select(2, ns.Travel.New(ns.data.world, opts):Seconds(a, b)) end
+        eq(mode_({ speed = 7, side = "h", knownNodes = { [2] = true } }), "walk")
+        eq(mode_({ speed = 7, knownNodes = { [2] = true } }), "walk")
+        eq(mode_({ speed = 7, side = "a", knownNodes = {} }), "walk")
+        ns.Travel.UNLOCK = false
+        eq(mode_({ speed = 7, side = "a", knownNodes = { [2] = true } }), "walk")
+        ns.Travel.UNLOCK = true
+    end)
+
     test("travel: a long walk takes the walk table's way round when that is longer than the straight line", function()
         -- two hubs 1,800 yards apart in a straight line, 6,000 yards apart on foot
         local A64 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
