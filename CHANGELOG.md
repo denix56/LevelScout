@@ -9,6 +9,8 @@
 
 ## 0.1.1
 
+- **Longer look ahead**: the plan across zones, the move-on banner and the Zones tab figures now
+  cover the next two and a half hours (was two).
 - **Zones tab**: a zone's XP per hour is now for the next two hours when you start with that
   zone and take the best way on after it ("then Westfall"), and the zones are listed by that. A
   short zone is no longer marked down for running out, and a far zone's trip weighs less. The

@@ -637,7 +637,7 @@ end
 -- where the zone before is left, at the level reached by then, with its quests done and the
 -- quests still in the log carried along.
 
-Zones.HORIZON = 7200           -- seconds an itinerary covers
+Zones.HORIZON = 9000           -- seconds an itinerary covers (two and a half hours)
 Zones.ITINERARY_ZONES = 5      -- best-ranked zones that may appear in it
 Zones.ITINERARY_STOPS = 3      -- zones in a row at most
 Zones.LEAVE_EVERY = 900        -- a zone may be left at the first turn-in after each quarter of an hour

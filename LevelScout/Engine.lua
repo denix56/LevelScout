@@ -15,7 +15,7 @@ Engine.RERANK_EVERY = 45     -- seconds between background re-rankings of the ot
 Engine.PROGRESS = true       -- say what the planner is doing while it runs (view.progress)
 Engine.PROGRESS_EVERY = 0.15 -- seconds between two progress notices to the window, at least
 -- A full re-plan's bar: ranking the zones up to SHARE_RANK, checking the shown route up to
--- SHARE_CHECK, then the next two hours (its own job) to the end. Shares of measured time.
+-- SHARE_CHECK, then the next hours (its own job) to the end. Shares of measured time.
 Engine.SHARE_RANK, Engine.SHARE_CHECK = 0.75, 0.8
 Engine.MOVE_EVERY = 1        -- seconds between two looks at where the player is (travel speed, see ns.Tracker.OnMove)
 Engine.NEAR_YARDS = 40       -- an accept or turn-in further down the route this close comes to its front
@@ -351,13 +351,13 @@ startItinerary = function(result)
     local view = Engine.view
     itineraryOwed = true
     view.busy = true
-    view.progress = Engine.PROGRESS and (view.progress or { fraction = Engine.SHARE_CHECK, text = "Planning the next two hours" }) or nil
+    view.progress = Engine.PROGRESS and (view.progress or { fraction = Engine.SHARE_CHECK, text = "Planning the next hours" }) or nil
     local state, zone, plan, ranked = result.state, result.zone, result.plan, view.ranked
     Async.Run("itinerary", function(checkpoint)
         state.checkpoint = checkpoint
         state.progress = view.progress and note or nil
         local ctx = Zones.Context(state)
-        phase(Engine.SHARE_CHECK, 1, "Planning the next two hours", true)
+        phase(Engine.SHARE_CHECK, 1, "Planning the next hours", true)
         local itinerary = Zones.Itinerary(state, ctx, ranked, { shown = zone, plan = plan, was = view.itinerary })
         for _, seg in ipairs(itinerary and itinerary.segments or {}) do
             seg.name = seg.name or Game.MapName(seg.map) or ("Map " .. tostring(seg.map))
@@ -385,7 +385,7 @@ startItinerary = function(result)
             view.trace = Engine.trace and out.trace or nil
             moveOn(view.plan, view.ranked, out.itinerary)
         else
-            ns.Print("|cffff5555Planning the next two hours failed: %s|r", tostring(out))
+            ns.Print("|cffff5555Planning the next hours failed: %s|r", tostring(out))
         end
         publish()
     end)
