@@ -37,6 +37,7 @@ Planner.SAME_PLACE_YARDS = 40  -- stops this close are one place: accept everyth
 Planner.CHAIN_ROUNDS = 4
 Planner.ON_THE_WAY_YARDS = 80  -- a quest starting this close to a stop in another zone (in the same camp) is considered too
 Planner.PREREQ_DEPTH = 8       -- how far back a dungeon quest's prerequisite chain is followed
+Planner.CHAIN_EXTRA_SHARE = 0.10 -- a class quest plan (ctx.chain) takes other quests on the way for at most this share of extra time
 Planner.LEVELS_AHEAD = 3        -- level-ups the route is followed through (kills pay less after each;
                                 -- quests that need the next level can be planned after it)
 Planner.SEARCH_ITERATIONS = 120 -- take-out-and-put-back rounds on a fresh plan (0 = none)
@@ -965,7 +966,7 @@ function R:snapshot()
     for m in pairs(self.routed) do
         local w = {}
         for k, node in ipairs(m.W or {}) do w[k] = node end
-        s.quests[m] = { m.P, m.T, w }
+        s.quests[m] = { m.P, m.T, w, m.deps } -- (deps: which of "one of" its prerequisites it follows, see ready)
     end
     return s
 end
@@ -991,6 +992,7 @@ function R:restore(s, candidates)
             local w = {}
             for k, node in ipairs(q[3]) do w[k] = node end
             m.P, m.T, m.W = q[1], q[2], w
+            m.deps = q[4] or m.deps
             self.routed[m] = true
             for _, d in ipairs(m.deps or {}) do
                 d.dependents = d.dependents or {}
@@ -1270,8 +1272,8 @@ local function collect(zoneMap, ctx, lists)
             local g = Model.Build(m.id, setmetatable({ level = need }, { __index = ctx }))
             if not g then return nil end
             if g.status == "ok" then
-                if g.pickup and g.pickup.map ~= zoneMap and g.pickup.map ~= ctx.startMap then return nil end
-                g.gate, g.needLevel, g.deps = d, need, m.deps
+                if not ctx.chain and g.pickup and g.pickup.map ~= zoneMap and g.pickup.map ~= ctx.startMap then return nil end
+                g.gate, g.needLevel, g.deps, g.anyDeps, g.baseDeps = d, need, m.deps, m.anyDeps, m.baseDeps
                 return g
             end
             if g.status ~= "later" or not g.needLevel or g.needLevel <= need then return nil end
@@ -1317,11 +1319,15 @@ local function collect(zoneMap, ctx, lists)
         end
     end
     -- What to look at: the zone's quests, or for a dungeon its own quests and everything that
-    -- has to be done first to get them (their prerequisite chains, wherever those are).
+    -- has to be done first to get them (their prerequisite chains, wherever those are). A class
+    -- quest plan (ctx.chain) is built the same way from the chain's quests: those and their
+    -- lead-up are the plan's must-dos (`must`), whatever they pay.
     local entries = Data.QuestsInZone(zoneMap) or {}
-    if ctx.dungeon then
+    local must
+    if ctx.dungeon or ctx.chain then
         entries = {}
         local added = {}
+        must = added
         local function add(id, depth)
             if added[id] or depth > Planner.PREREQ_DEPTH then return end
             added[id] = true
@@ -1334,8 +1340,9 @@ local function collect(zoneMap, ctx, lists)
                 end
             end
         end
-        for _, id in ipairs(ctx.dungeon.quests) do add(id, 0) end
+        for _, id in ipairs(ctx.dungeon and ctx.dungeon.quests or ctx.chain.quests) do add(id, 0) end
         table.sort(entries, function(a, b) return a.id < b.id end)
+        if ctx.dungeon then must = nil end
     end
     local seen = {}
     for _, e in ipairs(entries) do
@@ -1362,7 +1369,8 @@ local function collect(zoneMap, ctx, lists)
     -- A dungeon plan takes only finished dungeon quests that are not on the dungeon's own list
     -- (a follow-up started inside, like Return of the Ring): their turn-in is planned when it
     -- is on the map of the dungeon's door, on the map we stand on, or the quest belongs there.
-    for id, entry in pairs(ctx.log) do
+    -- (A class quest plan takes the log's quests that pass where the chain goes: see below.)
+    for id, entry in pairs(ctx.chain and {} or ctx.log) do
         if not seen[id] and ctx.dungeon then
             local m = Model.Build(id, ctx)
             local door = ctx.dungeon.loc.map
@@ -1385,7 +1393,7 @@ local function collect(zoneMap, ctx, lists)
     for id in pairs(ctx.bagQuests or {}) do bagIds[#bagIds + 1] = id end
     table.sort(bagIds)
     for _, id in ipairs(bagIds) do
-        if not seen[id] and not ctx.log[id] and not ctx.dungeon and Data.IsAvailable(id, ctx.avail) then
+        if not seen[id] and not ctx.log[id] and not ctx.dungeon and not ctx.chain and Data.IsAvailable(id, ctx.avail) then
             seen[id] = true
             local m = Model.Build(id, ctx)
             local here = m and m.zone == zoneMap or (m and m.turnin and m.turnin.map == zoneMap)
@@ -1441,7 +1449,7 @@ local function collect(zoneMap, ctx, lists)
     -- where we will be standing there are worth a look too (a letter found in the camp we
     -- clear, a prisoner next to it). They are added as candidates; the usual value check
     -- decides whether they stay.
-    if not ctx.dungeon then
+    if not ctx.dungeon and not ctx.chain then
         local stops, maps = {}, {}
         for _, m in ipairs(order) do
             for _, t in ipairs(m.tasks) do
@@ -1480,7 +1488,7 @@ local function collect(zoneMap, ctx, lists)
     local avail2 = {}
     for k, v in pairs(ctx.avail) do avail2[k] = v end
     avail2.completed = assumed
-    for _ = 1, ctx.dungeon and Planner.PREREQ_DEPTH or Planner.CHAIN_ROUNDS do
+    for _ = 1, (ctx.dungeon or ctx.chain) and Planner.PREREQ_DEPTH or Planner.CHAIN_ROUNDS do
         if #undecided == 0 then break end
         for _, m in ipairs(order) do assumed[m.id] = true end
         local still, progress = {}, false
@@ -1489,14 +1497,25 @@ local function collect(zoneMap, ctx, lists)
             if Data.IsAvailable(id, avail2) then
                 local m = Model.Build(id, ctx)
                 if m then
+                    -- Every quest of "all of" must come first; of "one of", any one of them in
+                    -- the plan is enough: `anyDeps`, bound to one when the quest is placed (see ready).
                     m.deps = {}
-                    for _, list in ipairs({ m.quest.preAll, m.quest.preAny }) do
+                    local any = {}
+                    for n, list in ipairs({ m.quest.preAll, m.quest.preAny }) do
                         for _, pre in ipairs(list) do
                             local dep = models[pre]
                             if dep and dep.status == "ok" and not rawget(ctx.avail.completed or {}, pre) then
-                                m.deps[#m.deps + 1] = dep
+                                if n == 1 then m.deps[#m.deps + 1] = dep else any[#any + 1] = dep end
                             end
                         end
+                    end
+                    if #any == 1 then
+                        m.deps[#m.deps + 1] = any[1]
+                    elseif #any > 1 then
+                        m.anyDeps, m.baseDeps = any, m.deps
+                        local copy = {}
+                        for i, d in ipairs(m.deps) do copy[i] = d end
+                        m.deps = copy
                     end
                     consider(id, m)
                     progress = true
@@ -1508,6 +1527,68 @@ local function collect(zoneMap, ctx, lists)
         undecided = still
         if not progress then break end
     end
+    -- A class quest plan: quests that are worked, turned in or started right where the chain
+    -- goes (within ON_THE_WAY_YARDS of one of its stops) come along as extras (`extra`), as
+    -- far as they cost little time (see Planner.Plan). Everything else stays out, and is not
+    -- listed: the chain is what is planned.
+    if ctx.chain then
+        local spots, maps = {}, {}
+        local function spot(loc)
+            if loc and loc.map then spots[#spots + 1] = loc; maps[loc.map] = true end
+        end
+        for _, m in ipairs(order) do
+            spot(m.pickup); spot(m.turnin)
+            for _, t in ipairs(m.tasks) do spot(t.loc) end
+        end
+        local function near(loc)
+            if not loc then return false end
+            for _, s in ipairs(spots) do
+                local d = Geo.Dist(s, loc)
+                if d and d <= Planner.ON_THE_WAY_YARDS then return true end
+            end
+            return false
+        end
+        local function take(id, m)
+            models[id] = m
+            order[#order + 1] = m
+            inputs.ids[id] = true
+            if ctx.log[id] then inputs.used[id] = true end
+        end
+        local logIds = {}
+        for id in pairs(ctx.log) do logIds[#logIds + 1] = id end
+        table.sort(logIds)
+        for _, id in ipairs(logIds) do
+            if not seen[id] and not models[id] and not (ctx.ignored and ctx.ignored[id]) then
+                seen[id] = true
+                local m = Model.Build(id, ctx)
+                if m and m.status == "ok" then
+                    local here = near(m.turnin)
+                    for _, t in ipairs(m.tasks) do if near(t.loc) then here = true end end
+                    if here then take(id, m) end
+                end
+                if ctx.checkpoint then ctx.checkpoint() end
+            end
+        end
+        local mapList = {}
+        for map in pairs(maps) do mapList[#mapList + 1] = map end
+        table.sort(mapList)
+        for _, map in ipairs(mapList) do
+            for _, e in ipairs(Data.QuestsInZone(map) or {}) do
+                local id = e.id
+                if e.giverInZone and not seen[id] and not models[id] and not ctx.log[id] and not (ctx.ignored and ctx.ignored[id]) then
+                    seen[id] = true
+                    if Data.IsAvailable(id, ctx.avail) then
+                        local m = Model.Build(id, ctx)
+                        if m and m.status == "ok" and near(m.pickup) then take(id, m) end
+                    end
+                end
+                if ctx.checkpoint then ctx.checkpoint() end
+            end
+        end
+        for _, m in ipairs(order) do
+            if must[m.id] then m.must = true else m.extra = true end
+        end
+    end
     ctx.campKeys = nil
     return order, models, inputs
 end
@@ -1516,9 +1597,27 @@ end
 -- Planning
 ---------------------------------------------------------------------------------------------
 
+-- Can the quest go in the route: is every quest it follows there? A quest that needs one of
+-- several (`anyDeps`) follows the first of them in the route; its `deps` are set to that one
+-- (with the "all of" ones), and stay so while it is in the route.
 local function ready(r, m)
-    for _, d in ipairs(m.deps or {}) do
+    for _, d in ipairs(m.baseDeps or m.deps or {}) do
         if not r.routed[d] then return false end
+    end
+    local any = m.anyDeps
+    if any and not r.routed[m] then
+        local pick
+        for _, d in ipairs(any) do
+            if r.routed[d] then pick = d; break end
+        end
+        if not pick then return false end
+        local base = m.baseDeps
+        if #m.deps ~= #base + 1 or m.deps[#m.deps] ~= pick then
+            local deps = {}
+            for i, d in ipairs(base) do deps[i] = d end
+            deps[#deps + 1] = pick
+            m.deps = deps
+        end
     end
     return true
 end
@@ -1554,8 +1653,9 @@ local function describe(r, plan)
             step.target, step.from, step.kills = first.label, first.from, kills > 0 and kills or nil
             step.mobLevel = first.mobLevel    -- for the step log only
             step.quests, step.parts = {}, {}
-            local listed = {}
+            local listed, extra = {}, true
             for _, req in ipairs(node.reqs) do
+                if not req.quest.extra then extra = false end
                 if not listed[req.quest.id] then
                     listed[req.quest.id] = true
                     step.quests[#step.quests + 1] = { id = req.quest.id, name = req.quest.name, level = req.quest.level }
@@ -1564,6 +1664,7 @@ local function describe(r, plan)
                     need = req.task.need, have = req.task.have, total = req.task.total, action = ACTION[req.task.kind] or "do",
                     guessed = req.task.countGuessed, rate = req.task.rate }
             end
+            step.extra = extra or nil -- a class quest plan: only quests on the way are worked here
             order[#order + 1] = "W:" .. node.key
         else
             local m = node.quest
@@ -1576,6 +1677,7 @@ local function describe(r, plan)
             step.guessed = node.kind == "T" and m.turninGuessed or nil
             step.quests = { { id = m.id, name = m.name, level = m.level } }
             step.group = m.elite or nil
+            step.extra = m.extra or nil -- a class quest plan: a quest on the way, not of the chain
             step.xpSource, step.xpLow, step.xpHigh = m.xpSource, m.xpLow, m.xpHigh
             order[#order + 1] = (node.kind == "P" and "P:" or "T:") .. m.id
         end
@@ -1655,7 +1757,9 @@ end
 ---         log = { [questId] = entry }, logCount, capacity, avail (context for Data.IsAvailable),
 ---         ignored = { [questId] = true }, tagOf, checkpoint, near,
 ---         progress = optional function(stage, done, total): told "search" round of rounds and
----                    "order" (the tidy-up); it only listens }
+---                    "order" (the tidy-up); it only listens,
+---         chain = optional { quests = { ids } }: plan a class quest chain instead of the zone (see
+---                 ns.Classes): its quests and their lead-up, plus quests on the way }
 --- opts = { seed = order of a previous plan (kept as is; new quests are added to it),
 ---          overhead = seconds before the first step (zone switch),
 ---          front = with a seed: keys of accept and turn-in stops ("P:id", "T:id") to bring to
@@ -1745,6 +1849,38 @@ function Planner.Plan(zoneMap, ctx, opts)
             else
                 break
             end
+        end
+    end
+
+    -- A class quest plan: first the chain and its lead-up, every quest of it that can be placed
+    -- (best XP per added second first, however little it pays); then quests on the way, best
+    -- first, as long as they add at most CHAIN_EXTRA_SHARE to the chain's time.
+    local function fillChain()
+        local function pick(want, budget)
+            local best, bestKey, bestAdded
+            for _, m in ipairs(candidates) do
+                if remaining[m] and m[want] and not exclusiveWith(m, routedIds) and ready(r, m) then
+                    local added, gain = r:try(m, false)
+                    if added and (not budget or (added <= budget and gain > 0)) then
+                        local key = gain / max(added, 1)
+                        if not best or key > bestKey then best, bestKey, bestAdded = m, key, added end
+                    end
+                end
+                if checkpoint then checkpoint() end
+            end
+            return best, bestAdded
+        end
+        while true do
+            local m = pick("must")
+            if not m then break end
+            commit(m)
+        end
+        local budget = Planner.CHAIN_EXTRA_SHARE * (r:totals())
+        while budget > 0 do
+            local m, added = pick("extra", budget)
+            if not m then break end
+            commit(m)
+            budget = budget - added
         end
     end
 
@@ -1844,7 +1980,7 @@ function Planner.Plan(zoneMap, ctx, opts)
 
     if opts.seed then rebuild(opts.seed) end
 
-    fill(0, nil, ctx.dungeon ~= nil)
+    if ctx.chain then fillChain() else fill(0, nil, ctx.dungeon ~= nil) end
 
     -- Stops the player stands at now, further down the kept route: brought to its front, each
     -- after the one before, when nothing they wait for (an accept, the work, a prerequisite's
@@ -1882,7 +2018,7 @@ function Planner.Plan(zoneMap, ctx, opts)
         r:improve(Planner.IMPROVE_PASSES, checkpoint, 1)
         -- A dungeon plan is one run with its lead-up: there is little to search.
         local rounds = ctx.searchRounds or Planner.SEARCH_ITERATIONS
-        local searching = rounds > 0 and not ctx.dungeon
+        local searching = rounds > 0 and not ctx.dungeon and not ctx.chain
         -- the route as it would be without the search (see the end): always the cold greedy one
         if searching then unsearched = r:snapshot() end
         -- Warm start: begin the search from the order an earlier plan of this zone ended on
@@ -1961,7 +2097,7 @@ function Planner.Plan(zoneMap, ctx, opts)
             lists[name] = copy
         end
         for _, m in ipairs(candidates) do
-            if remaining[m] and not exclusiveWith(m, routedIds) then
+            if remaining[m] and not m.extra and not exclusiveWith(m, routedIds) then
                 -- after a search, a quest that fits but stayed out is one that did not pay
                 local added, gain
                 if searched and ready(r, m) then added, gain = r:try(m, false) end
@@ -1987,7 +2123,7 @@ function Planner.Plan(zoneMap, ctx, opts)
             if t0 <= 0 then break end
             local worst, worstRatio
             for _, m in ipairs(candidates) do
-                if r.routed[m] and #(m.dependents or {}) == 0 then
+                if r.routed[m] and not m.must and #(m.dependents or {}) == 0 then
                     local t1, x1 = r:totals(m)
                     local ratio = (x0 - x1) / max(t0 - t1, 1)
                     local rest = x1 / max(t1, 1) -- what the route earns per second without this quest
@@ -1999,8 +2135,10 @@ function Planner.Plan(zoneMap, ctx, opts)
                 if checkpoint then checkpoint() end
             end
             if not worst then break end
-            lists.skipped[#lists.skipped + 1] = listEntry(worst,
-                string.format("slow: about %d XP per hour here", floor(worstRatio * 3600)))
+            if not worst.extra then
+                lists.skipped[#lists.skipped + 1] = listEntry(worst,
+                    string.format("slow: about %d XP per hour here", floor(worstRatio * 3600)))
+            end
             r:removeQuest(worst)
             nRouted = nRouted - 1
         end

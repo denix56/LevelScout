@@ -472,6 +472,60 @@ Zones tab). This reverses the original design, which left dungeons out.
   dungeon's door or on the map you stand on, or the quest belongs to the door's zone. Where
   in the route it is turned in is the planner's choice, like any turn-in.
 
+## Class quests (`core/Classes.lua`)
+
+A class quest chain that becomes available is suggested: one line in chat, and a row on the
+window's Class tab, whose title glows until the tab is opened. Picked, it is the plan shown
+until it is done, then the zones take over again.
+
+- **What a chain is**: quests only some classes can take, this class among them (a classes mask
+  that names every class does not count). They are found through the index (`Data.ClassQuests`,
+  the mask is read in `Data.BuildIndex`) and grouped by what links them: prerequisites, next in
+  chain, breadcrumbs, either-or siblings. A group is one chain, under its lowest quest id. Its
+  name is its last quest within reach at your level. Repeatables and seasonal quests are left
+  out, and so are quests this character can never take (race, side, a sibling taken, the chain
+  done further on).
+- **Available**: a quest of the chain is in the log, or can be taken now (level reached, the
+  quests before it done, seen by Forever players). `sig` is the list of such quests; it changes
+  when the chain moves on, and that makes the chain news again (chat once more, the tab glows).
+- **Named** after the last quest of the chain its plan turns in, with that quest's level
+  ("[12] Dead-tooth Jack"). A chain with a variant per race (the level 10 warrior quests of
+  Stormwind, Ironforge and Darnassus are linked as either-or quests) is named after the variant
+  planned.
+- **Offered**: when something of it can be planned and the zone's route does not already do one
+  of its quests (`Classes.InPlan`). Each offered chain is planned once, again when it moves on,
+  when the level changes, or after 5 minutes (`Engine.CHAIN_REPLAN_AGE`); that plan gives the
+  tooltip its figures. "Lost against leveling" is the chain's time less the time its XP would
+  take at the best zone's XP per hour.
+- **The plan** (`Classes.Plan`, `Planner.Plan` with `ctx.chain`): like a dungeon plan, from where
+  you stand. The chain's quests and every quest that has to be done first (8 links back) are
+  must-dos: placed whatever they pay, never dropped as slow. Then quests on the way: in the log
+  and worked or turned in within 80 yards of one of the chain's stops, or starting within 80
+  yards of one. They are added best XP per second first while together they add at most 10% to
+  the chain's time (`Planner.CHAIN_EXTRA_SHARE`), and are not listed when they stay out. No
+  search: the route is built, improved and put in order as usual. A quest of the chain for a
+  higher level waits under "Later"; an elite one is routed or listed as any elite quest is.
+- **The Class tab**: the chain followed ("Following"; right-click: back to the leveling plan),
+  the chains on offer ("Available", lowest level first, the new ones marked "New" while the tab
+  stays open; click: plan it, right-click: don't suggest it again; the tooltip gives where it
+  starts, its quests and time, the zones, XP, the leveling time it costs and what needs a group
+  or a higher level), and the ones turned off ("Not suggested"; click: suggest it again).
+  The tab's title glows (a slow gold pulse and "New") while a chain on offer has not been seen
+  there; opening the tab marks them all seen (`Engine.ChainsSeen`).
+- **Following it**: the window's title is "Class quest: [level] name", the summary counts the chain's
+  quests left. The move-on banner and the itinerary are off. The shown order is kept unless a
+  new one is 5% better, as for a zone. The zone chosen before stays chosen and is where leveling
+  goes on ("Then: back to leveling in ...", the best-ranked zone when none was chosen). Picking
+  a zone on the Zones tab, or "Back to the leveling plan" in the options menu, leaves the chain.
+  Steps of quests on the way read "On the way".
+- **The end**: when the chain's plan has no steps. Chat says why: done, the rest opens at level
+  N, the next part is a group quest, or nothing more of it can be planned. Leveling goes on in
+  the same job. A quest of the chain that leaves the log and is not done 2 seconds later
+  (`C_QuestLog.IsQuestFlaggedCompleted`) was dropped: the chain is left, and offered again.
+- **Saved with the character**: `chain` (the chain followed), `chainName`, and per chain
+  `classChains[id]` = { told (chat said so for this `sig`), seen (the Class tab was open with
+  this `sig`), never }.
+
 ## How a quest is modelled (`core/Model.lua`)
 
 **Quests started by an item.** A quest that only an item starts (a dropped letter, a head, a deed) has no quest giver. The data's start spots for such a quest are where players happened to start it, so they are not used as a place to accept it: without the item it is listed with "starts from an item" and not planned. The addon looks at the bags (`Game.GetBagItems`, on `BAG_UPDATE_DELAYED`): while an item that starts a quest is there (the game names the quest where it can, otherwise the data does, `Data.QuestsStartedByItem`), the quest is planned with a "Start: <quest>" step where you stand, and the usual value check decides whether it stays. The first time such an item turns up, the chat says so once. The waypoint, the way there and the live distance go with the next step, since there is nowhere to walk for the Start step. Items already in the bags when the addon starts are not announced.
@@ -522,6 +576,7 @@ Zones tab). This reverses the original design, which left dungeons out.
 | `LevelScout/core/Search.lua` | The search loop over a zone's route |
 | `LevelScout/core/Memory.lua` | Plan memory between re-rankings |
 | `LevelScout/core/Zones.lua` | Planning context, shortlist, ranking, move-on, order stability |
+| `LevelScout/core/Classes.lua` | Class quest chains: which are available, the plan for one |
 | `LevelScout/Engine.lua` | Reads game state, runs the planner in the background, publishes the view |
 | `LevelScout/Tracker.lua` | Turns quest-log progress, kills, positions and finished steps into samples for `Learn`; keeps the step log |
 | `LevelScout/Guide.lua` | The one waypoint (TomTom arrow, else the game's map pin) and the way to the current step from where the player stands |
@@ -538,7 +593,11 @@ Zones tab). This reverses the original design, which left dungeons out.
 `/ls` shows or hides it. So does the round button on the minimap's edge (drag it to move it
 around the minimap; the options menu can hide it), and the entry in the minimap addon list.
 
-- **Header**: zone name; options, collapse, close. Drag to move (position is saved).
+- **Header**: zone name ("Class quest: [level] name" while a class quest chain is followed);
+  options, collapse, close. Drag to move (position is saved).
+- **Quest levels**: an accept or turn-in step names its quests with their level in front, as
+  the quest log does ("Accept: [12] Wolves Across the Border"): on the rows, the waypoint's
+  title, the minimap button's tooltip and `/ls plan` (`Format.QuestName`).
 - **Summary**: steps, time and XP of the route; XP per hour on the right.
 - **Banner** (only when it applies): starting in another zone is at least 20% better over the
   next two hours (see "Itinerary"); click to switch.
@@ -798,6 +857,15 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    that the row's text is not cut off.
 11. The earlier `/dump` list in findings.md section 6 is still open, in particular
    `GetQuestLogRewardXP`.
+12. Class quests. At a level where a class quest opens (10 for most classes), expect one chat
+   line ("Class quest [level] X is now available") and the Class tab's title glowing with "New".
+   Open the tab: the glow should stop, and the chain's row should show "New"; its tooltip should
+   name the giver and the zones. Click it: the title should read "Class quest: [level] X" and the
+   route should start with the chain. Abandon a quest of the chain: chat should say
+   "You dropped ...", and the leveling route should come back. Check that the tab titles fit
+   (four tabs now) and that the glow is visible but not distracting. This relies on `QUEST_REMOVED`
+   passing the quest id and on `C_QuestLog.IsQuestFlaggedCompleted`, neither checked on this
+   client.
 
 ### QuestieDB as a runtime dependency
 

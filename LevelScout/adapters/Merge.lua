@@ -662,10 +662,10 @@ end
 
 -- The QuestieDB fields the index reads (a scalar row and five of the quest's table fields).
 local IK_QUEST = { "zoneOrSort", "startedBy", "preQuestGroup", "preQuestSingle", "questLevel", "requiredLevel",
-    "objectives", "triggerEnd" }
+    "objectives", "triggerEnd", "requiredClasses" }
 
 --- What the index needs of a quest, without building its record: zone (uiMap), starters,
---- preAll, preAny (as in the record) and its start spots (as questSpots.s). Adds the quest to
+--- preAll, preAny (as in the record), its start spots (as questSpots.s) and its classes mask. Adds the quest to
 --- `stats` (Merge.NewStats) the way Merge.CountRecord adds its full record.
 function Merge.QuestIndex(id, stats)
     if not universe[id] or excluded[id] then return nil end
@@ -695,7 +695,8 @@ function Merge.QuestIndex(id, stats)
         addXpSample(stats, tonumber(xp), Merge.XpLevel(levelsOf(q, qc, qf)), kind)
         if zos > 0 and dungeon then stats.dungeonArea[id] = zos end
     end
-    return zoneOf(id, zos), startersOf(q, qc, qf), preAll, preAny, startSpotsOf(id)
+    local classes = (q and q.requiredClasses) or tonumber(qc and qc[QC.classes]) or 0
+    return zoneOf(id, zos), startersOf(q, qc, qf), preAll, preAny, startSpotsOf(id), classes
 end
 
 -------------------------------------------------------------------------------- entities

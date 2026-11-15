@@ -535,9 +535,9 @@ end
 
 local VIA_ZONE, VIA_GIVER = 1, 2
 
--- The four fields of a quest record the index reads (8 zone, 13 starters, 16 and 17 prerequisites),
--- picked out of the packed string without decoding the quest.
-local INDEX_FIELDS = "^" .. ("[^|]*|"):rep(7) .. "([^|]*)|" .. ("[^|]*|"):rep(4) .. "([^|]*)|"
+-- The five fields of a quest record the index reads (7 classes, 8 zone, 13 starters, 16 and 17
+-- prerequisites), picked out of the packed string without decoding the quest.
+local INDEX_FIELDS = "^" .. ("[^|]*|"):rep(6) .. "([^|]*)|([^|]*)|" .. ("[^|]*|"):rep(4) .. "([^|]*)|"
     .. ("[^|]*|"):rep(2) .. "([^|]*)|([^|]*)"
 
 -- The maps an NPC or object stands on (its spots are the record's last field), in the order of
@@ -565,6 +565,7 @@ end
 function Data.BuildIndex(checkpoint)
     if not Data.usable then return nil end
     local byMap, followUps, byItem, n = {}, {}, {}, 0
+    local classMask = {} -- [questId] = the classes mask, for quests only some classes can take
     local giverMaps = {} -- [kind .. id] = entityMaps, for this pass only
     local merge = mode == "merge" and ns.Merge or nil
     local stats = merge and merge.NewStats()
@@ -588,17 +589,17 @@ function Data.BuildIndex(checkpoint)
     for i = 1, #all do
         local questId = all[i]
         n = n + 1
-        local zone, starters, preAll, preAny, startSpots
+        local zone, starters, preAll, preAny, startSpots, classes
         local rec = merge and packed.quests[questId] -- already built: read it like a fixture
         if merge and rec == nil then
-            zone, starters, preAll, preAny, startSpots = merge.QuestIndex(questId, stats)
+            zone, starters, preAll, preAny, startSpots, classes = merge.QuestIndex(questId, stats)
         else
             rec = raw("quests", questId)
             if rec then
-                zone, starters, preAll, preAny = rec:match(INDEX_FIELDS)
+                classes, zone, starters, preAll, preAny = rec:match(INDEX_FIELDS)
                 if not zone then -- a short record: read it the long way
                     local f = split(rec)
-                    zone, starters, preAll, preAny = f[8] or "", f[13] or "", f[16] or "", f[17] or ""
+                    classes, zone, starters, preAll, preAny = f[7] or "", f[8] or "", f[13] or "", f[16] or "", f[17] or ""
                 end
                 local s = spotsOf(questId)
                 startSpots = s and s.s
@@ -628,6 +629,8 @@ function Data.BuildIndex(checkpoint)
             end
             follows(preAll, questId)
             follows(preAny, questId)
+            local mask = tonumber(classes)
+            if mask and mask > 0 then classMask[questId] = mask end
         end
         if checkpoint and n % 50 == 0 then checkpoint() end
     end
@@ -642,7 +645,7 @@ function Data.BuildIndex(checkpoint)
         merge.LoadDropTables() -- (once, here, rather than in the middle of the first plan)
         merge.ReleaseQuestCache()
     end
-    Data._index = { byMap = byMap, followUps = followUps, byItem = byItem, questCount = n }
+    Data._index = { byMap = byMap, followUps = followUps, byItem = byItem, classMask = classMask, questCount = n }
     return Data._index
 end
 
@@ -666,6 +669,28 @@ function Data.QuestsStartedByItem(itemId)
     local t = index and index.byItem and index.byItem[itemId] or {}
     local out = {}
     for i, v in ipairs(t) do out[i] = v end
+    return out
+end
+
+--- Quests only some classes can take, this class among them (needs BuildIndex): ids, sorted.
+--- A mask that names every class is no restriction and is left out.
+function Data.ClassQuests(class)
+    local index, keys = Data._index, (world.enum or {}).classKeys
+    local bit = keys and class and keys[class]
+    if not (index and index.classMask and bit) then return {} end
+    local all = {}
+    for _, b in pairs(keys) do all[#all + 1] = b end
+    local out = {}
+    for id, mask in pairs(index.classMask) do
+        if hasBit(mask, bit) then
+            local every = true
+            for _, b in ipairs(all) do
+                if not hasBit(mask, b) then every = false; break end
+            end
+            if not every then out[#out + 1] = id end
+        end
+    end
+    table.sort(out)
     return out
 end
 

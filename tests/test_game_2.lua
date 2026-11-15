@@ -62,7 +62,7 @@ H.suite("Engine and window (real data)", function()
         if at then
             local step = ns.Engine.view.plan.steps[at]
             eq(step.fromBag, 1307)
-            eq(ns.Format.StepTitle(step), "Start: The Collector")
+            eq(ns.Format.StepTitle(step), "Start: " .. ns.Format.QuestName("The Collector", step.quests[1].level))
             contains(ns.Format.StepDetail(step), "Gold Pickup Schedule in your bags")
             if at == 1 then
                 local followed = ns.Engine.view.plan.steps[2]

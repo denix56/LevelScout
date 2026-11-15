@@ -161,6 +161,15 @@ function Game.GetCompletedQuests()
     return out
 end
 
+--- Has this character turned the quest in? true / false, or nil when the client does not say.
+function Game.IsQuestCompleted(questId)
+    local fn = api("C_QuestLog", "IsQuestFlaggedCompleted")
+    if type(fn) ~= "function" then return nil end
+    local done = safe(fn, questId)
+    if done == nil then return nil end
+    return done and true or false
+end
+
 --- Maximum number of quests the log accepts (nil when the client does not say).
 function Game.GetQuestLogCapacity()
     return safe(api("C_QuestLog", "GetMaxNumQuestsCanAccept"))
