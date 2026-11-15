@@ -573,8 +573,33 @@ local function zoneRows(view)
             end,
         }
     end
+    -- What a zone is worth: with an itinerary made for the shown zone, the next hours when that
+    -- zone is done first and the best way on is taken after it (itinerary.starts); the zones
+    -- are then listed by that. Without one (or while it is for another zone, or does not know a
+    -- listed zone yet): the zone's own XP per hour, trip included, in the ranking's order.
+    local starts = (it and it.starts and it.shown == view.zone and not view.chain) and it.starts or nil
+    if starts then
+        for _, z in ipairs(ranked) do
+            if #z.plan.steps > 0 and not starts[z.map] then starts = nil; break end
+        end
+    end
+    local function worth(z)
+        if not starts then return z.plan.score end
+        return starts[z.map] and starts[z.map].rate or 0
+    end
+    if starts then
+        local at = {}
+        for i, z in ipairs(ranked) do at[z] = i end
+        table.sort(ranked, function(a, b)
+            if (a.map == view.zone) ~= (b.map == view.zone) then return a.map == view.zone end
+            local wa, wb = worth(a), worth(b)
+            if wa ~= wb then return wa > wb end
+            return at[a] < at[b]
+        end)
+    end
+    local span = it and (it.horizon % 3600 == 0 and string.format("%d hours", it.horizon / 3600) or Format.Duration(it.horizon)) or nil
     local best = 0
-    for _, z in ipairs(ranked) do if z.plan.score > best then best = z.plan.score end end
+    for _, z in ipairs(ranked) do if worth(z) > best then best = worth(z) end end
     local place = 0
     for _, z in ipairs(ranked) do
         local p = z.plan
@@ -582,13 +607,23 @@ local function zoneRows(view)
         local shown = z.map == view.zone
         if not shown then place = place + 1 end
         local i = place
+        local value = worth(z)
+        local onward = starts and starts[z.map] and starts[z.map].next or nil
+        local onwardName = onward and (ns.Zones.Name(onward) or Game.MapName(onward) or ("Map " .. onward)) or nil
         -- (while a class quest chain is followed there is no zone to compare with)
-        local gain = (not shown and view.plan and not view.chain) and ns.Zones.Gain(view.plan, p) or nil
+        local gain
+        if starts then
+            local stay = starts[view.zone] and starts[view.zone].rate or 0
+            if not shown and stay > 0 and starts[z.map] then gain = starts[z.map].rate / stay - 1 end
+        elseif not shown and view.plan and not view.chain then
+            gain = ns.Zones.Gain(view.plan, p)
+        end
         local trip = (z.map ~= view.here and p.steps[1]) and p.steps[1].travel or nil
         local detail = (z.dungeon and (hex(C.warn) .. "Dungeon|r  |cff5f646e·|r  ") or "")
             .. string.format("%d quest%s", p.quests, p.quests == 1 and "" or "s")
         if #p.steps > 0 then detail = detail .. "  |cff5f646e·|r  " .. Format.Duration(p.seconds) end
         if trip and trip > 60 then detail = detail .. "  |cff5f646e·|r  " .. Format.Duration(trip) .. " away" end
+        if onwardName then detail = detail .. "  |cff5f646e·|r  then " .. onwardName end
         if gain then
             local pct = math.floor(math.abs(gain) * 100 + 0.5)
             if pct >= 1 then
@@ -601,13 +636,22 @@ local function zoneRows(view)
             -- a dungeon carries the game's dungeon-entrance icon in front of its name
             title = (z.dungeon and DUNGEON_ICON or "") .. name .. (z.lo and string.format("  %s%d-%d|r", hex(C.faint), z.lo, z.hi) or ""),
             dungeon = z.dungeon and true or nil,
-            detail = detail, right = Format.Number(p.score), rightSub = "XP/h",
-            bar = best > 0 and p.score / best or 0,
+            detail = detail, right = Format.Number(value), rightSub = "XP/h",
+            bar = best > 0 and value / best or 0,
             tip = function()
-                local lines = { { name }, { "XP per hour, trip included", right = Format.Number(p.score) },
-                    { gain and "Leaving now, over the next hour" or false, right = gain and string.format("%+d%%", gain * 100 + (gain >= 0 and 0.5 or -0.5)) or nil },
-                    { gain and "Counted as leaving from your zone's main hub while you are in it." or false, color = C.faint },
-                    { "Whole route", right = Format.Duration(p.seconds) .. ", " .. Format.Number(p.xp) .. " XP" } }
+                local pct = gain and string.format("%+d%%", gain * 100 + (gain >= 0 and 0.5 or -0.5)) or nil
+                local lines = { { name } }
+                if starts then
+                    lines[#lines + 1] = { "XP per hour over the next " .. span .. ", starting here", right = Format.Number(value) }
+                    if onwardName then lines[#lines + 1] = { "Then, from where this zone is left", right = onwardName } end
+                    if gain then lines[#lines + 1] = { "Against starting with " .. (view.zoneName or "the zone shown"), right = pct } end
+                    lines[#lines + 1] = { "This zone alone, first hour, trip included", right = Format.Number(p.score) .. " XP/h" }
+                else
+                    lines[#lines + 1] = { "XP per hour, trip included", right = Format.Number(p.score) }
+                    if gain then lines[#lines + 1] = { "Leaving now, over the next hour", right = pct } end
+                end
+                if gain then lines[#lines + 1] = { "Counted as leaving from your zone's main hub while you are in it.", color = C.faint } end
+                lines[#lines + 1] = { "Whole route", right = Format.Duration(p.seconds) .. ", " .. Format.Number(p.xp) .. " XP" }
                 local l = p.lists
                 if #l.later > 0 then lines[#lines + 1] = { "Quests for a higher level", right = tostring(#l.later) } end
                 if #l.group > 0 then lines[#lines + 1] = { "Group quests", right = tostring(#l.group) } end

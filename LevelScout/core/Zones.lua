@@ -816,7 +816,11 @@ Zones.Project = project -- (for the tests)
 ---   { horizon, xp, rate (XP per hour over the horizon), stay = XP of the best single zone,
 ---     shown = opts.shown, here = XP of the best itinerary that starts in the shown zone
 ---             (nil when nothing is left there, or no zone is shown),
----     segments = { { map, name, travel (seconds to get there), seconds (spent there), xp,
+---     starts = { [map] = { xp = XP inside the horizon when that zone is done first and the best
+---                way on is taken from where it is left, rate = that in XP per hour (over the time
+---                used, see below), next = the zone gone to after it (or nil) } }
+---                for every ranked zone with something to do,
+---     segments ={ { map, name, travel (seconds to get there), seconds (spent there), xp,
 ---                    leave = step index left after (nil: until the horizon), leaveKey,
 ---                    carried, carriedXP = quests brought along from the zones before and turned
 ---                    in here, and their XP (part of xp),
@@ -989,8 +993,42 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         end
     end
 
+    -- Every ranked zone as the place to start: its route, then the best way on from where it is
+    -- left, until the horizon. What a zone is worth then no longer hangs on one hour that the
+    -- trip eats into: a short zone is not marked down for running out (the time left is spent in
+    -- the next one), and a far zone pays its trip once, over the whole horizon. The plans are
+    -- the ranked ones (nothing is planned again, also for the zone the itinerary starts in), so
+    -- the figures compare with each other.
+    -- The rate is over the time used, at least Planner.MIN_HORIZON: when the routes run out
+    -- before the horizon and no other zone fits into what is left (a trip and Zones.MIN_STAY),
+    -- that rest is not counted as earning nothing. Staying in the zone alone is tried too, and
+    -- the better rate of the two is the zone's.
+    local starts = {}
+    do
+        local function rate(got)
+            local used = 0
+            for _, seg in ipairs(got.segments) do used = used + seg.travel + seg.seconds end
+            return got.xp / math.max(math.min(used, H), Planner.MIN_HORIZON) * 3600
+        end
+        local listed = {}
+        for _, z in ipairs(zones) do listed[z.map] = true end
+        for _, z in ipairs(ranked or {}) do
+            if z.plan and #z.plan.steps > 0 then
+                local extra = not listed[z.map]
+                if extra then zones[#zones + 1] = { map = z.map, plan = z.plan } end -- (only ever the first zone: `first`)
+                local got = search(nil, nil, nil, nil, z.map)
+                local alone = search(nil, nil, nil, 1, z.map)
+                if extra then zones[#zones] = nil end
+                if alone and (not got or rate(alone) > rate(got)) then got = alone end
+                if got then
+                    starts[z.map] = { xp = math.floor(got.xp), rate = rate(got), next = got.segments[2] and got.segments[2].map or nil }
+                end
+            end
+        end
+    end
+
     local out = { horizon = H, xp = math.floor(best.xp), rate = best.xp / H * 3600, stay = single and math.floor(single.xp) or nil,
-        shown = opts.shown, here = here and math.floor(here) or nil, segments = {} }
+        shown = opts.shown, here = here and math.floor(here) or nil, starts = starts, segments = {} }
     for i, seg in ipairs(best.segments) do
         -- quests brought along from the zones before and turned in here
         local carried, carriedXP = 0, 0
