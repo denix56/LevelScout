@@ -13,6 +13,9 @@
   the waypoint's title and the minimap button's tooltip.
 - A quest that needs one of several quests first is planned after whichever of them the route
   does (it waited for all of them before).
+- While LevelScout knows none of your flight paths, a step in another zone says it is planned on
+  foot for that reason ("on foot: flight paths not known yet"), and chat says once to open a
+  flight master's map.
 - A quest no Forever player has seen counts as existing when a quest that needs it has been
   seen, so chains with such a gap are planned through it.
 

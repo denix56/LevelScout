@@ -576,4 +576,45 @@ H.suite("Engine and window (real data)", function()
         end
         eq(hints, 2, "into Westfall and back: the steps in between say nothing")
     end)
+
+    test("no flight path known: a step in another zone says it is walked for that, once in chat", function()
+        local ns = start()
+        local view = ns.Engine.view
+        ok(not view.flightsKnown, "a fresh character: no flight path seen yet")
+        local function current()
+            for _, r in ipairs(ns.UI.rows) do
+                if r:IsShown() and r.model and r.model.guided then return r end
+            end
+        end
+        -- in Elwynn, the route's first step is in Elwynn: nothing to say
+        ok(not current().model.detail:find("flight paths not known", 1, true))
+        eq(#M.printed > 0 and table.concat(M.printed, "\n"):find("flight paths yet", 1, true), nil)
+        -- in Westfall, the route (Elwynn, the zone chosen) starts in another zone
+        C_Map.GetBestMapForUnit = function() return 1436 end
+        C_Map.GetPlayerMapPosition = function() return { x = 0.5, y = 0.5 } end
+        M.fire("ZONE_CHANGED_NEW_AREA")
+        ok(M.settle())
+        eq(view.zone, 1429)
+        contains(current().model.detail, "on foot: flight paths not known yet")
+        local tip = current().model.tip()
+        local said = false
+        for _, l in ipairs(tip) do if l[1] and l[1]:find("does not know your flight paths", 1, true) then said = true end end
+        ok(said, "the tooltip says what to do")
+        local function told()
+            local n = 0
+            for _, line in ipairs(M.printed) do if line:find("does not know your flight paths yet", 1, true) then n = n + 1 end end
+            return n
+        end
+        eq(told(), 1, "said in chat")
+        ns.Engine.Replan(true)
+        ok(M.settle())
+        eq(told(), 1, "once")
+        -- a flight path seen: no more of it
+        ns.Engine.chardb.knownNodes[2] = true
+        ns.Engine.Replan(true)
+        ok(M.settle())
+        for _, r in ipairs(ns.UI.rows) do
+            ok(not (r:IsShown() and r.model and (r.model.detail or ""):find("flight paths not known", 1, true)), "no row says it")
+        end
+    end)
 end)

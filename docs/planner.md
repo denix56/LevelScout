@@ -834,7 +834,9 @@ calls, which proves the code paths run, not that the client behaves as mocked.
 5. Accept a quest, make progress, turn one in. The route should update within about 2 seconds
    each time, and the arrow should follow the first step.
 6. Flight paths. Until a flight map has been seen, the Zones tab shows a "Flight paths unknown"
-   tip. Discovering a new flight point records it on the spot when you stand within 150 yards
+   tip, the current step's way line ends with "on foot: flight paths not known yet" when the
+   step is in another zone (its tooltip says to open a flight master's map), and chat says so
+   once per character. Discovering a new flight point records it on the spot when you stand within 150 yards
    of its flight master (chat: "Learned flight point: <name>"); otherwise the tip asks you to
    open the flight map. This relies on the `UI_INFO_MESSAGE` event carrying the game's
    `ERR_NEWTAXIPATH` text, which is not verified on this client.

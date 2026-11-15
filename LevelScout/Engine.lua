@@ -739,6 +739,16 @@ local function run()
         Tracker.OnPlan(result.plan, { now = view.updated, level = result.state.level, group = result.state.groupSize,
             log = result.state.log, completed = completed })
         view.flightsKnown = next(chardb.knownNodes) ~= nil
+        -- No flight path known and the route starts in another zone: trips are walked only for
+        -- that. Said once per character (the current step's row says it too).
+        if not view.flightsKnown and not chardb.flightHintTold then
+            local first = result.plan.steps[1]
+            local zone = first and first.loc and (Zones.ZoneAt(first.loc) or first.loc.map)
+            if zone and zone ~= result.state.map then
+                chardb.flightHintTold = true
+                ns.Print("LevelScout does not know your flight paths yet, so trips are planned on foot. Open any flight master's map once (talk to the flight master) and routes will use them.")
+            end
+        end
         if result.ended then
             chardb.chain = nil
             chainEnded(result.ended, view.zoneName)

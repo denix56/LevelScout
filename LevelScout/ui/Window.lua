@@ -141,6 +141,21 @@ end
 --         bar (0..1), onClick(mouse), tip() -> lines }
 ---------------------------------------------------------------------------------------------
 
+-- The way to the current step in words (Format.TripText). While LevelScout knows none of the
+-- player's flight paths (none seen on a flight master's map yet), a step in another zone is
+-- reached on foot only for that reason: the line says so.
+local function onFootUnknown(way)
+    return way ~= nil and way.zone ~= nil and #(way.rides or {}) == 0 and not Engine.view.flightsKnown
+end
+local function wayText()
+    local way = Guide.Trip()
+    local text = Format.TripText(way)
+    if text and onFootUnknown(way) then
+        text = text .. "  |cff5f646e·|r  " .. hex(C.warn) .. "on foot: flight paths not known yet|r"
+    end
+    return text
+end
+
 local function stepTip(step, index)
     return function()
         local lines = { { Format.StepTitle(step) } }
@@ -157,6 +172,9 @@ local function stepTip(step, index)
         lines[#lines + 1] = { "Travel", right = Format.Duration(step.travel) }
         -- the current step: the way from where we stand, leg by leg, when it is more than a walk
         local trip = index == 1 and Guide.Trip() or nil
+        if onFootUnknown(trip) then
+            lines[#lines + 1] = { "Planned on foot: LevelScout does not know your flight paths yet. Open any flight master's map once (talk to the flight master) and the route will use them.", color = C.warn }
+        end
         local legs = Format.TripLegs(trip)
         if legs then
             lines[#lines + 1] = { "From where you are", right = Format.Duration(trip.seconds) }
@@ -433,7 +451,7 @@ local function routeRows(view)
         if guided == i then
             -- the current step: the way from where we stand, on a line of its own (its zone
             -- when that is not the one we are in, the flight or boat to take; see UI.Tick)
-            trip = Format.TripText(Guide.Trip())
+            trip = wayText()
             if trip then
                 detail, lines = colourTrip(trip, outside) .. "\n" .. detail, lines + tripLines(trip)
                 if outside and trip:sub(1, 3) ~= "In " then base = prefixed(base, outsideTag(outside)); detail = colourTrip(trip, outside) .. "\n" .. base end
@@ -1422,7 +1440,7 @@ function UI.Tick()
     -- The way to the step (ns.Guide.Trip), as it stands now. Its line coming or going changes
     -- the row's height, so the list is drawn again; a change of words only is put in place.
     if m.base then
-        local trip = Format.TripText(Guide.Trip())
+        local trip = wayText()
         if (trip ~= nil) ~= (m.trip ~= nil) or (trip and tripLines(trip) ~= tripLines(m.trip)) then return UI.Refresh() end
         if trip ~= m.trip then m.trip, m.detail = trip, colourTrip(trip, m.outside) .. "\n" .. m.base end
     end
