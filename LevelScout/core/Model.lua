@@ -58,11 +58,43 @@ end
 local function isElite(npc) return npc ~= nil and npc.rank >= 1 and npc.rank <= 3 end
 Model.MobLevel, Model.IsElite = mobLevel, isElite
 
---- True when nothing shows the quest exists in Forever: no ForeverDB player has seen it and
---- Questie's player traces have no reward for it. QuestieDB carries such quests over from
---- other versions of the game (for example Season of Discovery's Duskwood missions).
+Model.CONFIRM_DEPTH = 8 -- how many follow-ups on a quest is confirmed by the one after it
+
+local function unseen(q) return q.flags.unseen == true and q.xp == nil end
+
+-- Does a follow-up that cannot be had without this quest show that it exists: a quest that
+-- needs it (all of its prerequisites, or this one alone), seen in Forever itself or shown by
+-- its own follow-up in turn? Kept per quest record once the index is built.
+local shownCache = setmetatable({}, { __mode = "k" })
+local function shownByFollowUp(q, depth)
+    local got = shownCache[q]
+    if got ~= nil then return got end
+    local Data = ns.Data
+    if not Data.IsIndexBuilt() then return false end
+    shownCache[q] = false -- (a loop in the data ends here)
+    local found = false
+    if depth < Model.CONFIRM_DEPTH then
+        for _, id in ipairs(Data.GetFollowUps(q.id)) do
+            local f = Data.GetQuest(id)
+            local needs = false
+            if f then
+                for _, pre in ipairs(f.preAll) do if pre == q.id then needs = true end end
+                if #f.preAny == 1 and f.preAny[1] == q.id then needs = true end
+            end
+            if needs and (not unseen(f) or shownByFollowUp(f, depth + 1)) then found = true; break end
+        end
+    end
+    shownCache[q] = found
+    return found
+end
+
+--- True when nothing shows the quest exists in Forever: no ForeverDB player has seen it,
+--- Questie's player traces have no reward for it, and no quest that needs it is confirmed
+--- (a follow-up seen in Forever shows that the quest before it exists too, up to
+--- CONFIRM_DEPTH links back). QuestieDB carries such quests over from other versions of the
+--- game (for example Season of Discovery's Duskwood missions).
 function Model.Unconfirmed(q)
-    return q.flags.unseen == true and q.xp == nil
+    return unseen(q) and not shownByFollowUp(q, 0)
 end
 
 --- Build the model of one quest for this character.

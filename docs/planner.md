@@ -546,6 +546,10 @@ until it is done, then the zones take over again.
   doubled while rested).
 - **Not confirmed in Forever**: a quest that no ForeverDB player has seen and that has no reward
   in Questie's player traces is not planned until it is in the log (438 quests on 2026-11-13).
+  Unless a quest that needs it is confirmed (it is all of that quest's prerequisites, or the
+  only one): a follow-up seen in Forever shows the quest before it exists too, followed up to 8
+  links (`Model.CONFIRM_DEPTH`). The paladin quest A Second Opinion (78090) is confirmed so by
+  Earning Your Salt (78091), which lets its chain be planned to the end.
   QuestieDB carries such quests over from other versions of the game, for example Season of
   Discovery's "Duskwood Mission" quests. They are listed under Quests.
 - **Red quests**: a quest 5 or more levels above you (red in the quest log) waits under "Later"

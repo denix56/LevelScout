@@ -193,6 +193,26 @@ H.suite("Class quests (core)", function()
         ok(not ns.Classes.InPlan(chain, nil))
     end)
 
+    test("a quest no Forever player has seen is confirmed by a follow-up that needs it", function()
+        -- (flags "u": no ForeverDB player has seen it; no XP: no reward in Questie's traces)
+        local ns = load({
+            [80] = quest({ name = "Hidden Step", flags = "u", starts = "n100", ends = "n100" }),
+            [81] = quest({ name = "Seen After", xp = 300, starts = "n100", ends = "n100", preAll = "80" }),
+            [82] = quest({ name = "Lone Unseen", flags = "u", starts = "n100", ends = "n100" }),
+            [83] = quest({ name = "Also Unseen", flags = "u", starts = "n100", ends = "n100", preAll = "82" }),
+            [84] = quest({ name = "Maybe", flags = "u", starts = "n100", ends = "n100" }),
+            [85] = quest({ name = "Either", xp = 300, starts = "n100", ends = "n100", preAny = "84,60" }),
+            [86] = quest({ name = "Far Back", flags = "u", starts = "n100", ends = "n100" }),
+            [87] = quest({ name = "Middle", flags = "u", starts = "n100", ends = "n100", preAny = "86" }),
+            [88] = quest({ name = "Seen At Last", xp = 300, starts = "n100", ends = "n100", preAll = "87" }),
+        })
+        local function unconfirmed(id) return ns.Model.Unconfirmed(ns.Data.GetQuest(id)) end
+        eq(unconfirmed(80), false, "Seen After cannot be had without it")
+        eq({ unconfirmed(82), unconfirmed(83) }, { true, true }, "nothing after them is seen")
+        eq(unconfirmed(84), true, "Either needs only one of Maybe and Errand")
+        eq({ unconfirmed(86), unconfirmed(87) }, { false, false }, "through a follow-up confirmed in turn")
+    end)
+
     test("one of several prerequisites: the follow-up follows whichever of them is planned", function()
         -- Path A and Path B are either-or; Reunion needs one of them (before, it waited for both)
         local ns = load({
@@ -387,6 +407,28 @@ H.suite("Class quests (real data)", function()
         ok(M.settle())
         eq(view.chain, nil, "picking a zone leaves the chain")
         eq(view.zone, map)
+    end)
+
+    test("a paladin chain through a quest no Forever player has seen is planned to its end", function()
+        -- A Strange Artifact (78088) > ... > A Second Opinion (78090, not seen in Forever) >
+        -- Earning Your Salt (78091, seen) > It Must Be Destroyed (78092); quests of level 30,
+        -- offered from level 26 (they are red before)
+        local ns = E.installGame({ questiedb = M.questieDB("Alliance", "PALADIN") })
+        M.set("UnitClass", function() return "Paladin", "PALADIN", 2 end)
+        M.set("UnitLevel", function() return 26 end)
+        M.set("UnitXP", function() return 0 end)
+        M.set("UnitXPMax", function() return 20000 end)
+        M.set("LevelScoutDB", nil)
+        M.set("LevelScoutCharDB", nil)
+        E.noSearch(ns)
+        M.login()
+        ok(M.settle())
+        eq(ns.Model.Unconfirmed(ns.Data.GetQuest(78090)), false, "shown to exist by Earning Your Salt")
+        local o = offered(ns, 78088)
+        ok(o, "the chain is on offer")
+        eq(o.count, 5, "all five quests")
+        eq(o.name, "It Must Be Destroyed")
+        M.questieDB("Alliance", "WARRIOR") -- (the other tests play a warrior)
     end)
 
     test("a quest of the chain dropped ends the chain; one turned in does not", function()

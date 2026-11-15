@@ -13,6 +13,8 @@
   the waypoint's title and the minimap button's tooltip.
 - A quest that needs one of several quests first is planned after whichever of them the route
   does (it waited for all of them before).
+- A quest no Forever player has seen counts as existing when a quest that needs it has been
+  seen, so chains with such a gap are planned through it.
 
 ## 0.1.0
 
