@@ -135,7 +135,7 @@ H.suite("Engine and window (real data)", function()
         local phases = 0
         for text in pairs(texts) do
             if text:find("^Ranking zones: Map %-?%d+ %(%d+ of %d+%)$") or text:find("^Searching for a better route: round %d+ of %d+$")
-                or text == "Putting stops in their best order" or text == "Checking the shown route" or text == "Planning the next two hours" then
+                or text == "Putting stops in their best order" or text == "Checking the shown route" or text == "Planning the next hours" then
                 phases = phases + 1
             else
                 ok(text == "Planning" or text == "Ranking zones", "an unexpected text: " .. text)

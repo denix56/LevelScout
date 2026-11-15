@@ -570,11 +570,11 @@ H.suite("Itinerary (real data)", function()
     end
 
     local ns, state, ctx, ranked, it
-    test("two zones in two hours beat the best single zone, and the times add up", function()
+    test("two zones inside the horizon beat the best single zone, and the times add up", function()
         ns, state, ctx, ranked = setup()
         it = ns.Zones.Itinerary(state, ctx, ranked)
         ok(it, "an itinerary")
-        eq(it.horizon, 7200)
+        eq(it.horizon, ns.Zones.HORIZON)
         ok(#it.segments >= 2, "more than one zone")
         ok(it.xp > it.stay, string.format("%d XP against %d in one zone", it.xp, it.stay))
         local clock, xp, seen = 0, 0, {}
@@ -591,7 +591,7 @@ H.suite("Itinerary (real data)", function()
         end
         ok(clock <= it.horizon + 1, "inside the horizon: " .. clock)
         ok(math.abs(xp - it.xp) <= #it.segments, "the zones' XP adds up to the total")
-        H.near(it.rate, it.xp / 2, 1, "XP per hour over two hours")
+        H.near(it.rate, it.xp / (it.horizon / 3600), 1, "XP per hour over the horizon")
     end)
 
     test("the trip from one zone to the next is corrected by the learned travel factor", function()
