@@ -716,8 +716,15 @@ uses a flight path, a boat or a zeppelin, where to board and where to get off.
   two ends. `Seconds` builds no legs and costs what it did before.
   - A flight is one leg from the first flight point to the last, however many points the path
     passes: the flight map takes a click on the far end and flies through the points between.
-  - Only flight points the character knows are in the travel object, so an unknown flight is
-    never suggested; the "Flight paths unknown" tip is unchanged.
+  - A flight ends at a flight point the character knows, and passes only known ones. It can
+    start at a flight master of the character's side that is not known yet (`Travel.UNLOCK`):
+    walking there and talking unlocks the point, and the flight goes on from it. Such a start
+    is taken when the whole way (walk, 20 seconds, flight, walk) is shorter than every way from
+    a known point; its leg's `from` has `unlock = true`, and the window and the waypoint say
+    "unlock Lakeshire and fly to Darkshire", "New flight master: Lakeshire, fly to Darkshire".
+    The planner's travel times use the same choice. Not counted: that the point, once unlocked,
+    can be flown to later in the route (the plan is made again when it is unlocked). With no
+    flight point known at all nothing changes; the "Flight paths unknown" tip is unchanged.
   - Links (boats, zeppelins, ferries, lifts, the tram) can follow one another, with a walk or a
     flight between them, and are used inside a continent too when the way without them takes
     `Travel.MIN_FOR_LINK` seconds or more (`Travel.CHAIN`; off: one crossing between continents).

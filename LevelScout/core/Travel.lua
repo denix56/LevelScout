@@ -1,7 +1,8 @@
 -- core/Travel.lua: seconds to get from one location to another. Pure Lua: no game API.
 -- Walking is straight-line distance times a detour factor; a long walk is also checked against
 -- the walk table between hubs (the real way round mountains and water), and takes the longer
--- of the two. Known flight paths and boats/zeppelins are used when they are faster.
+-- of the two. Known flight paths and boats/zeppelins are used when they are faster; a flight
+-- can also start at a flight master not known yet (Travel.UNLOCK), never end at one.
 --   travel:Seconds(a, b)  the time and the mode; called very often by the planner.
 --   travel:Route(a, b)    the same choice with its legs (walk, fly, boat; boats and other links
 --                         can follow one another, see `chain`), for telling the
@@ -19,6 +20,8 @@ local floor = math.floor
 Travel.DETOUR = 1.25          -- real paths are longer than straight lines
 Travel.FLIGHT_OVERHEAD = 20   -- talking to the flight master, take-off and landing
 Travel.MIN_WALK_FOR_FLIGHT = 240
+Travel.UNLOCK = true          -- a flight can start at a flight master of our side that is not known yet:
+                              -- walk there, talk (that unlocks the point), fly on to a known point
 Travel.CHAIN = true            -- boats, ferries and lifts can follow one another, and are used inside a
                               -- continent too (off: one crossing between continents, none inside one)
 Travel.MIN_FOR_LINK = 240     -- seconds: a shorter trip inside a continent never takes a boat or a lift
@@ -311,14 +314,19 @@ function Travel.New(world, opts)
                 kind = kind, aName = aName, bName = bName }
         end
     end
-    self.nodes, self.edges, self.fromCache = {}, {}, {}
-    self.nearCache = setmetatable({}, { __mode = "k" }) -- location -> its two nearest flight nodes
+    -- nodes: the flight points a flight can start at (known, or of our side and to be unlocked
+    -- on the way); known: those it can pass and end at
+    self.nodes, self.known, self.edges, self.fromCache = {}, {}, {}, {}
+    self.nearCache = setmetatable({}, { __mode = "k" }) -- location -> its nearest flight nodes
     self.nodeNames, self.nodePoints = {}, {} -- for Route: the flight master's name and map point
     local travel = world and world.travel
     if travel and opts.knownNodes and next(opts.knownNodes) then
         local flySpeed = (travel.speeds and travel.speeds.fly) or 32
         for id, n in pairs(travel.nodes or {}) do
-            if opts.knownNodes[id] then
+            local known = opts.knownNodes[id] and true or false
+            if known or (Travel.UNLOCK and self.side and (n[7] == "n" or n[7] == self.side)) then
+                self.known[id] = known or nil
+                if not known then self.hasUnknown = true end
                 self.nodes[id] = Geo.WorldLoc(n[1], n[2], n[3])
                 self.nodeNames[id] = n[9]
                 if n[4] and n[5] and n[6] then self.nodePoints[id] = { map = n[4], mx = n[5], my = n[6] } end
@@ -326,7 +334,8 @@ function Travel.New(world, opts)
         end
         for from, to, yards in (travel.flights or ""):gmatch("(%d+)>(%d+)>(%d+)>%d+") do
             from, to = tonumber(from), tonumber(to)
-            if self.nodes[from] and self.nodes[to] then
+            -- (no flight to a point that is not known, nor through one)
+            if self.nodes[from] and self.known[to] then
                 self.edges[from] = self.edges[from] or {}
                 self.edges[from][to] = tonumber(yards) / flySpeed
             end
@@ -377,7 +386,7 @@ function Travel.New(world, opts)
     -- or the fastest flight between two flight points. For ruling links out early (see `chain`).
     self.vmax = self.ride or self.speed
     local known = {}
-    for id in pairs(self.nodes) do known[#known + 1] = id end
+    for id in pairs(self.known) do known[#known + 1] = id end
     table.sort(known)
     for from, tos in pairs(self.edges) do
         for to, secs in pairs(tos) do
@@ -389,7 +398,8 @@ function Travel.New(world, opts)
     self.chainKey = table.concat({ tostring(self.speed), tostring(self.ride), tostring(Travel.MOUNT_UP),
         tostring(Travel.LAND_PATH), tostring(Travel.SWIM), tostring(Travel.LAND_PATH_MAX), tostring(Travel.LAND_PATH_MARGIN), tostring(self.side), table.concat(known, ","), tostring(self.tramUsed),
         tostring(Travel.DETOUR), tostring(Travel.HUB_WALK), tostring(Travel.LAND_MASSES), tostring(Travel.FLIGHT_OVERHEAD),
-        tostring(Travel.MIN_WALK_FOR_FLIGHT), tostring(Travel.HUB_WALK_MIN), tostring(Travel.HUB_SECOND_MAX) }, "|")
+        tostring(Travel.MIN_WALK_FOR_FLIGHT), tostring(Travel.HUB_WALK_MIN), tostring(Travel.HUB_SECOND_MAX),
+        tostring(self.hasUnknown) }, "|")
     self.terrain = Travel.HUB_WALK and terrain(travel) or nil
     self.hubCache = setmetatable({}, { __mode = "k" }) -- location -> its two nearest hubs
     return self
@@ -468,7 +478,7 @@ function T:Walk(a, b, always)
     return t
 end
 
--- Shortest flight times from one node to every known node (few dozen nodes: plain Dijkstra).
+-- Shortest flight times from one node (known or not) to every known node (few dozen nodes: plain Dijkstra).
 function T:FlightsFrom(from)
     local hit = self.fromCache[from]
     if hit then return hit end
@@ -489,28 +499,34 @@ function T:FlightsFrom(from)
     return dist
 end
 
--- The two known flight nodes closest to a location: { {id, walkSeconds}, ... }.
+-- The two known flight nodes closest to a location, and the two closest that are still to be
+-- unlocked (a flight can start there): { id, walkSeconds } each, nil where there is none.
 function T:NearestNodes(loc)
     -- (remembered per location table; the planner's VALUE_CACHE switch covers it, for the bench)
     local cache = self.nearCache
     if ns.Planner and ns.Planner.VALUE_CACHE == false then cache = nil end
     local hit = cache and cache[loc]
-    if hit then return hit[1], hit[2] end
-    local a, b
+    if hit then return hit[1], hit[2], hit[3], hit[4] end
+    local a, b, u1, u2
+    local known = self.known
     for id, nloc in pairs(self.nodes) do
         -- (always against the walk table: a flight master close by in a straight line can be
         -- a long way on foot, as Menethil Harbor is from the north of Ironforge)
         local w = self:Walk(loc, nloc, true)
         if w and w < huge then
-            if not a or w < a[2] then a, b = { id, w }, a
-            elseif not b or w < b[2] then b = { id, w } end
+            if known[id] then
+                if not a or w < a[2] then a, b = { id, w }, a
+                elseif not b or w < b[2] then b = { id, w } end
+            elseif not u1 or w < u1[2] then u1, u2 = { id, w }, u1
+            elseif not u2 or w < u2[2] then u2 = { id, w } end
         end
     end
-    if cache then cache[loc] = { a, b } end
-    return a, b
+    if cache then cache[loc] = { a, b, u1, u2 } end
+    return a, b, u1, u2
 end
 
--- Same continent: walk, or walk-fly-walk when flight paths make it faster.
+-- Same continent: walk, or walk-fly-walk when flight paths make it faster. The flight starts
+-- at a known flight point or at one still to be unlocked, and ends at a known one.
 -- Returns the seconds and the mode; for a flight also the two nodes as { id, walkSeconds }
 -- (where to take off, where to land) and the seconds in the air.
 function T:Land(a, b)
@@ -518,22 +534,24 @@ function T:Land(a, b)
     if not walk then return nil end
     if not self.hasFlights or walk < Travel.MIN_WALK_FOR_FLIGHT then return walk, "walk" end
     local best, mode, from, to, air = walk, "walk", nil, nil, nil
-    local a1, a2 = self:NearestNodes(a)
+    local a1, a2, a3, a4 = self:NearestNodes(a)
     local b1, b2 = self:NearestNodes(b)
-    -- (as `for na in {a1, a2}`, `for nb in {b1, b2}`, without the tables: this runs for every pair of stops)
-    local na = a1
-    while na do
-        local flights = self:FlightsFrom(na[1])
-        local nb = b1
-        while nb do
-            local fly = flights[nb[1]]
-            if fly and nb[1] ~= na[1] then
-                local t = na[2] + Travel.FLIGHT_OVERHEAD + fly + nb[2]
-                if t < best then best, mode, from, to, air = t, "fly", na, nb, fly end
+    local overhead = Travel.FLIGHT_OVERHEAD
+    -- (as `for na in {a1, a2, a3, a4}`, `for nb in {b1, b2}`, without the tables: this runs for every pair of stops)
+    for i = 1, 4 do
+        local na = (i == 1 and a1) or (i == 2 and a2) or (i == 3 and a3) or (i == 4 and a4) or nil
+        if na and na[2] + overhead < best then
+            local flights = self:FlightsFrom(na[1])
+            local nb = b1
+            while nb do
+                local fly = flights[nb[1]]
+                if fly and nb[1] ~= na[1] then
+                    local t = na[2] + overhead + fly + nb[2]
+                    if t < best then best, mode, from, to, air = t, "fly", na, nb, fly end
+                end
+                nb = nb == b1 and b2 or nil
             end
-            nb = nb == b1 and b2 or nil
         end
-        na = na == a1 and a2 or nil
     end
     return best, mode, from, to, air
 end
@@ -669,7 +687,8 @@ end
 -- A point of a route: { name (flight point, harbour; nil for where we are and where we are going), loc }.
 local function nodePoint(self, id)
     local loc, p = self.nodes[id], self.nodePoints[id]
-    return { name = self.nodeNames[id], node = id,
+    -- (unlock: the flight master is not known yet; talking to them there unlocks the point)
+    return { name = self.nodeNames[id], node = id, unlock = not self.known[id] or nil,
         loc = { c = loc.c, x = loc.x, y = loc.y, map = p and p.map, mx = p and p.mx, my = p and p.my } }
 end
 
@@ -693,7 +712,8 @@ end
 --- The way from a to b behind Seconds(a, b): the same choice and the same total.
 --- Returns { seconds, mode, legs = { { kind = "walk"|"fly"|"boat", from, to, seconds,
 ---           name, transport (boat legs: the link's name and its kind, "Boat", "Zeppelin", ...) }, ... } }
---- where from and to are { name, loc, node (flight node id) }: a flight point or a harbour, or
+--- where from and to are { name, loc, node (flight node id), unlock (true: a flight point still
+--- to be unlocked; only where a flight starts) }: a flight point or a harbour, or
 --- only { loc } for a and b themselves. A walk leg can be zero seconds long (standing at the
 --- flight master). No known way (mode "unknown"): no legs, and Travel.NO_ROUTE seconds.
 function T:Route(a, b)

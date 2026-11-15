@@ -456,7 +456,10 @@ function Zones.FlightStops(plan, ctx, skip)
                 if there and there <= Zones.FLIGHT_DETOUR then
                     local d = there
                     if nxt then
+                        -- (on from the flight master: on foot, or by the flight that starts there)
                         local on, direct = travel:Walk(loc, nxt), (travel:Seconds(prev, nxt))
+                        local ride = travel:Seconds(loc, nxt)
+                        if on and ride < on then on = ride end
                         d = on and (there + on - direct) or nil
                     end
                     detours[i] = d

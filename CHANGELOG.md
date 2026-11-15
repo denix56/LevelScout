@@ -1,5 +1,12 @@
 # LevelScout
 
+## Unreleased
+
+- **Flights from a flight master you have not unlocked yet**: when the fastest way is to walk to
+  a flight master of your side that you do not know, unlock the point there and fly on to one you
+  know, the route and the waypoint take it: "unlock Lakeshire and fly to Darkshire". Flights
+  still end only at points you know.
+
 ## 0.1.1
 
 - **Class quests**: when a class quest chain becomes available (and the leveling route does not
