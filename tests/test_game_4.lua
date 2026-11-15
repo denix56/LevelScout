@@ -423,6 +423,53 @@ H.suite("Engine and window (real data)", function()
         contains(output(), "forgot the learned pace, travel speed, drop rates, step log and step-time model")
     end)
 
+    test("flight points off an open flight map: planned with at once, and the way flies at once", function()
+        local ns, travel = E.wayfinding()
+        local view = ns.Engine.view
+        local step = { kind = "turnin", action = "turnin", loc = ns.Geo.Loc(1436, 56, 52), quests = { { id = 1, name = "Test" } }, travel = 0, seconds = 8 }
+        -- the Guide: a new way for the same step settles first, unless the plan is fresh
+        local walking = ns.Travel.New(ns.Data.World(), { speed = 7, side = "a", knownNodes = {} })
+        ns.Guide.Follow(step, "Turn in: Test", walking)
+        eq(ns.Guide.Trip().first, nil, "no flight point known: walked")
+        ns.Guide.Follow(step, "Turn in: Test", travel)
+        eq(ns.Guide.Trip().first, nil, "another plan for the same step: its way settles first")
+        ns.Guide.Follow(step, "Turn in: Test", travel, false, true)
+        eq(ns.Guide.Trip().first and ns.Guide.Trip().first.kind, "fly", "a fresh plan's way is taken at once")
+        -- the engine: the map's list fills a moment after it opens; read again, planned with at once
+        local calls = 0
+        C_TaxiMap = { GetAllTaxiNodes = function()
+            calls = calls + 1
+            if calls == 1 then return {} end
+            return { { nodeID = 2, state = 0 }, { nodeID = 4, state = 1 }, { nodeID = 5, state = 2 } }
+        end }
+        -- the zones were ranked a minute ago: the plan made at once is still the shown route only,
+        -- on screen before the zones are ranked again
+        M.clock = M.clock + 60000
+        local knownWhenRanked
+        local rank = ns.Zones.Rank
+        ns.Zones.Rank = function(...)
+            if knownWhenRanked == nil then knownWhenRanked = view.flightsKnown == true end
+            return rank(...)
+        end
+        M.fire("TAXIMAP_OPENED")
+        eq(LevelScoutCharDB.knownNodes, {}, "nothing listed yet")
+        ok(not ns.Async.IsRunning("plan"))
+        table.remove(M.timers, 1)() -- the next look, a moment later (the map is still open)
+        eq(LevelScoutCharDB.knownNodes, { [2] = true, [4] = true })
+        ok(ns.Async.IsRunning("plan"), "planned at once: no wait")
+        ok(M.settle())
+        ok(view.flightsKnown)
+        eq(knownWhenRanked, true, "the route with the flight points was shown before the zones were ranked")
+        ns.Zones.Rank = rank
+        eq(view.status, "ready")
+        -- closed: no more looks
+        M.fire("TAXIMAP_CLOSED")
+        local before = calls
+        ok(M.settle())
+        eq(calls, before, "nothing is read after the map has closed")
+        C_TaxiMap = nil
+    end)
+
     test("a current step that needs a flight: the waypoint goes to the flight master, the row and the tooltip say where to fly", function()
         local ns, travel, shown, current, stand = E.wayfinding()
         local step = { kind = "turnin", action = "turnin", loc = ns.Geo.Loc(1436, 56, 52), quests = { { id = 1, name = "Test" } }, travel = 0, seconds = 8 }
@@ -575,5 +622,46 @@ H.suite("Engine and window (real data)", function()
             end
         end
         eq(hints, 2, "into Westfall and back: the steps in between say nothing")
+    end)
+
+    test("no flight path known: a step in another zone says it is walked for that, once in chat", function()
+        local ns = start()
+        local view = ns.Engine.view
+        ok(not view.flightsKnown, "a fresh character: no flight path seen yet")
+        local function current()
+            for _, r in ipairs(ns.UI.rows) do
+                if r:IsShown() and r.model and r.model.guided then return r end
+            end
+        end
+        -- in Elwynn, the route's first step is in Elwynn: nothing to say
+        ok(not current().model.detail:find("flight paths not known", 1, true))
+        eq(#M.printed > 0 and table.concat(M.printed, "\n"):find("flight paths yet", 1, true), nil)
+        -- in Westfall, the route (Elwynn, the zone chosen) starts in another zone
+        C_Map.GetBestMapForUnit = function() return 1436 end
+        C_Map.GetPlayerMapPosition = function() return { x = 0.5, y = 0.5 } end
+        M.fire("ZONE_CHANGED_NEW_AREA")
+        ok(M.settle())
+        eq(view.zone, 1429)
+        contains(current().model.detail, "on foot: flight paths not known yet")
+        local tip = current().model.tip()
+        local said = false
+        for _, l in ipairs(tip) do if l[1] and l[1]:find("does not know your flight paths", 1, true) then said = true end end
+        ok(said, "the tooltip says what to do")
+        local function told()
+            local n = 0
+            for _, line in ipairs(M.printed) do if line:find("does not know your flight paths yet", 1, true) then n = n + 1 end end
+            return n
+        end
+        eq(told(), 1, "said in chat")
+        ns.Engine.Replan(true)
+        ok(M.settle())
+        eq(told(), 1, "once")
+        -- a flight path seen: no more of it
+        ns.Engine.chardb.knownNodes[2] = true
+        ns.Engine.Replan(true)
+        ok(M.settle())
+        for _, r in ipairs(ns.UI.rows) do
+            ok(not (r:IsShown() and r.model and (r.model.detail or ""):find("flight paths not known", 1, true)), "no row says it")
+        end
     end)
 end)

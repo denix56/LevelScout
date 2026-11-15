@@ -48,6 +48,8 @@ core\Objective.lua
 core\Search.lua
 core\Memory.lua
 core\Zones.lua
+core\Classes.lua
+core\Find.lua
 
 Async.lua
 Guide.lua

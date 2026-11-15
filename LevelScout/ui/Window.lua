@@ -1,7 +1,10 @@
--- ui/Window.lua: the LevelScout window. One movable panel with three tabs:
+-- ui/Window.lua: the LevelScout window. One movable panel with four tabs:
 --   Route   the current step and what follows
 --   Zones   where leveling is best right now
---   Quests  what the route leaves out, and why
+--   Quests  what the route leaves out, and why; a search box finds any quest to accept by
+--           name and makes it (with its chain) the plan
+--   Class   class quest chains to pick (the title glows while one is new); only while there
+--           is something on it
 -- It draws from ns.Engine.view only. It uses the game's own look: the tooltip border and
 -- background, the quest "!" and "?" icons, the quest-log highlight, gold titles. Every piece
 -- of game art is optional: without it the window falls back to plain colours.
@@ -16,6 +19,8 @@ local DEFAULT_W, MIN_W, MAX_W = 330, 260, 640
 local WIDTH = DEFAULT_W -- the content width; follows settings.width once the window is built
 local PAD = 10
 local HEADER_H, SUMMARY_H, BANNER_H, TABS_H, FOOTER_H = 30, 40, 30, 24, 20
+local SEARCH_H = 28 -- the Quests tab's search box
+UI.SEARCH_DELAY = 0.15 -- seconds after the last key before the search runs
 local PROGRESS_H = 3 -- the bar shown while a plan is being made
 local ROW_H, ROW_CURRENT_H, SECTION_H = 36, 46, 22
 local LINE_H = 13 -- each extra line of detail on a row
@@ -140,6 +145,21 @@ end
 --         bar (0..1), onClick(mouse), tip() -> lines }
 ---------------------------------------------------------------------------------------------
 
+-- The way to the current step in words (Format.TripText). While LevelScout knows none of the
+-- player's flight paths (none seen on a flight master's map yet), a step in another zone is
+-- reached on foot only for that reason: the line says so.
+local function onFootUnknown(way)
+    return way ~= nil and way.zone ~= nil and #(way.rides or {}) == 0 and not Engine.view.flightsKnown
+end
+local function wayText()
+    local way = Guide.Trip()
+    local text = Format.TripText(way)
+    if text and onFootUnknown(way) then
+        text = text .. "  |cff5f646e·|r  " .. hex(C.warn) .. "on foot: flight paths not known yet|r"
+    end
+    return text
+end
+
 local function stepTip(step, index)
     return function()
         local lines = { { Format.StepTitle(step) } }
@@ -156,6 +176,9 @@ local function stepTip(step, index)
         lines[#lines + 1] = { "Travel", right = Format.Duration(step.travel) }
         -- the current step: the way from where we stand, leg by leg, when it is more than a walk
         local trip = index == 1 and Guide.Trip() or nil
+        if onFootUnknown(trip) then
+            lines[#lines + 1] = { "Planned on foot: LevelScout does not know your flight paths yet. Open any flight master's map once (talk to the flight master) and the route will use them.", color = C.warn }
+        end
         local legs = Format.TripLegs(trip)
         if legs then
             lines[#lines + 1] = { "From where you are", right = Format.Duration(trip.seconds) }
@@ -262,6 +285,52 @@ tripLines = function(text)
     local plain = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
     local width = WIDTH - 2 * PAD - 24 - 58 -- the current row's detail: beside the icon and the Skip button
     return math.max(1, math.ceil(#plain * TRIP_CHAR_W / math.max(width, 60)))
+end
+
+---------------------------------------------------------------------------------------------
+-- Class quest chains (Engine.view.chains: on offer; Engine.view.chain: the one followed)
+---------------------------------------------------------------------------------------------
+
+-- Is a chain on offer news (not seen on the Class tab yet)?
+local function anyNew(view)
+    for _, o in ipairs(view.chains or {}) do
+        if o.new then return true end
+    end
+    return false
+end
+
+local function plural(n, word) return string.format("%d %s%s", n, word, n == 1 and "" or "s") end
+
+-- "3 quests left · 30 min · 2,400 XP" for the chain followed.
+local function chainSummary(chain, plan)
+    if not plan or #plan.steps == 0 then return "" end
+    return string.format("%s left  |cff5f646e·|r  %s  |cff5f646e·|r  %s XP", plural(chain.left or 0, "quest"),
+        Format.Duration(plan.seconds), Format.Number(plan.xp))
+end
+
+-- The tooltip of a chain on offer: where it starts, what it takes and pays, what it costs
+-- against leveling, what to watch out for; then the clicks (`clicks`, a list of lines).
+local function chainTip(o, clicks)
+    return function()
+        local f = o.facts or {}
+        local lines = { { "Class quest: " .. Format.QuestName(o.name, o.level) } }
+        if o.start then lines[#lines + 1] = { "Starts at", right = o.start .. (o.startZone and (", " .. o.startZone) or "") } end
+        if (o.trip or 0) >= 60 then lines[#lines + 1] = { "Getting there", right = Format.Duration(o.trip) } end
+        lines[#lines + 1] = { "Steps", right = string.format("%s, about %s", plural(o.count or 0, "quest"), Format.Duration(o.seconds)) }
+        if o.zones and #o.zones > 0 then lines[#lines + 1] = { "Zones", right = table.concat(o.zones, ", ") } end
+        lines[#lines + 1] = { "Pays", right = Format.Number(o.xp) .. " XP" }
+        if o.lost then
+            lines[#lines + 1] = { "Against leveling", right = o.lost >= 60 and ("about " .. Format.Duration(o.lost) .. " lost") or "pays as well" }
+        end
+        if o.inLog then lines[#lines + 1] = { "Part of it is in your quest log already." } end
+        if f.eliteStep then
+            lines[#lines + 1] = { string.format("Step %d is a group quest (elite): %s.", f.eliteStep, f.eliteName or "?"), color = C.warn }
+        end
+        if f.groupName then lines[#lines + 1] = { f.groupName .. " needs a group: the plan stops before it.", color = C.warn } end
+        if f.laterLevel then lines[#lines + 1] = { string.format("The rest of the chain needs level %d.", f.laterLevel), color = C.warn } end
+        for _, l in ipairs(clicks or {}) do lines[#lines + 1] = { l, color = C.faint } end
+        return lines
+    end
 end
 
 -- The zones the itinerary goes to after the shown one: for each a heading and the first steps
@@ -373,7 +442,7 @@ local function routeRows(view)
         local here = step.loc
         -- (the zone the step is in, not the map its spots were recorded on: a camp can come
         -- from spots on the continent map)
-        local prefer = { view.zone, view.here }
+        local prefer = view.zone and { view.zone, view.here } or { view.here }
         local hereZone = here and (ns.Zones.ZoneAt(here, prefer) or here.map)
         local outside = (view.zone or 0) > 0 and hereZone and hereZone ~= view.zone and zoneName(hereZone) or nil
         -- the step the waypoint follows: the first one, unless that is a quest started from an
@@ -382,7 +451,7 @@ local function routeRows(view)
         if guided == i then
             -- the current step: the way from where we stand, on a line of its own (its zone
             -- when that is not the one we are in, the flight or boat to take; see UI.Tick)
-            trip = Format.TripText(Guide.Trip())
+            trip = wayText()
             if trip then
                 detail, lines = colourTrip(trip, outside) .. "\n" .. detail, lines + tripLines(trip)
                 if outside and trip:sub(1, 3) ~= "In " then base = prefixed(base, outsideTag(outside)); detail = colourTrip(trip, outside) .. "\n" .. base end
@@ -432,6 +501,15 @@ local function routeRows(view)
     end
     flightRows(math.huge)
     if onward and not left then onwardRows(it, out, groups[#groups] and groups[#groups].loc) end
+    -- a class quest plan: what is left of the chain for later, and where leveling goes on
+    local chain = view.chain
+    if chain then
+        if chain.laterLevel then
+            out[#out + 1] = { section = string.format("Rest of the chain at level %d", chain.laterLevel), h = SECTION_H, warn = true }
+        end
+        out[#out + 1] = { section = string.format("%sThen: back to leveling%s|r", hex(C.faint),
+            chain.afterName and (" in " .. chain.afterName) or ""), h = SECTION_H }
+    end
     return out
 end
 
@@ -504,7 +582,8 @@ local function zoneRows(view)
         local shown = z.map == view.zone
         if not shown then place = place + 1 end
         local i = place
-        local gain = (not shown and view.plan) and ns.Zones.Gain(view.plan, p) or nil
+        -- (while a class quest chain is followed there is no zone to compare with)
+        local gain = (not shown and view.plan and not view.chain) and ns.Zones.Gain(view.plan, p) or nil
         local trip = (z.map ~= view.here and p.steps[1]) and p.steps[1].travel or nil
         local detail = (z.dungeon and (hex(C.warn) .. "Dungeon|r  |cff5f646e·|r  ") or "")
             .. string.format("%d quest%s", p.quests, p.quests == 1 and "" or "s")
@@ -550,8 +629,76 @@ local LISTS = {
     { "ignored", "Skipped by you", "Click to bring it back." },
 }
 
+-- The quest picked by name being followed (Engine.PickQuest), on top of the Quests tab.
+local function followingRow(c, view)
+    return {
+        h = ROW_H, current = true, pill = "SHOWN", icon = ICON.shown, title = Format.QuestName(c.name, c.level),
+        detail = chainSummary(c, view.plan),
+        tip = function()
+            return { { "Quest: " .. Format.QuestName(c.name, c.level) },
+                { "This is the plan shown: the quest and its chain. When it is done, LevelScout goes back to leveling." },
+                { "Right-click: back to the leveling plan", color = C.faint } }
+        end,
+        onClick = function(mouse) if mouse == "RightButton" then Engine.EndChain() end end,
+    }
+end
+
+local pickFound -- (defined with the search box: makes a found quest the plan)
+
+-- Is something typed in the search box (two letters at least)? The Quests tab then lists what
+-- it found instead of what the route leaves out.
+local function searching()
+    return #((state.query or ""):gsub("[^%w]", "")) >= 2
+end
+
+-- What the search box found (state.results, for state.query).
+local function foundRows()
+    local out = {}
+    local results = state.resultsFor == state.query and state.results or nil
+    if not results then
+        out[#out + 1] = { h = ROW_H, title = "Searching...", dim = true }
+        return out
+    end
+    if #results == 0 then
+        out[#out + 1] = { h = ROW_H, pill = "TIP", icon = ICON.tip, title = "No quest you can accept matches",
+            detail = "Typos and case do not matter. Quests for a higher level, or whose earlier quests are not done, are not listed.", dim = true }
+        return out
+    end
+    out[#out + 1] = { section = string.format("Quests you can accept  %s%d|r", hex(C.faint), #results), h = SECTION_H }
+    for i, r in ipairs(results) do
+        local where = r.zone and zoneName(r.zone) or nil
+        local detail = (r.giver or "?") .. (where and ("  |cff5f646e·|r  " .. where) or "")
+        if (r.chain or 1) > 1 then detail = detail .. "  |cff5f646e·|r  " .. hex(C.accent) .. "chain of " .. r.chain .. "|r" end
+        out[#out + 1] = {
+            h = ROW_H, pill = "FIND", icon = ICON.accept, title = Format.QuestName(r.name, r.level), detail = detail,
+            right = (r.minLevel or 0) > 0 and ("L" .. r.minLevel) or nil,
+            tip = function()
+                local lines = { { Format.QuestName(r.name, r.level) } }
+                if r.giver then lines[#lines + 1] = { "Given by " .. r.giver .. (where and (" in " .. where) or "") } end
+                if (r.chain or 1) > 1 then
+                    lines[#lines + 1] = { string.format("Part of a chain: %d quests still to do, all planned", r.chain) }
+                    for k, n in ipairs(r.chainNames or {}) do
+                        if k > 10 then lines[#lines + 1] = { "  ...", color = C.dim }; break end
+                        lines[#lines + 1] = { "  " .. n, color = C.dim }
+                    end
+                end
+                lines[#lines + 1] = { (i == 1 and "Click (or Enter): " or "Click: ") .. "make it the plan", color = C.faint }
+                return lines
+            end,
+            onClick = function() pickFound(r) end,
+        }
+    end
+    return out
+end
+
 local function questRows(view)
     local out = {}
+    local c = view.chain
+    if c and c.kind == "quest" then out[#out + 1] = followingRow(c, view) end
+    if searching() then
+        for _, row in ipairs(foundRows()) do out[#out + 1] = row end
+        return out
+    end
     local lists = view.plan and view.plan.lists
     if not lists then return out end
     for _, def in ipairs(LISTS) do
@@ -581,6 +728,64 @@ local function questRows(view)
                     end,
                 }
             end
+        end
+    end
+    return out
+end
+
+-- The Class tab: the chain followed, the chains to pick (lowest level first), and those
+-- turned off.
+local function classRows(view)
+    local out = {}
+    local c = view.chain
+    if c and c.kind ~= "quest" then
+        out[#out + 1] = { section = "Following", h = SECTION_H }
+        out[#out + 1] = {
+            h = ROW_H, current = true, pill = "SHOWN", icon = ICON.shown, title = Format.QuestName(c.name, c.level),
+            detail = chainSummary(c, view.plan),
+            tip = function()
+                return { { "Class quest: " .. Format.QuestName(c.name, c.level) },
+                    { "This is the plan shown. When the chain is done, LevelScout goes back to leveling." },
+                    { "Right-click: back to the leveling plan", color = C.faint } }
+            end,
+            onClick = function(mouse) if mouse == "RightButton" then Engine.EndChain() end end,
+        }
+    end
+    local offers, never = {}, {}
+    for _, o in ipairs(view.chains or {}) do
+        if o.never then never[#never + 1] = o else offers[#offers + 1] = o end
+    end
+    if #offers > 0 then
+        out[#out + 1] = { section = string.format("Available  %s%d|r", hex(C.faint), #offers), h = SECTION_H }
+        for _, o in ipairs(offers) do
+            local f = o.facts or {}
+            local fresh = o.new or (state.fresh and state.fresh[o.id])
+            local lead = (fresh and (hex(C.good) .. "New|r  |cff5f646e·|r  ") or "")
+                .. ((f.eliteStep or f.groupName) and (hex(C.warn) .. "Group|r  |cff5f646e·|r  ") or "")
+            out[#out + 1] = {
+                h = ROW_H, pill = "CLASS", icon = ICON.accept, title = Format.QuestName(o.name, o.level),
+                detail = lead .. plural(o.count or 0, "quest") .. "  |cff5f646e·|r  " .. Format.Duration(o.seconds)
+                    .. (o.startZone and ("  |cff5f646e·|r  " .. o.startZone) or ""),
+                right = Format.Number(o.xp), rightSub = "XP",
+                tip = chainTip(o, { "Click: plan it", "Right-click: don't suggest it again" }),
+                onClick = function(mouse)
+                    if mouse == "RightButton" then Engine.ChainNever(o.id, true)
+                    else Engine.SetChain(o.id); state.tab = "route"; state.scroll = 0 end
+                end,
+            }
+        end
+    end
+    if #never > 0 then
+        out[#out + 1] = { section = string.format("Not suggested  %s%d|r", hex(C.faint), #never), h = SECTION_H }
+        for _, o in ipairs(never) do
+            out[#out + 1] = {
+                h = ROW_H, title = Format.QuestName(o.name, o.level), detail = "Click to suggest it again.", dim = true,
+                tip = function()
+                    return { { "Class quest: " .. Format.QuestName(o.name, o.level) }, { "You asked not to have this chain suggested." },
+                        { "Click: suggest it again", color = C.faint } }
+                end,
+                onClick = function() Engine.ChainNever(o.id, false) end,
+            }
         end
     end
     return out
@@ -728,6 +933,24 @@ local function visibleRows() return SIZES[settings.size or 2][2] end
 local function listHeight() return settings.listH or (visibleRows() * ROW_H + (ROW_CURRENT_H - ROW_H)) end
 
 -- Everything whose width was set when the window was built follows the window's width.
+-- The tabs side by side, as wide as the window. The Class tab only while it has something: a
+-- class quest chain followed, on offer, or turned off.
+local function hasClass(view)
+    return (view.chain ~= nil and view.chain.kind ~= "quest") or #(view.chains or {}) > 0
+end
+local function placeTabs()
+    local shown = {}
+    for _, b in ipairs(root.tabButtons) do
+        if b.key ~= "class" or state.classShown then shown[#shown + 1] = b else b:Hide() end
+    end
+    for i, b in ipairs(shown) do
+        b:SetSize(WIDTH / #shown, TABS_H)
+        b:ClearAllPoints()
+        b:SetPoint("LEFT", (i - 1) * WIDTH / #shown, 0)
+        b:Show()
+    end
+end
+
 local function applyWidth()
     WIDTH = math.max(MIN_W, math.min(MAX_W, settings.width or DEFAULT_W))
     root:SetWidth(WIDTH + 2 * INSET)
@@ -735,12 +958,7 @@ local function applyWidth()
     root.summaryText:SetWidth(WIDTH - 120)
     root.banner:SetSize(WIDTH, BANNER_H)
     root.banner.label:SetWidth(WIDTH - 90)
-    local n = #root.tabButtons
-    for i, b in ipairs(root.tabButtons) do
-        b:SetSize(WIDTH / n, TABS_H)
-        b:ClearAllPoints()
-        b:SetPoint("LEFT", (i - 1) * WIDTH / n, 0)
-    end
+    placeTabs()
     root.empty:SetWidth(WIDTH - 4 * PAD)
     root.emptySub:SetWidth(WIDTH - 4 * PAD)
 end
@@ -771,6 +989,7 @@ local function menuItems()
     local size, scale = settings.size or 2, settings.scale or 1
     local items = {
         { "Re-plan now", function() Engine.Replan(true) end },
+        { Engine.view.chain and "Back to the leveling plan" or nil, function() Engine.EndChain() end },
         { (Engine.chardb and Engine.chardb.zone) and "Let LevelScout pick the zone" or nil, function() Engine.SetZone(nil) end },
         { (settings.locked and "Unlock" or "Lock") .. " position", function() settings.locked = not settings.locked; applyPosition() end },
         { "Group quests: " .. (Engine.RoutesElite() and "in the route" or "listed only"), function() Engine.SetRouteElite(not Engine.RoutesElite()) end },
@@ -959,10 +1178,21 @@ local function build()
     local tabs = CreateFrame("Frame", nil, root)
     tabs:SetHeight(TABS_H)
     root.tabs, root.tabButtons = tabs, {}
-    local defs = { { "route", "Route" }, { "zones", "Zones" }, { "quests", "Quests" } }
+    local defs = { { "route", "Route" }, { "zones", "Zones" }, { "quests", "Quests" }, { "class", "Class" } }
     for i, def in ipairs(defs) do
         local b = button(tabs, WIDTH / #defs, TABS_H, function() state.tab = def[1]; state.scroll = 0; UI.Refresh() end)
         b.hover:SetVertexColor(1, 1, 1, 0.3)
+        -- a glow behind the title while the tab has news (the Class tab: a new class quest),
+        -- slowly pulsing; gone once the tab is opened
+        b.glow = art(b, "BACKGROUND", HIGHLIGHT, { C.accent[1], C.accent[2], C.accent[3], 0.6 }, "ADD")
+        b.glow:SetAllPoints()
+        b.glow:Hide()
+        local pulse = 0
+        b:SetScript("OnUpdate", function(self, elapsed)
+            if not self.glowing then return end
+            pulse = pulse + (elapsed or 0)
+            self.glow:SetAlpha(0.45 + 0.35 * math.sin(pulse * 3))
+        end)
         b:SetPoint("LEFT", (i - 1) * WIDTH / #defs, 0)
         b.label = text(b, "GameFontNormalSmall", C.dim, "CENTER")
         b.label:SetPoint("CENTER", 0, 0)
@@ -973,6 +1203,57 @@ local function build()
     end
     tabs.rule = tex(tabs, "ARTWORK", C.line)
     tabs.rule:SetPoint("BOTTOMLEFT"); tabs.rule:SetPoint("BOTTOMRIGHT"); tabs.rule:SetHeight(1)
+
+    -- the Quests tab's search box: any quest to accept, by name (Engine.FindQuests); the one
+    -- picked becomes the plan with its chain (Engine.PickQuest)
+    local search = CreateFrame("Frame", nil, root)
+    search:SetHeight(SEARCH_H)
+    local made, box = pcall(CreateFrame, "EditBox", nil, search, "InputBoxTemplate")
+    if not made or not box then box = CreateFrame("EditBox", nil, search) end
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(60)
+    box:SetHeight(20)
+    box:SetPoint("LEFT", PAD + 6, 0)
+    box:SetPoint("RIGHT", -PAD, 0)
+    if box.SetFontObject and not made then box:SetFontObject("GameFontHighlightSmall") end
+    box.hint = text(search, "GameFontHighlightSmall", C.faint)
+    box.hint:SetPoint("LEFT", box, "LEFT", 2, 0)
+    box.hint:SetText("Find a quest to plan, by name")
+    local function runSearch()
+        local query = state.query or ""
+        state.results = searching() and Engine.FindQuests(query) or nil
+        state.resultsFor = query
+        state.scroll = 0
+        UI.Refresh()
+    end
+    box:SetScript("OnTextChanged", function(self)
+        local query = self:GetText() or ""
+        if query == state.query then return end
+        state.query = query
+        box.hint[query == "" and "Show" or "Hide"](box.hint)
+        local asked = query
+        Game.After(UI.SEARCH_DELAY, function() if state.query == asked then runSearch() end end)
+        UI.Refresh()
+    end)
+    pickFound = function(r)
+        Engine.PickQuest(r.id)
+        state.query, state.results, state.resultsFor = "", nil, nil
+        box:SetText("")
+        box.hint:Show()
+        box:ClearFocus()
+        state.tab, state.scroll = "route", 0
+        UI.Refresh()
+    end
+    box:SetScript("OnEnterPressed", function(self)
+        local first = searching() and state.resultsFor == state.query and state.results and state.results[1]
+        if first then pickFound(first) else self:ClearFocus() end
+    end)
+    box:SetScript("OnEscapePressed", function(self)
+        self:SetText("")
+        self:ClearFocus()
+    end)
+    search.box = box
+    root.search = search
 
     -- list
     local list = CreateFrame("Frame", nil, root)
@@ -1069,7 +1350,8 @@ end
 local EMPTY = {
     route = { "Nothing to do here right now", "Open Zones to see where leveling is better." },
     zones = { "No zone fits this level yet", "Zones appear here once quests are available." },
-    quests = { "Nothing is left out", "Every available quest here is in the route." },
+    quests = { "Nothing is left out", "Every available quest here is in the route. Type above to find any quest to plan." },
+    class = { "No class quest to pick right now", "Class quests appear here when they become available. The tab's title glows when one does." },
 }
 
 -- The progress bar and its text, from view.progress. Cheap: called a few times per second
@@ -1120,6 +1402,14 @@ local function layout(view)
         root.tabs:Show()
         y = y - TABS_H
     end
+    root.search:ClearAllPoints()
+    if not collapsed and state.tab == "quests" then
+        root.search:SetPoint("TOPLEFT", INSET, y); root.search:SetPoint("TOPRIGHT", -INSET, y)
+        root.search:Show()
+        y = y - SEARCH_H
+    else
+        root.search:Hide()
+    end
     local h = collapsed and ROW_CURRENT_H or listHeight()
     root.list:ClearAllPoints()
     root.list:SetPoint("TOPLEFT", INSET, y); root.list:SetPoint("TOPRIGHT", -INSET, y)
@@ -1141,7 +1431,7 @@ function UI.Refresh()
     root.title:SetText(ready and view.zoneName or "LevelScout")
     if ready and plan and #plan.steps > 0 then
         root.summaryText:SetText(paused and (hex(C.warn) .. (view.message or "Paused") .. "|r  |cff5f646e·|r  the route goes on outside")
-            or Format.PlanSummary(plan))
+            or (view.chain and chainSummary(view.chain, plan)) or Format.PlanSummary(plan))
         -- the score, not plan.rate: a route shorter than an hour is still judged on an hour of play,
         -- so four turn-ins in two minutes do not read as hundreds of thousands per hour
         root.rate:SetText(Format.Number(plan.score))
@@ -1150,6 +1440,9 @@ function UI.Refresh()
         root.summaryText:SetText(ready and plan and Format.PlanSummary(plan) or (view.message or ""))
         root.rate:Hide(); root.rateSub:Hide()
     end
+    -- the Class tab goes while it has nothing (and the window leaves it if it was open)
+    state.classShown = hasClass(view)
+    if not state.classShown and state.tab == "class" then state.tab, state.scroll = "route", 0 end
     local m = view.moveOn or {}
     if m.suggest then
         -- with an itinerary the gain is over its horizon (going there first against staying here first)
@@ -1160,6 +1453,16 @@ function UI.Refresh()
     end
     local h = layout(view)
 
+    -- The Class tab open (and drawn): what is on it has been seen, and the glow goes. What was
+    -- new keeps its "New" mark while the tab stays open (state.fresh).
+    if state.tab == "class" and ready and not settings.collapsed then
+        state.fresh = state.fresh or {}
+        for _, o in ipairs(view.chains or {}) do if o.new then state.fresh[o.id] = true end end
+        Engine.ChainsSeen()
+    elseif state.tab ~= "class" then
+        state.fresh = nil
+    end
+    local news = anyNew(view)
     for _, b in ipairs(root.tabButtons) do
         local on = b.key == state.tab
         local label = b.name
@@ -1168,10 +1471,14 @@ function UI.Refresh()
             for _, l in pairs(plan.lists) do n = n + #l end
             if n > 0 then label = label .. "  " .. hex(C.faint) .. n .. "|r" end
         end
+        local glowing = b.key == "class" and news and not on
+        if glowing then label = label .. "  " .. hex(C.good) .. "New|r" end
         b.label:SetText(label)
-        local c = on and C.accent or C.dim
+        local c = (on or glowing) and C.accent or C.dim
         b.label:SetTextColor(c[1], c[2], c[3])
         b.line[on and "Show" or "Hide"](b.line)
+        b.glowing = glowing or nil
+        b.glow[glowing and "Show" or "Hide"](b.glow)
     end
 
     local models = {}
@@ -1188,6 +1495,7 @@ function UI.Refresh()
             end
         elseif state.tab == "route" then models = routeRows(view)
         elseif state.tab == "zones" then models = zoneRows(view)
+        elseif state.tab == "class" then models = classRows(view)
         else models = questRows(view) end
     end
     state.models = models
@@ -1275,7 +1583,7 @@ function UI.Tick()
     -- The way to the step (ns.Guide.Trip), as it stands now. Its line coming or going changes
     -- the row's height, so the list is drawn again; a change of words only is put in place.
     if m.base then
-        local trip = Format.TripText(Guide.Trip())
+        local trip = wayText()
         if (trip ~= nil) ~= (m.trip ~= nil) or (trip and tripLines(trip) ~= tripLines(m.trip)) then return UI.Refresh() end
         if trip ~= m.trip then m.trip, m.detail = trip, colourTrip(trip, m.outside) .. "\n" .. m.base end
     end

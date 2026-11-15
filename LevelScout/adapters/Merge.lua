@@ -662,10 +662,11 @@ end
 
 -- The QuestieDB fields the index reads (a scalar row and five of the quest's table fields).
 local IK_QUEST = { "zoneOrSort", "startedBy", "preQuestGroup", "preQuestSingle", "questLevel", "requiredLevel",
-    "objectives", "triggerEnd" }
+    "objectives", "triggerEnd", "requiredClasses", "name", "requiredRaces" }
 
 --- What the index needs of a quest, without building its record: zone (uiMap), starters,
---- preAll, preAny (as in the record) and its start spots (as questSpots.s). Adds the quest to
+--- preAll, preAny (as in the record), its start spots (as questSpots.s), its classes mask, and
+--- for the quest search its name, required level, races mask and side. Adds the quest to
 --- `stats` (Merge.NewStats) the way Merge.CountRecord adds its full record.
 function Merge.QuestIndex(id, stats)
     if not universe[id] or excluded[id] then return nil end
@@ -695,7 +696,12 @@ function Merge.QuestIndex(id, stats)
         addXpSample(stats, tonumber(xp), Merge.XpLevel(levelsOf(q, qc, qf)), kind)
         if zos > 0 and dungeon then stats.dungeonArea[id] = zos end
     end
-    return zoneOf(id, zos), startersOf(q, qc, qf), preAll, preAny, startSpotsOf(id)
+    local classes = (q and q.requiredClasses) or tonumber(qc and qc[QC.classes]) or 0
+    local name = clean((qf and nz(qf[QF.title])) or (q and q.name) or (qc and qc[QC.title]) or "")
+    local _, min = levelsOf(q, qc, qf)
+    local races = (q and q.requiredRaces) or tonumber(qc and qc[QC.races]) or 0
+    local side = sideOf(races, (qf and qf[QF.side] ~= "" and qf[QF.side]) or (qc and qc[QC.side]))
+    return zoneOf(id, zos), startersOf(q, qc, qf), preAll, preAny, startSpotsOf(id), classes, name, min, races, side
 end
 
 -------------------------------------------------------------------------------- entities
@@ -718,6 +724,25 @@ function Merge.Npc(id)
     if #order == 0 and F.npcSpot[id] then addSpots(set, order, { F.npcSpot[id] }) end
     return concat({ clean(name), minL or 0, maxL or 0, p and p[4] or 0, p and p[8] or 0, p and p[7] or "",
         concat(order, " ") }, "|")
+end
+
+--- The dungeon (its id in the dungeon table, world.dungeons) an NPC or object (kind "npc" or
+--- "object") stands in, from the areas of its QuestieDB spawns: nil when it has a spawn outside
+--- every dungeon, or none known. Needs Merge.DungeonsFrom (the index) to have run.
+function Merge.InstanceOf(kind, id)
+    local areaDungeon = Merge.areaDungeon
+    if not areaDungeon then return nil end
+    local entity = kind == "npc" and L.Npc or (kind == "object" and L.Object or nil)
+    if not (entity and entity.Exists(id)) then return nil end
+    local spawns = list(entity.Get(id, "spawns"))
+    local found
+    for areaId in pairs(spawns) do
+        local d = areaDungeon[areaId]
+        if not d then return nil end -- (also stands outside: not a dungeon's own)
+        found = found or d
+    end
+    if not found and kind == "npc" then found = areaDungeon[entity.Get(id, "zoneID") or 0] end
+    return found
 end
 
 --- `name|spots`, or nil.
@@ -844,6 +869,22 @@ function Merge.DungeonsFrom(stats, exists)
         end
         areasOf[id] = areas
         for a in pairs(areas) do anyArea[a] = true end
+    end
+    -- Which dungeon an area is (for Merge.InstanceOf). A dungeon whose door was not matched
+    -- above (the Deadmines, the Stockade, ...) is matched to QuestieDB's dungeon of the same
+    -- name here; its quest list below stays as it was (ForeverDB's confirmed quests).
+    Merge.areaDungeon = {}
+    for id, areas in pairs(areasOf) do
+        for a in pairs(areas) do Merge.areaDungeon[a] = id end
+        if not next(areas) then
+            local want = norm(F.dungeons[id].n)
+            for areaId, entry in pairs(Merge.dungeonEntries) do
+                if want ~= "" and norm(entry[1]) == want then
+                    Merge.areaDungeon[areaId] = id
+                    for _, alt in ipairs(list(entry[2])) do Merge.areaDungeon[alt] = id end
+                end
+            end
+        end
     end
     -- The dungeon quests filed under one of those areas.
     local inArea = {} -- [areaId] = { questId, ... }

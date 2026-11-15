@@ -155,7 +155,9 @@ end
 
 --- The Engine's current step (nil: none), its waypoint title, and the ns.Travel object of the
 --- plan (nil: the way is not worked out; the waypoint is the step). Points the waypoint.
-function Guide.Follow(step, title, travel, keepPointed)
+--- `fresh`: the way is taken at once even for the same step (the plan knows new flight points:
+--- nothing has to settle).
+function Guide.Follow(step, title, travel, keepPointed, fresh)
     if not step then
         followed, trip, pending, manual = nil, nil, nil, nil
         return show(nil)
@@ -168,10 +170,11 @@ function Guide.Follow(step, title, travel, keepPointed)
     -- it is still there (a flight, a zone change and quest events all plan again; the player is
     -- still on the way to it). Otherwise the arrow goes back to the route.
     if not keepPointed then manual = nil end
-    if same and trip then
+    if same and trip and not fresh then
         Guide.Tick() -- the same step as before: a different way has to settle first
     else
         trip, pending = evaluate(step, travel), nil
+        if manual and fresh then manual.trip, manual.pending = evaluate(manual.step, lastTravel) or manual.trip, nil end
     end
     return point()
 end

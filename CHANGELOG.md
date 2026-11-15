@@ -1,5 +1,39 @@
 # LevelScout
 
+## 0.1.1
+
+- **Class quests**: when a class quest chain becomes available (and the leveling route does not
+  already do it), chat says so once and the new Class tab's title glows until you open it (the tab is there
+  only while it has something). Pick a
+  chain there to make it the plan; its tooltip says where it starts, how long it takes, what it
+  pays and what it costs against leveling. While you follow a chain, only its quests are
+  planned. When the chain is done (or its rest waits for a level or a group), LevelScout goes back
+  to leveling. Right-click a chain: don't suggest it again. The options menu has "Back to the
+  leveling plan".
+- **Class quests in dungeons**: a dungeon's plan takes your class quests that need something
+  from inside it, with their lead-up, so you have them when you go in. One that is only partly
+  done there (The Test of Righteousness: lumber in the Deadmines, a hammer in Shadowfang Keep)
+  is accepted before the run and kept for the rest.
+- **Quest search**: a box on the Quests tab finds any quest you can accept now by name, even
+  with typos or in any case. Pick one (or press Enter) and it becomes the plan, with its whole
+  chain.
+- **Learning from play counts active time only**: standing still for more than 15 seconds (away,
+  tabbed out) no longer counts towards kill pace or step times. Each step's time is split into
+  getting there and the work at the place, and each part corrects its own estimate (travel,
+  or the kind of work). `/ls learn` shows both.
+- **Quest levels**: accept and turn-in steps show each quest's level, "[12] Name", in the window,
+  the waypoint's title and the minimap button's tooltip.
+- A quest that needs one of several quests first is planned after whichever of them the route
+  does (it waited for all of them before).
+- While LevelScout knows none of your flight paths, a step in another zone says it is planned on
+  foot for that reason ("on foot: flight paths not known yet"), and chat says once to open a
+  flight master's map.
+- Opening a flight master's map re-plans with its flight points at once, while the map is open,
+  and the flight to take is marked on that same opening (before: after closing it, and on the
+  next opening).
+- A quest no Forever player has seen counts as existing when a quest that needs it has been
+  seen, so chains with such a gap are planned through it.
+
 ## 0.1.0
 
 First release. A leveling planner for WoW: Forever (client 1.60.1).

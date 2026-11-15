@@ -263,11 +263,19 @@ planner a copy of what was learned when the plan started (`gather`), so every pa
 (each zone, the kept order, the zones of the itinerary planned again from a projected state) uses
 the same figures. `Zones.Project` copies the learned tables into the projected state as they are.
 
+**Active time** (`Tracker.Active`): every duration below (pace, the step log) is counted in
+active time, not on the wall clock. Once a second (`Tracker.OnMove`) the player counts as active
+when they moved at least a yard (`STILL_YARDS`), or are blocked from walking (in combat, on a
+flight or a boat, dead, swimming, in a vehicle), or their position is unknown. Standing still
+counts for its first 15 seconds (`IDLE_GRACE`: talking, looting, reading a quest); the rest is
+idle and left out (away, tabbed out, waiting around). Without looks at the player the active
+clock runs with the real clock.
+
 **Pace** (per character, `LevelScoutCharDB.pace`): seconds per kill, per collected item and per
 object, as a ratio to ForeverDB's median for the level band (`Cost.Pace`).
 
-- A sample is the time between two counts of the same objective in the quest log, when both
-  happened within 240 seconds and 250 yards. A kill sample is divided by the usual scaling for the
+- A sample is the active time between two counts of the same objective in the quest log, when
+  both happened within 240 active seconds and 250 yards. A kill sample is divided by the usual scaling for the
   mob's level difference (`Cost.KillSeconds`), so it compares like with like. Elites are left out.
 - The estimate is the running mean of log(own / typical). The typical pace counts as 3 samples
   (`PACE_PRIOR`); after 20 samples (`PACE_MEMORY`) older ones fade. A sample counts as at most 4
@@ -341,10 +349,14 @@ each line as it is written.
   that left the top for another reason (new route, skipped quest, zone change) is dropped, as is
   one that took over two hours, and the one being timed when planning pauses (inside an instance,
   position unknown: `Tracker.Interrupt`).
-- A line: `k` kind, `w` action, `p` planned seconds, `pt` its travel part, `a` seconds taken,
-  `lv` level, `g` group size, `e` elite step, `n` planned kills, `d` mob level minus own level
-  (when the step started). The newest 300 are kept.
-- `/ls learn` shows the median of taken / planned, overall and by kind of step.
+- A line: `k` kind, `w` action, `p` planned seconds, `pt` its travel part, `a` active seconds
+  taken, `at` and `aw` the part of those until the step's place was first reached and the rest
+  (60 yards of a camp, `ARRIVE_WORK`; 25 of an NPC, `ARRIVE_TALK`; nil when it was not seen
+  reached), `lv` level, `g` group size, `e` elite step, `n` planned kills, `d` mob level minus
+  own level (when the step started). The newest 300 are kept.
+- `/ls learn` shows the median of taken / planned, overall and by kind of step, and for the steps
+  timed in two parts: getting there against the planned travel, and the time at the stop
+  against the time planned there.
 - Both ends are read when a plan is published, up to about 3 seconds after the fact. Time spent
   on something other than the first step counts towards it. Once pace and travel speed are
   learned, the planned times already include them, so the log then shows what is left over.
@@ -365,7 +377,12 @@ times by kind of step, used by the search.
   - `Learn.TalkFactor`: one for accepting and turning in (`INTERACT_SECONDS`);
   - `Learn.WorkFactor`: one per kind of work (what `ELITE_KILL_FACTOR`, the group speed-up and
     the level-difference scaling would be if fitted).
-- Fitted by recursive least squares (`Learn.AddStep`), one finished step at a time:
+- A step timed in two parts (`at`, `aw`), both planned at least 5 seconds (`SPLIT_MIN`), is
+  learned as two observations (`Tracker.Learn`): the travel against the planned travel (only
+  the travel factor is in play) and the work against the planned work (only the stop's
+  factors). So a slow walk is not taken for slow killing, or the other way round. A step not
+  seen reached is learned as a whole, as before.
+- Fitted by recursive least squares (`Learn.AddStep`), one finished step (or part) at a time:
   - weights start at 0 (no correction) with a prior variance of 0.05 each, so the first steps move
     them only a little;
   - older steps fade by 1% with each new one (about 100 remembered);
@@ -467,10 +484,78 @@ Zones tab). This reverses the original design, which left dungeons out.
 - Zone plans still never include dungeon quests, with one exception: a dungeon or raid quest
   that is in the log and complete has only its turn-in left, and that is planned like any other
   turn-in (in the zone where it is, or carried along in an itinerary).
+- **Class quests done inside** (`Zones.ClassInside`): a class quest of this class with an
+  objective that can only be done in the dungeon (every NPC or object for it stands there and
+  nowhere else, `Data.InstanceOf`, from QuestieDB's spawn areas; a dungeon whose door was not
+  matched is matched by name for this) is planned with that dungeon, whatever dungeon it is
+  filed under, with its lead-up. Done wholly inside, it is a dungeon quest like the others.
+  Done only partly inside (`keep`), it is accepted before the run ("for the run; the rest is
+  done elsewhere") and kept in the log: no turn-in step, no reward counted, never dropped as
+  slow; once its part inside is done, it has nothing more to do there. Example: the paladins'
+  The Test of Righteousness (1654) needs lumber from the Deadmines and a hammer from Shadowfang
+  Keep: either dungeon's plan takes it in.
+- A quest filed as a dungeon quest but with no objectives (a talk, like the first Test of
+  Righteousness in Ironforge) is planned like any other quest: nothing of it is done inside.
 - A dungeon plan also takes such a finished quest when it is not on the dungeon's own list (a
   follow-up started inside, like Return of the Ring): when its turn-in is on the map of the
   dungeon's door or on the map you stand on, or the quest belongs to the door's zone. Where
   in the route it is turned in is the planner's choice, like any turn-in.
+
+## Class quests (`core/Classes.lua`)
+
+A class quest chain that becomes available is suggested: one line in chat, and a row on the
+window's Class tab, whose title glows until the tab is opened. Picked, it is the plan shown
+until it is done, then the zones take over again.
+
+- **What a chain is**: quests only some classes can take, this class among them (a classes mask
+  that names every class does not count). They are found through the index (`Data.ClassQuests`,
+  the mask is read in `Data.BuildIndex`) and grouped by what links them: prerequisites, next in
+  chain, breadcrumbs, either-or siblings. A group is one chain, under its lowest quest id. Its
+  name is its last quest within reach at your level. Repeatables and seasonal quests are left
+  out, and so are quests this character can never take (race, side, a sibling taken, the chain
+  done further on).
+- **Available**: a quest of the chain is in the log, or can be taken now (level reached, the
+  quests before it done, seen by Forever players). `sig` is the list of such quests; it changes
+  when the chain moves on, and that makes the chain news again (chat once more, the tab glows).
+- **Named** after the last quest of the chain its plan turns in, with that quest's level
+  ("[12] Dead-tooth Jack"). A chain with a variant per race (the level 10 warrior quests of
+  Stormwind, Ironforge and Darnassus are linked as either-or quests) is named after the variant
+  planned.
+- **Offered**: when something of it can be planned and the zone's route does not already do one
+  of its quests (`Classes.InPlan`). Each offered chain is planned once, again when it moves on,
+  when the level changes, or after 5 minutes (`Engine.CHAIN_REPLAN_AGE`); that plan gives the
+  tooltip its figures. "Lost against leveling" is the chain's time less the time its XP would
+  take at the best zone's XP per hour.
+- **The plan** (`Classes.Plan`, `Planner.Plan` with `ctx.chain`): like a dungeon plan, from where
+  you stand. The chain's quests and every quest that has to be done first (8 links back) are
+  must-dos: placed whatever they pay, never dropped as slow. Nothing else is taken, not even a
+  quest whose giver stands at one of the chain's stops, nor one in the log (decided 2026-11-15:
+  an extra quest taken at a chain stop could lead away from the chain once accepted); the quests
+  left out are not listed. No search: the route is built, improved and put in order as usual. A quest of the chain for a
+  higher level waits under "Later"; an elite one is routed or listed as any elite quest is.
+- **The Class tab**, shown only while it has something (a chain followed, on offer or turned
+  off; the other tabs share the width): the chain followed ("Following"; right-click: back to the leveling plan),
+  the chains on offer ("Available", lowest level first, the new ones marked "New" while the tab
+  stays open; click: plan it, right-click: don't suggest it again; the tooltip gives where it
+  starts, its quests and time, the zones, XP, the leveling time it costs and what needs a group
+  or a higher level), and the ones turned off ("Not suggested"; click: suggest it again).
+  The tab's title glows (a slow gold pulse and "New") while a chain on offer has not been seen
+  there; opening the tab marks them all seen (`Engine.ChainsSeen`).
+- **Following it**: the window's title is "Class quest: [level] name", the summary counts the chain's
+  quests left. The move-on banner and the itinerary are off. The shown order is kept unless a
+  new one is 5% better, as for a zone. The chain is planned before the zones are ranked; on
+  the first plan of a session (login, /reload) it is shown at once, in the order saved with the
+  character (`chainRoute`), and the zones are ranked behind it. The zone chosen before stays chosen and is where leveling
+  goes on ("Then: back to leveling in ...", the best-ranked zone when none was chosen). Picking
+  a zone on the Zones tab, or "Back to the leveling plan" in the options menu, leaves the chain.
+- **The end**: when the chain's plan has no steps. Chat says why: done, the rest opens at level
+  N, the next part is a group quest, or nothing more of it can be planned. Leveling goes on in
+  the same job. A quest of the chain that leaves the log and is not done 2 seconds later
+  (`C_QuestLog.IsQuestFlaggedCompleted`) was dropped: the chain is left, and offered again.
+- **Saved with the character**: `chain` (the chain followed), `chainName`, `chainRoute` (its
+  order: { chain, order }), and per chain
+  `classChains[id]` = { told (chat said so for this `sig`), seen (the Class tab was open with
+  this `sig`), never }.
 
 ## How a quest is modelled (`core/Model.lua`)
 
@@ -492,6 +577,10 @@ Zones tab). This reverses the original design, which left dungeons out.
   doubled while rested).
 - **Not confirmed in Forever**: a quest that no ForeverDB player has seen and that has no reward
   in Questie's player traces is not planned until it is in the log (438 quests on 2026-11-13).
+  Unless a quest that needs it is confirmed (it is all of that quest's prerequisites, or the
+  only one): a follow-up seen in Forever shows the quest before it exists too, followed up to 8
+  links (`Model.CONFIRM_DEPTH`). The paladin quest A Second Opinion (78090) is confirmed so by
+  Earning Your Salt (78091), which lets its chain be planned to the end.
   QuestieDB carries such quests over from other versions of the game, for example Season of
   Discovery's "Duskwood Mission" quests. They are listed under Quests.
 - **Red quests**: a quest 5 or more levels above you (red in the quest log) waits under "Later"
@@ -522,6 +611,7 @@ Zones tab). This reverses the original design, which left dungeons out.
 | `LevelScout/core/Search.lua` | The search loop over a zone's route |
 | `LevelScout/core/Memory.lua` | Plan memory between re-rankings |
 | `LevelScout/core/Zones.lua` | Planning context, shortlist, ranking, move-on, order stability |
+| `LevelScout/core/Classes.lua` | Class quest chains: which are available, the plan for one |
 | `LevelScout/Engine.lua` | Reads game state, runs the planner in the background, publishes the view |
 | `LevelScout/Tracker.lua` | Turns quest-log progress, kills, positions and finished steps into samples for `Learn`; keeps the step log |
 | `LevelScout/Guide.lua` | The one waypoint (TomTom arrow, else the game's map pin) and the way to the current step from where the player stands |
@@ -538,7 +628,11 @@ Zones tab). This reverses the original design, which left dungeons out.
 `/ls` shows or hides it. So does the round button on the minimap's edge (drag it to move it
 around the minimap; the options menu can hide it), and the entry in the minimap addon list.
 
-- **Header**: zone name; options, collapse, close. Drag to move (position is saved).
+- **Header**: zone name ("Class quest: [level] name" while a class quest chain is followed);
+  options, collapse, close. Drag to move (position is saved).
+- **Quest levels**: an accept or turn-in step names its quests with their level in front, as
+  the quest log does ("Accept: [12] Wolves Across the Border"): on the rows, the waypoint's
+  title, the minimap button's tooltip and `/ls plan` (`Format.QuestName`).
 - **Summary**: steps, time and XP of the route; XP per hour on the right.
 - **Banner** (only when it applies): starting in another zone is at least 20% better over the
   next two hours (see "Itinerary"); click to switch.
@@ -569,6 +663,22 @@ around the minimap; the options menu can hide it), and the entry in the minimap 
   position counts. Click a zone to plan it.
 - **Quests**: what the route leaves out, by reason. Click a quest to point at its giver; click a
   quest you skipped to bring it back.
+  - **Search box** on top: type part of a quest's name to find it among the quests you can
+    accept now (`Engine.FindQuests`, `Data.FindQuests`): your side, race and class, not done,
+    not in the log, prerequisites done, seen in Forever, not repeatable, and your level: its
+    required level, or, where the data has none, not 5 or more levels above you. Case,
+    punctuation and spaces do not matter, and a few typos per word are forgiven (1 in words of
+    4-6 letters, 2 in longer ones; `core/Find.lua`): the name itself first, then the typed text
+    inside it, the whole name with typos, then every typed word at the start of a word of the
+    name or within its typos. The index keeps every quest's name, required level, side and
+    races (read in its one pass at login), so a search decodes only the best 300 matches
+    (`Data.FIND_CHECK`); it takes 10-60 ms and runs 0.15 s after the last key. Up to 12 are
+    listed, each with its giver, zone and the size of its chain.
+  - Click one (Enter: the best): it becomes the plan with its chain (`Engine.PickQuest`,
+    `Classes.ChainOf`: the quests linked to it by prerequisites, follow-ups, next in chain,
+    breadcrumbs and either-or siblings, up to 40, through quests this character can take),
+    followed like a class quest chain (only its quests) until done: the title reads
+    "Quest: [level] name", and the Quests tab shows it on top (right-click: back to leveling).
 - **Options**: re-plan, let LevelScout pick the zone, lock, size (4, 7 or 12 rows, or "Custom" after dragging the corner grip; picking it again returns to the presets), scale, reset
   position.
 
@@ -771,12 +881,22 @@ calls, which proves the code paths run, not that the client behaves as mocked.
 5. Accept a quest, make progress, turn one in. The route should update within about 2 seconds
    each time, and the arrow should follow the first step.
 6. Flight paths. Until a flight map has been seen, the Zones tab shows a "Flight paths unknown"
-   tip. Discovering a new flight point records it on the spot when you stand within 150 yards
+   tip, the current step's way line ends with "on foot: flight paths not known yet" when the
+   step is in another zone (its tooltip says to open a flight master's map), and chat says so
+   once per character. Discovering a new flight point records it on the spot when you stand within 150 yards
    of its flight master (chat: "Learned flight point: <name>"); otherwise the tip asks you to
    open the flight map. This relies on the `UI_INFO_MESSAGE` event carrying the game's
    `ERR_NEWTAXIPATH` text, which is not verified on this client.
-   Open a flight master's map once, then `/ls replan`. Travel estimates should start using
-   flight paths (`/dump LevelScoutCharDB.knownNodes` should list node ids).
+   Open a flight master's map. While it is open (no `/ls replan` needed) the route should be
+   planned again with the flight points it lists, and when the way to the current step starts
+   with a flight, its destination should be marked on that same map, not only on the next
+   opening. The points are read when the map opens, again every 0.3 s for as long as it is open
+   (`Engine.TAXI_LOOKS`: a point just discovered can be listed a moment late) and once more when
+   it closes, from the flight map's own map, the zone's map and the maps above it. New points
+   re-plan the shown route at once (`Engine.ReplanNow`: no debounce, and only the shown route,
+   however old the ranking: the zones are ranked right after), and its
+   way to the current step is taken at once (`Guide.Follow`, `fresh`), without the usual settling.
+   `/dump LevelScoutCharDB.knownNodes` should list node ids.
 7. Enter a dungeon: the window should say it is paused, and the waypoint should go.
 8. Watch the frame rate while it plans (`/ls replan`). It should not hitch.
 9. Learning. Solo, on a "kill N" quest, kill four mobs in a row, then `/ls learn`: expect
@@ -798,6 +918,20 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    that the row's text is not cut off.
 11. The earlier `/dump` list in findings.md section 6 is still open, in particular
    `GetQuestLogRewardXP`.
+12. Class quests. At a level where a class quest opens (10 for most classes), expect one chat
+   line ("Class quest [level] X is now available") and the Class tab's title glowing with "New".
+   Open the tab: the glow should stop, and the chain's row should show "New"; its tooltip should
+   name the giver and the zones. Click it: the title should read "Class quest: [level] X" and the
+   route should start with the chain. Abandon a quest of the chain: chat should say
+   "You dropped ...", and the leveling route should come back. Check that the tab titles fit
+   (four tabs now) and that the glow is visible but not distracting. This relies on `QUEST_REMOVED`
+   passing the quest id and on `C_QuestLog.IsQuestFlaggedCompleted`, neither checked on this
+   client.
+13. Quest search. On the Quests tab, click the box and type part of a quest's name with a typo
+   ("missng diplomt"): the list should show it within a moment, with its giver and chain. Typing
+   should not stall the game. Enter, or a click, makes it the plan ("Quest: [level] name"). Check
+   that Escape clears the box and leaves it, and that keys typed there do not also move the
+   character (the box must take the keyboard while it has focus).
 
 ### QuestieDB as a runtime dependency
 

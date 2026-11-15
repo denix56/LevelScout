@@ -1237,6 +1237,64 @@ H.suite("Learning", function()
         eq(steps, {})
     end)
 
+    test("active time: standing idle is left out; a step's travel and its work are timed and learned apart", function()
+        local ns = load()
+        local T, Geo, Learn = ns.Tracker, ns.Geo, ns.Learn
+        Geo.Init(ns.data.world)
+        local steps, model = {}, {}
+        T.Start({}, {}, steps, model)
+        local function look(t, x, extra)
+            local info = { now = t, level = 8, loc = Geo.Loc(1, x, 50) }
+            for k, v in pairs(extra or {}) do info[k] = v end
+            T.OnMove(info)
+        end
+        -- a kill step at the boars (60, 50): 100 s of travel planned, then 300 s of work
+        local work = { order = { "W:m200" }, steps = { { kind = "work", action = "kill", travel = 100, seconds = 300,
+            loc = Geo.Loc(1, 60, 50), kills = 10, parts = { { quest = 1, index = 1 } } } } }
+        look(0, 40)
+        T.OnPlan(work, { now = 0, level = 8, log = {} })
+        for t = 1, 14 do look(t, 40 + t) end           -- 10 yards a second: 60 yards from the camp at 14 s
+        for t = 15, 114 do look(t, 54) end             -- then standing for 100 s: the first 15 count
+        for t = 115, 164 do look(t, 54, { blocked = true }) end -- fighting (in combat): counts
+        eq(T.Active(164), 164 - 85, "85 seconds idle left out")
+        T.OnPlan(nil, { now = 164, level = 8, log = { { id = 1, isComplete = true, objectives = { { finished = true } } } } })
+        eq({ steps[1].a, steps[1].at, steps[1].aw }, { 79, 14, 65 })
+        eq(model.n, 2, "learned as two parts: the way there, and the work")
+        ok(Learn.TravelFactor(model) < 1, "travel took less than planned")
+        ok(Learn.WorkFactor(model, "kill") < 1, "so did the killing")
+        local stats = T.StepStats()
+        near(stats.travel.ratio, 0.14, 1e-9)
+        near(stats.stop.ratio, 65 / 300, 1e-9)
+        H.contains(table.concat(T.Describe(), "\n"), "getting there: 14% of the planned travel (1)")
+        -- a step whose place was never seen reached: learned as a whole, as before
+        steps, model = {}, {}
+        T.Start({}, {}, steps, model)
+        T.OnPlan(work, { now = 0, level = 8, log = {} })
+        T.OnPlan(nil, { now = 200, level = 8, log = { { id = 1, isComplete = true, objectives = { { finished = true } } } } })
+        eq({ steps[1].a, steps[1].at, steps[1].aw, model.n }, { 200, nil, nil, 1 })
+    end)
+
+    test("kill pace is counted in active time: a break at the camp does not slow it down", function()
+        local ns = load()
+        local T, Geo, Learn = ns.Tracker, ns.Geo, ns.Learn
+        Geo.Init(ns.data.world)
+        local here = Geo.Loc(1, 60, 50)
+        local function log(have) return { { id = 1, objectives = { { have = have, need = 10 } } } } end
+        local function info(t) return { now = t, level = 8, solo = true, faction = "Alliance", loc = here } end
+        local away, straight = {}, {}
+        T.Start(away, {}, {}, {})
+        T.OnLog(log(0), info(0))
+        T.OnLog(log(1), info(1)) -- (the first kill starts the stretch)
+        for t = 1, 131 do T.OnMove({ now = t, level = 8, loc = here }) end -- 130 s at the camp, 115 of them idle
+        T.OnLog(log(2), info(131))
+        T.Start(straight, {}, {}, {})
+        T.OnLog(log(0), info(0))
+        T.OnLog(log(1), info(1))
+        T.OnLog(log(2), info(16))
+        eq(away.c and away.c.n, 1, "a sample was taken")
+        eq(Learn.PaceFactor(away, "c"), Learn.PaceFactor(straight, "c"), "15 active seconds for the kill either way")
+    end)
+
     test("drop rates: one correction per data source, from all its items but the one in hand", function()
         local L = load().Learn
         local store = { ["300:200"] = { k = 40, d = 8 }, ["301:205"] = { k = 10, d = 1 }, ["bad"] = { k = 5, d = 5 } }

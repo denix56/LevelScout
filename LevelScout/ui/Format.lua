@@ -37,11 +37,20 @@ Format.LABEL = { accept = "ACCEPT", turnin = "TURN IN", kill = "KILL", collect =
     run = "DUNGEON", flight = "FLIGHT" }
 
 -- "Kobold Candles", "Kobold Candles, Gold Dust Exchange", "Kobold Candles +2 more"
-local function questNames(step)
+--- "[12] Name": a quest's name with its level in front, as the quest log shows it (no level
+--- known, or a level that scales: the name alone).
+function Format.QuestName(name, level)
+    if level and level > 0 then return string.format("[%d] %s", level, name or "?") end
+    return name or "?"
+end
+
+-- The step's quests by name; `levels`: each with its level in front (accept and turn-in steps).
+local function questNames(step, levels)
     local quests = step.quests or {}
-    if #quests > 2 then return quests[1].name .. " +" .. (#quests - 1) .. " more" end
+    local function one(q) return levels and Format.QuestName(q.name, q.level) or q.name end
+    if #quests > 2 then return one(quests[1]) .. " +" .. (#quests - 1) .. " more" end
     local names = {}
-    for _, q in ipairs(quests) do names[#names + 1] = q.name end
+    for _, q in ipairs(quests) do names[#names + 1] = one(q) end
     return table.concat(names, ", ")
 end
 
@@ -64,9 +73,9 @@ end
 
 --- The headline of a step: what to do. Also the waypoint's title.
 function Format.StepTitle(step)
-    if step.kind == "accept" and step.fromBag then return "Start: " .. questNames(step) end
-    if step.kind == "accept" then return "Accept: " .. questNames(step) end
-    if step.kind == "turnin" then return "Turn in: " .. questNames(step) end
+    if step.kind == "accept" and step.fromBag then return "Start: " .. questNames(step, true) end
+    if step.kind == "accept" then return "Accept: " .. questNames(step, true) end
+    if step.kind == "turnin" then return "Turn in: " .. questNames(step, true) end
     local verb = VERB[step.action] or "Do"
     if step.action == "do" then return questNames(step) end
     if step.action == "run" then return "Run " .. (step.target or "the dungeon") end
@@ -89,6 +98,7 @@ function Format.StepDetail(step)
         if step.target then bits[#bits + 1] = step.target end
         if step.guessed then bits[#bits + 1] = "turn-in place is a guess" end
         if step.needLevel and step.kind == "accept" then bits[#bits + 1] = "needs level " .. step.needLevel end
+        if step.keep then bits[#bits + 1] = "for the run; the rest is done elsewhere" end
         if step.ready then bits[#bits + 1] = "|cff59ff59ready to turn in|r" end
     else
         local parts = step.parts or {}

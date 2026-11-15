@@ -10,7 +10,7 @@ local M = require("mocks")
 
 -- Longest first: run_tests.sh starts them in this order, so the long ones do not end up last.
 local FILES = { "test_game_3", "test_game", "test_game_2", "test_game_4", "test_realdata", "test_objective",
-    "test_objective_2", "test_memory", "test_surplus", "test_core", "test_search", "test_data", "test_import" }
+    "test_objective_2", "test_classes", "test_memory", "test_surplus", "test_core", "test_search", "test_data", "test_import" }
 local pick = os.getenv("TEST_FILES")
 if pick and pick ~= "" then
     FILES = {}

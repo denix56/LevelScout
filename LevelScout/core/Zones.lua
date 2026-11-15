@@ -113,7 +113,9 @@ function Zones.Info(map, side)
     return zoneCache[key] or nil
 end
 
-function Zones.Reset() zoneCache, dungeonCache = {}, nil end
+local classInside = {} -- [class] = Zones.ClassInside's answer
+
+function Zones.Reset() zoneCache, dungeonCache, classInside = {}, nil, {} end
 
 -- Where to start a zone when the character's own position is unknown or far away: its
 -- busiest hub for this side.
@@ -199,13 +201,69 @@ function Zones.Name(zone)
     return d and d.name or nil
 end
 
+--- Class quests of this class that take it into a dungeon: an objective that can only be done
+--- inside (every NPC or object for it stands in that dungeon and nowhere else, Data.InstanceOf),
+--- whatever dungeon the quest is filed under. { [dungeon zone (-id)] = { [questId] = { full =
+--- true when all of it is done there, objectives = { indexes done there } } } }, kept per class.
+function Zones.ClassInside(class, checkpoint)
+    local Data = ns.Data
+    if not class or not Data.IsIndexBuilt() then return {} end
+    local got = classInside[class]
+    if got then return got end
+    got = {}
+    for _, id in ipairs(Data.ClassQuests(class)) do
+        local q = Data.GetQuest(id)
+        if q and #q.objectives > 0 then
+            local where, outside = {}, false
+            for i, o in ipairs(q.objectives) do
+                local inside
+                for _, s in ipairs(Data.ObjectiveSources(o)) do
+                    local d = (s.kind == "npc" or s.kind == "object") and Data.InstanceOf(s.kind, s.id) or nil
+                    if not d or (inside and inside ~= d) then inside = false; break end
+                    inside = d
+                end
+                if inside then
+                    where[inside] = where[inside] or {}
+                    where[inside][#where[inside] + 1] = i
+                else
+                    outside = true
+                end
+            end
+            for d, objectives in pairs(where) do
+                got[-d] = got[-d] or {}
+                got[-d][id] = { full = not outside and #objectives == #q.objectives, objectives = objectives }
+            end
+        end
+        if checkpoint then checkpoint() end
+    end
+    classInside[class] = got
+    return got
+end
+
+-- The dungeon's quests for this character: its own, and the class quests done partly or wholly
+-- inside (Zones.ClassInside). Returns the list, the set, and { [id] = objective indexes done
+-- inside } of those done only partly there.
+local function questsFor(d, ctx)
+    local extra = ctx and ctx.avail and Zones.ClassInside(ctx.avail.class, ctx.checkpoint)[d.zone]
+    if not extra then return d.quests, d.questSet, {} end
+    local quests, set, partial = {}, {}, {}
+    for _, id in ipairs(d.quests) do quests[#quests + 1] = id; set[id] = true end
+    for id, how in pairs(extra) do
+        if not set[id] then quests[#quests + 1] = id; set[id] = true end
+        if not how.full then partial[id] = how.objectives end
+    end
+    table.sort(quests)
+    return quests, set, partial
+end
+
 -- The dungeon as the planner needs it for this character: where the door is, how long a run
 -- is assumed to take and what its kills pay (elites, shared by five).
 local function dungeonFor(d, ctx)
     local seconds, kills = Cost.DungeonRun(d.bosses)
     local mobLevel = math.floor((d.lo + d.hi) / 2)
-    return { id = d.id, name = d.name, loc = Geo.Loc(d.map, d.x, d.y), quests = d.quests, questSet = d.questSet,
-        confirmed = d.confirmed, seconds = seconds,
+    local quests, questSet, partial = questsFor(d, ctx)
+    return { id = d.id, name = d.name, loc = Geo.Loc(d.map, d.x, d.y), quests = quests, questSet = questSet,
+        partial = partial, confirmed = d.confirmed, seconds = seconds,
         xp = math.floor(kills * Cost.MobXP(ctx.level, mobLevel, false, Cost.DUNGEON_GROUP, true) * (1 + (ctx.xpBonus or 0)) + 0.5) }
 end
 
@@ -220,7 +278,7 @@ function Zones.DungeonFrom(d, ctx)
     local Data, avail = ns.Data, ctx and ctx.avail
     if not avail then return from end
     local completed = avail.completed or {}
-    for _, id in ipairs(d.quests) do
+    for _, id in ipairs((questsFor(d, ctx))) do
         local q = Data.GetQuest(id)
         if q and q.minLevel > from and q.minLevel <= d.hi and not completed[id] and not ctx.log[id]
             and not (q.flags.repeatable or q.flags.daily or q.flags.weekly or q.flags.event)
@@ -240,7 +298,7 @@ function Zones.DungeonShortlist(ctx, always, max)
     local out = {}
     for zone, d in pairs(dungeonTable()) do
         local n, inLog = 0, 0
-        for _, id in ipairs(d.quests) do
+        for _, id in ipairs((questsFor(d, ctx))) do
             local q = Data.GetQuest(id)
             if ctx.log[id] then
                 n, inLog = n + 1, inLog + 1
