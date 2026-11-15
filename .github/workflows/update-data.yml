@@ -1,0 +1,129 @@
+# Daily data update: runs tools/update.sh against ForeverDB's published data. When the baked data
+# on main is behind, the update (import, count check, full test suite with the pinned QuestieDB)
+# runs here, and the regenerated LevelScout/data and tools/import/last_report.txt are proposed in
+# a pull request from the branch data/foreverdb to main. Nothing is pushed to main.
+#
+# Pull requests opened with GITHUB_TOKEN do not start pull_request workflows, so this workflow
+# starts test.yml on the data branch itself (workflow_dispatch, which GITHUB_TOKEN may start); its
+# "test" check lands on the pull request's head commit. A maintainer pushing to the branch, or
+# closing and reopening the pull request, starts the usual pull_request run too.
+#
+# Needs the repository setting "Allow GitHub Actions to create and approve pull requests".
+name: update-data
+
+on:
+  schedule:
+    - cron: "17 5 * * *" # 05:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+env:
+  BRANCH: data/foreverdb
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # push the data branch
+      pull-requests: write # open or update the pull request
+      actions: write # start test.yml on the data branch
+    steps:
+      # No token in the checkout: tools/update.sh downloads and imports third-party data, so the
+      # token is only handed to the last step, which pushes and opens the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      # The previous ForeverDB download (git-ignored local/sources/ForeverDB), so only the files
+      # that changed are downloaded again. Safe to reuse: update.sh checks every data file against
+      # the manifest's SHA-256, re-downloads the addon zip when its version changed, and the
+      # import only runs the Data/*.lua files, in a sandbox. Without a cache it downloads all.
+      - name: Restore the ForeverDB source
+        id: source
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: local/sources/ForeverDB
+          key: foreverdb-${{ github.run_id }}
+          restore-keys: foreverdb-
+
+      - name: Update the data
+        id: update
+        run: |
+          set -o pipefail
+          tools/update.sh 2>&1 | tee "$RUNNER_TEMP/update.out"
+          if [ -n "$(git status --porcelain -- LevelScout/data tools/import/last_report.txt)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save the ForeverDB source
+        if: >-
+          hashFiles('local/sources/ForeverDB/**') != '' &&
+          steps.source.outputs.cache-matched-key != format('foreverdb-{0}', hashFiles('local/sources/ForeverDB/**'))
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: local/sources/ForeverDB
+          key: foreverdb-${{ hashFiles('local/sources/ForeverDB/**') }}
+
+      - name: Open or update the pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          versions() { sed -nE 's/^ *(ForeverDB|ForeverDBData) = "(.*)",$/\2/p' | paste -sd' ' -; }
+          read -r addon data <<< "$(versions < LevelScout/data/Meta.lua)"
+          title="Data: ForeverDB $addon, data $data"
+          gh auth setup-git
+
+          # Already proposed? (The import stamps the date into the files, so compare versions.)
+          if git fetch -q --depth 1 origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null &&
+             [ "$(git show "origin/$BRANCH:LevelScout/data/Meta.lua" | versions)" = "$addon $data" ]; then
+            echo "::notice::$BRANCH already has ForeverDB $addon, data $data; nothing to push"
+            exit 0
+          fi
+
+          before="$(sed -n 's/^baked into the mod: *//p' "$RUNNER_TEMP/update.out")"
+          counts="$(awk '/^counts that changed:/ { on = 1; next } on && /^  / { print; next } on { exit }' "$RUNNER_TEMP/update.out")"
+          {
+            echo "Automated update of the baked ForeverDB layer (\`tools/update.sh\`, workflow run: $RUN_URL)."
+            echo
+            echo "- Now: ForeverDB addon $addon, data $data"
+            echo "- Before: ${before:-unknown}"
+            echo
+            echo "Coverage counts that changed (\`tools/import/last_report.txt\`):"
+            echo
+            echo '```'
+            echo "${counts:-  (none)}"
+            echo '```'
+            echo
+            echo "The import, the count check and the full test suite (QuestieDB pinned in .github/actions/setup) passed in that run."
+            echo "That run also started the \`test\` workflow on \`$BRANCH\`; pushing to this branch, or closing and reopening this pull request, runs it again."
+          } > "$RUNNER_TEMP/body.md"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -q -c "$BRANCH"
+          git add -- LevelScout/data tools/import/last_report.txt
+          git commit -q -m "$title"
+          git push -q --force origin "HEAD:refs/heads/$BRANCH"
+
+          pr="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi
+          gh workflow run test.yml --ref "$BRANCH"

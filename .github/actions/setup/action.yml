@@ -1,0 +1,64 @@
+name: Set up the test tools
+description: >
+  Installs Lua 5.1 and a pinned, checksum-verified QuestieDB (the Forever build) for the
+  real-data tests, and exports LUA and QUESTIEDB for run_tests.sh and tools/update.sh.
+
+# QuestieDB comes from its GitHub release (no login needed). To move to a newer QuestieDB: take
+# the Forever zip's SHA-256 from the release page (or the "digest" of the asset in
+# https://api.github.com/repos/Questie/QuestieDB/releases), change both values below and run
+# the tests (some real-data tests compare against what this QuestieDB version contains).
+inputs:
+  questiedb-version:
+    description: QuestieDB release (tag without the leading v)
+    default: "1.1.1"
+  questiedb-sha256:
+    description: SHA-256 of QuestieDB-<version>-Forever.zip
+    default: 2527118d861e497fa40bdb6d061883bf09649d5f96e09de6885f578aefbb5e59
+
+runs:
+  using: composite
+  steps:
+    - name: Install Lua 5.1
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends lua5.1 > /dev/null
+        lua="$(command -v lua5.1)"
+        "$lua" -v
+        echo "LUA=$lua" >> "$GITHUB_ENV"
+
+    - name: Restore the QuestieDB download
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/levelscout/questiedb
+        key: questiedb-${{ inputs.questiedb-version }}-${{ inputs.questiedb-sha256 }}
+
+    - name: Download and verify QuestieDB ${{ inputs.questiedb-version }}
+      shell: bash
+      env:
+        QDB_VERSION: ${{ inputs.questiedb-version }}
+        QDB_SHA256: ${{ inputs.questiedb-sha256 }}
+      run: |
+        set -euo pipefail
+        name="QuestieDB-$QDB_VERSION-Forever.zip"
+        zip="$HOME/.cache/levelscout/questiedb/$name"
+        mkdir -p "$(dirname "$zip")"
+        if [ ! -f "$zip" ]; then
+          curl -fsSL --retry 3 --max-time 300 -o "$zip" \
+            "https://github.com/Questie/QuestieDB/releases/download/v$QDB_VERSION/$name"
+        fi
+        # Checked on every run, also when the zip came from the cache.
+        echo "$QDB_SHA256  $zip" | sha256sum -c -
+        if unzip -Z1 "$zip" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+          echo "::error::$name has unsafe paths"; exit 1
+        fi
+        dest="$RUNNER_TEMP/questiedb"
+        rm -rf "$dest"
+        mkdir -p "$dest"
+        unzip -q "$zip" -d "$dest"
+        toc="$dest/QuestieDB/QuestieDB_Forever.toc"
+        [ -f "$toc" ] || { echo "::error::$name has no QuestieDB/QuestieDB_Forever.toc"; exit 1; }
+        got="$(sed -n '/^## Version:/{s/^## Version: *//;p;q;}' "$toc" | tr -d '\r')"
+        [ "$got" = "$QDB_VERSION" ] || { echo "::error::$name says version '$got'"; exit 1; }
+        echo "QuestieDB $got (Forever) in $dest/QuestieDB"
+        echo "QUESTIEDB=$dest/QuestieDB" >> "$GITHUB_ENV"

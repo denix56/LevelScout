@@ -1,0 +1,45 @@
+# BigWigs packager (release.sh) settings. See README.md, "Releasing".
+#
+# How the zip is laid out: release.sh copies the whole checkout (minus "ignore" and dotfiles)
+# into .release/LevelScout/, then move-folders lifts the addon folder's contents up into
+# that folder. The root files that are not ignored (LICENSE, NOTICE.txt, CREDITS.md,
+# CHANGELOG.md) stay next to them, so the zip has one top folder, LevelScout/, holding the
+# addon and its licence files, with no second copy of them in the repository.
+
+package-as: LevelScout
+
+move-folders:
+  LevelScout/LevelScout: LevelScout
+
+ignore:
+  - tests
+  - tools
+  - docs
+  - media
+  - local
+  - .tools
+  - .claude
+  - .release
+  - run_tests.sh
+  - README.md
+
+# Generated data: copied byte for byte (no keyword replacement, no line-ending rewrite), so
+# every file keeps its "-- Data: ForeverDB.net" first line exactly as the import wrote it.
+plain-copy:
+  - LevelScout/data
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+# Relations take CurseForge project slugs (not numeric ids).
+# - QuestieDB is required: LevelScout reads its quests, NPCs, objects and items at runtime.
+#   https://www.curseforge.com/wow/addons/questiedb (project 1696795; the Questie project,
+#   id 334372, is a different one). The TOC says "## Dependencies: QuestieDB" too.
+# - ForeverDB (CurseForge project id 1725334, Wago kGr9ReKy) will be an optional dependency;
+#   put its slug here once confirmed. (Its data is baked into LevelScout/data; the addon
+#   itself is not needed.)
+required-dependencies:
+  - questiedb
+# optional-dependencies:
+#   - <ForeverDB slug>

@@ -1,0 +1,23 @@
+LevelScout data import report (the baked ForeverDB layer)
+
+client build 1.60.1.70938, generated 2026-11-15
+source: ForeverDB 0.60.4 (data 2026-11-14.852e11f0)
+QuestieDB is read by the addon at runtime and is not part of this report.
+
+counts:
+  Forever quests                                1964
+  NPCs (Forever names)                          2248
+  NPCs (classic)                                3651
+  NPCs with observed levels                     3433
+  classic quests (CMaNGOS, client-filtered)     3473
+  classic quests never offered in Forever       56
+  dungeons                                      23
+  items (Forever names)                         2249
+  items with classic drop rates                 1269
+  items with measured drop rates                979
+  objects (classic)                             633
+  quests with a group size                      8
+  quests with captured XP                       2190
+  quests with captured objective counts         866
+  quests with observed spots                    1923
+  zones                                         50

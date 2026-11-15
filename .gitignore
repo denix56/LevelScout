@@ -1,0 +1,12 @@
+.tools/
+# Downloaded copies of the data sources (ForeverDB). Never commit.
+local/
+# The same two as links (session worktrees link to the main folder's copies).
+/.tools
+/local
+# Session worktrees and local Claude settings.
+.claude/worktrees/
+.claude/settings.local.json
+.DS_Store
+# Packager (BigWigs release.sh) output.
+.release/

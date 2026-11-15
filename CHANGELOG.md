@@ -1,0 +1,27 @@
+# LevelScout
+
+## 0.1.0
+
+First release. A leveling planner for WoW: Forever (client 1.60.1).
+
+- **Zone ranking**: zones and 5-player dungeons that fit your level are ranked by the XP per hour
+  you would make there, the trip to them included.
+- **Quest route**: the quests of the chosen zone in the order that earns the most XP per hour:
+  pickups batched at hubs, shared camps worked together, turn-ins grouped, slow quests left out
+  and listed. Follow-ups, quests for a level the route reaches, and quests carried from other
+  zones are planned too.
+- **When to move on**: an itinerary for the next two hours across up to three zones, and a banner
+  when starting somewhere else earns at least 20% more.
+- **Guidance**: a waypoint for the current step (TomTom optional), a live distance, and the
+  flight map's useful flight paths highlighted.
+- **Learns from play**: your pace, travel speed and drop rates move the plan towards what you
+  really see. XP buffs and rested XP are counted, with reminders before a buff ends.
+- **Groups and elites**: party XP and drop sharing, elite quests routed for a group.
+- `/ls` (or `/levelscout`) shows or hides the window; `/ls about` shows the credits.
+- **Requires [QuestieDB](https://www.curseforge.com/wow/addons/questiedb)** (contract 4). Quests,
+  NPCs, objects, items, prerequisites, spawns and drop rates are read from your installed
+  QuestieDB, with its corrections for your character, so they are as current as QuestieDB. Without
+  it LevelScout says so in chat and stays inactive. TomTom is optional.
+
+Data from ForeverDB.net (https://foreverdb.net) and CMaNGOS classic-db (shipped), and from the
+QuestieDB addon (read at runtime); see NOTICE.txt.
