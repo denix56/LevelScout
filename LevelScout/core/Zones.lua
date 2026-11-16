@@ -647,6 +647,7 @@ Zones.MIN_STAY = 600           -- a zone is not visited for less than this (the 
 -- a worse itinerary (5% and 11% less XP), so the full search is kept.
 Zones.ITINERARY_ROUNDS = 40 -- with ITINERARY_WARM: the later zones start from their ranked plans
 Zones.KEEP_ITINERARY = 1.05    -- a different order of zones replaces the shown one only when 5% better
+Zones.PAST_HORIZON = true     -- two long zones: the first may be left late and the second followed past the horizon (see Zones.Itinerary)
 Zones.SHORT_IN_HAND = true     -- the zone on screen may be left after less than MIN_STAY: we are in it already
 
 -- Step indices after which a plan may be left: its best moment, the first turn-in after each
@@ -907,7 +908,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
                     local first = plan.steps[1]
                     local lead = depth == 1 and (first.t - first.seconds) or trip(loc, plan)
                     local start = time + lead
-                    if depth == 2 then
+                    if depth == 2 and Zones.PAST_HORIZON then
                         -- the second zone past the horizon: up to one of its leave points
                         for _, p in ipairs(leavesOf(plan)) do
                             local t = start + since(plan, p)
@@ -929,7 +930,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
                                 local t = start + since(plan, p)
                                 local inHand = Zones.SHORT_IN_HAND and depth == 1 and opts.shown ~= nil and z.map == opts.shown
                                 -- (the first zone may be left later than that: the second then runs past the horizon)
-                                if (t + Zones.MIN_STAY <= H or depth == 1) and (inHand or since(plan, p) >= Zones.MIN_STAY)
+                                if (t + Zones.MIN_STAY <= H or (depth == 1 and Zones.PAST_HORIZON)) and (inHand or since(plan, p) >= Zones.MIN_STAY)
                                     and not (fixed and fixed[depth] and p ~= fixed[depth]) then
                                     segs[depth] = { map = z.map, plan = plan, travel = lead, seconds = t - start,
                                         xp = plan.steps[p].cumXP, leave = p }
