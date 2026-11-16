@@ -13,7 +13,10 @@ H.suite("Engine and window (real data)", function()
         -- the engine hands the itinerary to the move-on rule: they never name different zones
         local it = view.itinerary
         ok(it and it.shown == view.zone, "the itinerary is made for the shown zone")
-        if it.segments[1].map == view.zone then
+        eq(it.segments[1].map, view.zone, "and starts in it")
+        if it.alt then
+            eq(view.moveOn.map, it.alt.map, "the banner is about the better start")
+        elseif it.segments[1].map == view.zone then
             eq(view.moveOn.suggest, false, "the itinerary starts here: no banner")
         else
             eq(view.moveOn.map, it.segments[1].map)

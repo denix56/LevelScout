@@ -598,6 +598,10 @@ H.suite("Itinerary (real data)", function()
         -- the same zone plans, and a step-time model that says all travel takes `factor` times as long.
         -- The two-hour plan can fill the horizon to the second, so a big factor may leave no room for
         -- the second zone on some data builds: take the largest factor that keeps it.
+        -- (without the credit for quests under way at the horizon: with it, a slower trip can
+        -- tip a close call between two second zones, and this test is about the trip alone)
+        ns.Zones.END_CREDIT = false
+        local it = ns.Zones.Itinerary(state, ctx, ranked)
         local slow, factor
         for _, f in ipairs({ 1.5, 1.2, 1.05 }) do
             ctx.stepModel = { v = ns.Learn.STEP_VERSION, n = 5, w = { 0, 0, 0, 0, math.log(f), 0, 0, 0, 0 } }
@@ -605,6 +609,7 @@ H.suite("Itinerary (real data)", function()
             ctx.stepModel = nil
             if slow and #slow.segments >= 2 then break end
         end
+        ns.Zones.END_CREDIT = true
         ok(slow and #slow.segments >= 2)
         eq({ slow.segments[1].map, slow.segments[2].map, slow.segments[1].leaveKey },
             { it.segments[1].map, it.segments[2].map, it.segments[1].leaveKey }, "the same way through the zones")
