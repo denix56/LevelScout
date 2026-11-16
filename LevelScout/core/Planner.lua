@@ -1712,7 +1712,9 @@ end
 ---          overhead = seconds before the first step (zone switch),
 ---          front = with a seed: keys of accept and turn-in stops ("P:id", "T:id") to bring to
 ---                  the front of the route, in this order, as far as the order rules and levels
----                  allow (the player stands at them now) }
+---                  allow (the player stands at them now),
+---          first = with a seed: the key of the stop to put first (the step in hand), when the
+---                  order rules and levels allow }
 --- Returns { zone, steps, order, rate, score, peak, seconds, xp, lists, quests, fronted = the
 --- keys of `front` that were brought forward (nil: none) }.
 function Planner.Plan(zoneMap, ctx, opts)
@@ -1941,6 +1943,21 @@ function Planner.Plan(zoneMap, ctx, opts)
                     fronted = fronted or {}
                     fronted[#fronted + 1] = key
                 end
+            end
+        end
+    end
+    -- The step in hand (opts.first, a key of an order: "P:id", "T:id" or "W:key"): made the
+    -- first stop of the seeded route when nothing it waits for comes before it.
+    if opts.seed and opts.first then
+        for i = 3, #r.route do
+            local n = r.route[i]
+            local key = n.kind == "W" and ("W:" .. n.key) or (n.kind .. ":" .. n.quest.id)
+            if key == opts.first then
+                if r:bounds(n) <= 1 then
+                    r:unplace(n)
+                    r:place(n, 1)
+                end
+                break
             end
         end
     end

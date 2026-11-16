@@ -12,6 +12,7 @@ ns.Engine = Engine
 Engine.DEBOUNCE = 0.5        -- seconds: events arrive in bursts
 Engine.MIN_GAP = 2           -- seconds between plans: a kill quest updates the log on every kill
 Engine.RERANK_EVERY = 45     -- seconds between background re-rankings of the other zones
+Engine.KEEP_GOAL = true      -- a clearly better route for the shown zone is taken with the step in hand still first
 Engine.FOLLOW_PATH = true    -- the shown zone moves on by itself where the itinerary leaves it (see the plan job)
 Engine.PROGRESS = true       -- say what the planner is doing while it runs (view.progress)
 Engine.PROGRESS_EVERY = 0.15 -- seconds between two progress notices to the window, at least
@@ -754,7 +755,22 @@ local function run()
         if keep then
             -- stops we stand at, further down: the shown route with them brought forward wins
             local kept = Zones.PlanZone(zone, ctx, keep, nil, frontKeys and { front = frontKeys } or nil)
-            if kept.fronted or not Zones.PreferFresh(kept, fresh) then plan = kept end
+            if kept.fronted or not Zones.PreferFresh(kept, fresh) then
+                plan = kept
+            elseif Engine.KEEP_GOAL and shown and shown.zone == zone and not movedOn
+                and kept.order[1] and fresh.order[1] ~= kept.order[1] then
+                -- The step in hand stays the step in hand: the better route is taken in its own
+                -- order with that step put first. Where that cannot be done (it waits for
+                -- something, or the new route does not have it) or it is no longer better than
+                -- the shown route, the shown route stays until the step is done.
+                local goal = kept.order[1]
+                local pinned = Zones.PlanZone(zone, ctx, fresh.order, nil, { first = goal })
+                if #pinned.steps > 0 and pinned.order[1] == goal and pinned.score > kept.score then
+                    plan = pinned
+                else
+                    plan = kept
+                end
+            end
         end
         return { ranked = ranked, plan = plan, fresh = fresh, zone = zone, state = state, full = full, travel = ctx.travel,
             flightStops = Zones.FlightStops(plan, ctx, chardb.skippedNodes),

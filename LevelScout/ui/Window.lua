@@ -565,11 +565,17 @@ local function zoneRows(view)
                     lines[#lines + 1] = { "Starting with " .. (view.zoneName or "the zone shown"), right = Format.Number(it.here) .. " XP" }
                 end
                 lines[#lines + 1] = { "Each later zone is planned as you will find it: from where you leave the zone before, at the level you will have, with the quests still in your log.", color = C.faint }
+                if it.alt then
+                    lines[#lines + 1] = { "Starting with " .. (it.alt.name or Game.MapName(it.alt.map) or "another zone") .. " instead",
+                        right = Format.Number(it.alt.xp) .. " XP" }
+                    lines[#lines + 1] = { "Click: plan " .. (it.alt.name or "that zone"), color = C.faint }
+                end
                 if it.segments[1].map ~= view.zone then lines[#lines + 1] = { "Click: plan " .. (it.segments[1].name or "the first zone"), color = C.faint } end
                 return lines
             end,
             onClick = function()
-                if it.segments[1].map ~= view.zone then Engine.SetZone(it.segments[1].map); state.tab = "route"; state.scroll = 0 end
+                local go = it.alt and it.alt.map or it.segments[1].map
+                if go ~= view.zone then Engine.SetZone(go); state.tab = "route"; state.scroll = 0 end
             end,
         }
     end

@@ -841,12 +841,15 @@ H.suite("Itinerary (real data)", function()
             if z.map ~= first and #z.plan.steps > 0 then shown = z end -- the worst-ranked other zone
         end
         local with = ns.Zones.Itinerary(state, ctx, ranked, { shown = shown.map })
-        ok(with.here and with.here > 0 and with.xp >= with.here, string.format("%d against %d starting here", with.xp, with.here or 0))
-        ok(with.segments[1].map ~= shown.map, "the itinerary starts elsewhere")
+        ok(with.here and with.here > 0, "something is left in the shown zone")
+        eq(with.segments[1].map, shown.map, "the itinerary starts in the shown zone: the player chose it")
+        eq(with.xp, with.here)
+        ok(with.alt and with.alt.map ~= shown.map and with.alt.xp > with.here,
+            string.format("starting elsewhere earns more: %d against %d", with.alt and with.alt.xp or 0, with.here))
         local m = ns.Zones.MoveOn(shown.plan, ranked, nil, with)
-        eq(m.map, with.segments[1].map, "the banner names the itinerary's first zone")
-        H.near(m.gain, with.xp / with.here - 1, 1e-9)
-        eq(m.suggest, with.xp / with.here > ns.Zones.MOVE_ON_ENTER)
+        eq(m.map, with.alt.map, "the banner names the better start")
+        H.near(m.gain, with.alt.xp / with.here - 1, 1e-9)
+        eq(m.suggest, with.alt.xp / with.here > ns.Zones.MOVE_ON_ENTER)
         eq(m.horizon, with.horizon)
         -- shown zone = the itinerary's first zone: nothing to suggest
         local stay = ns.Zones.Itinerary(state, ctx, ranked, { shown = first })
