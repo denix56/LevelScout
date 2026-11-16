@@ -12,6 +12,7 @@ ns.Engine = Engine
 Engine.DEBOUNCE = 0.5        -- seconds: events arrive in bursts
 Engine.MIN_GAP = 2           -- seconds between plans: a kill quest updates the log on every kill
 Engine.RERANK_EVERY = 45     -- seconds between background re-rankings of the other zones
+Engine.FOLLOW_PATH = true    -- the shown zone moves on by itself where the itinerary leaves it (see the plan job)
 Engine.PROGRESS = true       -- say what the planner is doing while it runs (view.progress)
 Engine.PROGRESS_EVERY = 0.15 -- seconds between two progress notices to the window, at least
 -- A full re-plan's bar: ranking the zones up to SHARE_RANK, checking the shown route up to
@@ -690,6 +691,37 @@ local function run()
                 rank()
             end
         end
+        -- The path moves on. The itinerary made for the shown zone leaves it after a step (its
+        -- first zone's leave point) for the next zone. Once that step is done, the next zone is
+        -- the one shown, in the order the itinerary planned for it, and what is left here stays
+        -- for later: the route is one path across zones, and the step after the last one here
+        -- is the first one there. (Not into a dungeon: that takes a group, so it is the
+        -- player's choice. Leaving for a zone the itinerary did not plan from here stays the
+        -- banner's business, see Zones.MoveOn.)
+        local movedOn
+        local path = view.itinerary
+        if Engine.FOLLOW_PATH and zone and shown and shown.zone == zone and #shown.steps > 0
+            and path and path.shown == zone and path.segments[2] and path.segments[1].map == zone
+            and path.segments[1].leaveKey and path.segments[2].map > 0 then
+            local key = path.segments[1].leaveKey
+            local function has(order)
+                for _, k in ipairs(order or {}) do if k == key then return true end end
+                return false
+            end
+            -- (the shown route in its own order, as it stands now: the leave step is gone from it when it is done)
+            if has(shown.order) and not has(Zones.PlanZone(zone, ctx, shown.order).order) then
+                if not full then
+                    full = true
+                    phase(0.1, Engine.SHARE_RANK, "Ranking zones")
+                    rank()
+                end
+                local onto = path.segments[2].map
+                if open(onto) then
+                    movedOn = { from = zone, to = onto, order = path.segments[2].plan and path.segments[2].plan.order or nil }
+                    zone, fresh = onto, nil
+                end
+            end
+        end
         -- Which zone is shown: the chosen one while it has steps. When it has none left, the
         -- zone its itinerary goes to next; else where we stand, else the best.
         if zone and full and not open(zone) then zone, finished = nil, zone end
@@ -705,7 +737,8 @@ local function run()
         if not fresh then
             -- (a zone taken over from the finished zone we stand in was ranked as if left from
             -- that zone's main town, see Zones.Rank: its route is made from where we stand)
-            local handed = full and finished ~= nil and finished == state.map
+            -- (so was the zone the path moved on to)
+            local handed = full and ((finished ~= nil and finished == state.map) or movedOn ~= nil)
             fresh = (full and not handed and planOf(zone))
                 or Zones.PlanZone(zone, ctx, nil, nil, { warm = (handed or Zones.WARM_SHOWN) and nil or false })
         end
@@ -716,6 +749,8 @@ local function run()
         local keep = shown and shown.zone == zone and #shown.steps > 0 and shown.order or nil
         local saved = chardb.route
         if not shown and saved and saved.zone == zone then keep = saved.order end
+        -- (the zone the path moved on to: the order the itinerary planned for it, as it was shown under "Then:")
+        if movedOn and movedOn.order then keep = movedOn.order end
         if keep then
             -- stops we stand at, further down: the shown route with them brought forward wins
             local kept = Zones.PlanZone(zone, ctx, keep, nil, frontKeys and { front = frontKeys } or nil)
@@ -723,7 +758,7 @@ local function run()
         end
         return { ranked = ranked, plan = plan, fresh = fresh, zone = zone, state = state, full = full, travel = ctx.travel,
             flightStops = Zones.FlightStops(plan, ctx, chardb.skippedNodes),
-            offers = offersOf(chains, ctx, nil, plan, best), ended = ended }
+            offers = offersOf(chains, ctx, nil, plan, best), ended = ended, movedOn = movedOn }
     end, function(ok, result)
         -- The zones and the route are shown now; the itinerary follows in a job of its own.
         -- (a class quest plan has no itinerary: it is followed to its end)
@@ -770,6 +805,18 @@ local function run()
         if chain then
             view.moveOn, view.itinerary = { suggest = false }, nil -- the chain is followed, wherever leveling is better
         else
+            -- The path moved on to its next zone: until the new itinerary is in, the one before
+            -- stands without the zone that was left (so its order of zones is the one kept).
+            if result.movedOn then
+                local was, segs, xp = view.itinerary, {}, 0
+                for i = 2, #(was and was.segments or {}) do
+                    segs[#segs + 1] = was.segments[i]
+                    xp = xp + (was.segments[i].xp or 0)
+                end
+                view.itinerary = (segs[1] and segs[1].map == result.zone)
+                    and { horizon = was.horizon, xp = xp, rate = xp / was.horizon * 3600, shown = result.zone, here = xp, segments = segs } or nil
+                ns.Print("On to %s. What is left in %s stays for later.", mapName(result.movedOn.to), mapName(result.movedOn.from))
+            end
             -- until the new itinerary is in, the move-on rule uses the one worked out before
             moveOn(result.plan, result.ranked, view.itinerary)
         end

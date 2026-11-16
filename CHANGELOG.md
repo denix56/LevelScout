@@ -9,9 +9,11 @@
 
 ## 0.1.1
 
-- **Planning ahead**: the plan across zones now covers the next two and a half hours or two
-  zones (the one you start with and the one after it), whichever is longer. Short zones: more
-  than two can fit. Long zones: the plan runs longer, so there is always a zone to go to next.
+- **One path across zones**: the route no longer stops at the zone's edge. When you finish the
+  step after which the plan leaves the zone, the next zone's steps follow by themselves (chat
+  says "On to ..."), in the order shown under "Then:", and what is left behind stays for later.
+  The plan always looks two and a half hours ahead from where you are. A dungeon is never
+  started for you.
 - **Zones tab**: a zone's XP per hour is for that plan when you start with that zone and take
   the best way on after it ("then Westfall"), and the zones are listed by that. The tooltip
   still has the zone's own first-hour figure.

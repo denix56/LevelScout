@@ -574,7 +574,7 @@ H.suite("Itinerary (real data)", function()
         ns, state, ctx, ranked = setup()
         it = ns.Zones.Itinerary(state, ctx, ranked)
         ok(it, "an itinerary")
-        ok(it.horizon >= ns.Zones.HORIZON, "the horizon, or longer when two zones take longer")
+        eq(it.horizon, ns.Zones.HORIZON)
         ok(#it.segments >= 2, "more than one zone")
         ok(it.xp > it.stay, string.format("%d XP against %d in one zone", it.xp, it.stay))
         local clock, xp, seen = 0, 0, {}
@@ -620,27 +620,13 @@ H.suite("Itinerary (real data)", function()
         ok(plan.steps[first.leave].cumXP == first.xp or math.abs(plan.steps[first.leave].cumXP - first.xp) < 1)
     end)
 
-    test("a short horizon still has a second zone: the itinerary runs past it", function()
+    test("a short horizon leaves no time for a second zone", function()
         local was = ns.Zones.HORIZON
         ns.Zones.HORIZON = 1500
         local short = ns.Zones.Itinerary(state, ctx, ranked)
         ns.Zones.HORIZON = was
-        eq(#short.segments, 2)
-        ok(short.horizon > 1500, "longer than the horizon: " .. short.horizon)
-        ok(short.segments[1].leave, "the first zone is left at a step")
-        local clock = 0
-        for _, seg in ipairs(short.segments) do clock = clock + seg.travel + seg.seconds end
-        ok(clock <= short.horizon + 1, "inside the time it covers: " .. clock)
-    end)
-
-    test("with Zones.PAST_HORIZON off and no time for a second zone, one zone is the answer", function()
-        local was = ns.Zones.HORIZON
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = 1500, false
-        local short = ns.Zones.Itinerary(state, ctx, ranked)
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = was, true
         eq(#short.segments, 1)
         eq(short.xp, short.stay)
-        eq(short.horizon, 1500)
     end)
 
     test("the shown order of zones is kept unless another is clearly better", function()
@@ -824,12 +810,11 @@ H.suite("Itinerary (real data)", function()
     end)
 
     test("three zones: the second and third are planned from where the one before is left", function()
-        -- (inside the horizon only: past it, two zones followed further can do better than three)
         local was = ns.Zones.HORIZON
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = 5 * 3600, false
+        ns.Zones.HORIZON = 5 * 3600
         local long = ns.Zones.Itinerary(state, ctx, ranked)
         local again = ns.Zones.Itinerary(state, ctx, ranked)
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = was, true
+        ns.Zones.HORIZON = was
         eq(#long.segments, 3, "five hours are enough for three zones")
         ok(long.xp > long.stay)
         local clock, xp, seen = 0, 0, {}

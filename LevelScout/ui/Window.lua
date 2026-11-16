@@ -336,12 +336,12 @@ end
 -- The zones the itinerary goes to after the shown one: for each a heading and the first steps
 -- of its route there (as planned from where the zone before is left), dimmed: what comes next
 -- is on screen before the zone in hand runs out. `from` is where the shown zone is left.
-UI.AHEAD_STEPS = 6 -- rows per zone
+UI.AHEAD_STEPS = 20 -- rows per zone
 local function onwardRows(it, out, from)
     for n = 2, #it.segments do
         local seg = it.segments[n]
-        out[#out + 1] = { section = string.format("Then: %s  %s(about %s there)|r", seg.name or "the next zone", hex(C.faint),
-            Format.Duration(seg.seconds)), h = SECTION_H }
+        out[#out + 1] = { section = string.format("Then: %s  %s(%sabout %s there)|r", seg.name or "the next zone", hex(C.faint),
+            (seg.travel or 0) > 60 and (Format.Duration(seg.travel) .. " away, ") or "", Format.Duration(seg.seconds)), h = SECTION_H }
         local steps = seg.plan and seg.plan.steps or {}
         local upto = math.min(seg.leave or #steps, #steps)
         local shown = 0
@@ -560,7 +560,7 @@ local function zoneRows(view)
                             right = Format.Number(seg.carriedXP or 0) .. " XP", color = C.faint }
                     end
                 end
-                if it.stay then lines[#lines + 1] = { "One zone only, in the same time", right = Format.Number(it.stay) .. " XP" } end
+                if it.stay then lines[#lines + 1] = { "Best single zone", right = Format.Number(it.stay) .. " XP" } end
                 if it.here and it.segments[1].map ~= view.zone then
                     lines[#lines + 1] = { "Starting with " .. (view.zoneName or "the zone shown"), right = Format.Number(it.here) .. " XP" }
                 end
@@ -597,6 +597,7 @@ local function zoneRows(view)
             return at[a] < at[b]
         end)
     end
+    local span = it and (it.horizon % 3600 == 0 and string.format("%d hours", it.horizon / 3600) or Format.Duration(it.horizon)) or nil
     local best = 0
     for _, z in ipairs(ranked) do if worth(z) > best then best = worth(z) end end
     local place = 0
@@ -641,8 +642,7 @@ local function zoneRows(view)
                 local pct = gain and string.format("%+d%%", gain * 100 + (gain >= 0 and 0.5 or -0.5)) or nil
                 local lines = { { name } }
                 if starts then
-                    lines[#lines + 1] = { "XP per hour over the next " .. Format.Duration(starts[z.map] and starts[z.map].seconds or it.horizon)
-                        .. ", starting here", right = Format.Number(value) }
+                    lines[#lines + 1] = { "XP per hour over the next " .. span .. ", starting here", right = Format.Number(value) }
                     if onwardName then lines[#lines + 1] = { "Then, from where this zone is left", right = onwardName } end
                     if gain then lines[#lines + 1] = { "Against starting with " .. (view.zoneName or "the zone shown"), right = pct } end
                     lines[#lines + 1] = { "This zone alone, first hour, trip included", right = Format.Number(p.score) .. " XP/h" }
