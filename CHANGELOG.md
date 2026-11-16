@@ -9,12 +9,12 @@
 
 ## 0.1.1
 
-- **Longer look ahead**: the plan across zones, the move-on banner and the Zones tab figures now
-  cover the next two and a half hours (was two).
-- **Zones tab**: a zone's XP per hour is now for the next two hours when you start with that
-  zone and take the best way on after it ("then Westfall"), and the zones are listed by that. A
-  short zone is no longer marked down for running out, and a far zone's trip weighs less. The
-  tooltip still has the zone's own first-hour figure.
+- **Planning ahead**: the plan across zones now covers the next two and a half hours or two
+  zones (the one you start with and the one after it), whichever is longer. Short zones: more
+  than two can fit. Long zones: the plan runs longer, so there is always a zone to go to next.
+- **Zones tab**: a zone's XP per hour is for that plan when you start with that zone and take
+  the best way on after it ("then Westfall"), and the zones are listed by that. The tooltip
+  still has the zone's own first-hour figure.
 - **Class quests**: when a class quest chain becomes available (and the leveling route does not
   already do it), chat says so once and the new Class tab's title glows until you open it (the tab is there
   only while it has something). Pick a
