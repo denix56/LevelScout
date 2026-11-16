@@ -261,4 +261,71 @@ H.suite("Engine and window (real data)", function()
         eq(ranks, after, "an empty route does not rank the zones on every re-plan")
         ns.Zones.Rank, ns.Zones.PlanZone = realRank, realPlan
     end)
+
+    test("the path moves on: when the step the itinerary leaves the zone after is done, the next zone is shown", function()
+        local ns = start()
+        local view = ns.Engine.view
+        local first = view.zone
+        local realPlan = ns.Zones.PlanZone
+        local target, targetPlan
+        for i, z in ipairs(view.ranked) do
+            if i > 1 and z.map > 0 and z.map ~= first and z.map ~= view.here and #z.plan.steps > 0 then target, targetPlan = z.map, z.plan end
+        end
+        ok(target, "another zone to go to")
+        local key = view.plan.order[1]
+        local function path()
+            return { horizon = 9000, xp = 1000, rate = 400, stay = 900, shown = first, here = 1000, segments = {
+                { map = first, name = "Here", travel = 0, seconds = 300, xp = 400, leave = 1, leaveKey = key },
+                { map = target, name = "Next", travel = 300, seconds = 2400, xp = 600, plan = targetPlan } } }
+        end
+        -- the leave step still ahead: the shown zone stays
+        view.itinerary = path()
+        ns.Engine.Replan()
+        ok(M.settle())
+        eq(view.zone, first, "nothing is left behind while the leave step is ahead")
+        -- the leave step is done: it is gone from every plan of the zone
+        ns.Zones.PlanZone = function(map, ...)
+            local p = realPlan(map, ...)
+            if map == first then
+                for i, k in ipairs(p.order) do
+                    if k == key then table.remove(p.order, i); table.remove(p.steps, i); break end
+                end
+            end
+            return p
+        end
+        view.itinerary = path()
+        M.printed = {}
+        ns.Engine.Replan()
+        ok(M.settle())
+        ns.Zones.PlanZone = realPlan
+        eq(view.zone, target, "the itinerary's next zone is shown")
+        eq(ns.Engine.chardb.zone, target, "and stays the shown zone")
+        ok(#view.plan.steps > 0 and view.plan.zone == target, "with its route")
+        contains(output(), "On to ", "chat says so")
+        ok(view.itinerary and view.itinerary.shown == target, "and an itinerary of its own")
+        eq(view.itinerary.segments[1].map, target, "that starts in it")
+        -- (the banner is the new itinerary's business: it speaks only of a better start it found itself)
+        if view.moveOn.suggest then eq(view.moveOn.map, view.itinerary.alt and view.itinerary.alt.map) end
+        eq(view.status, "ready")
+        -- switched off: the zone stays
+        ns.Engine.SetZone(first)
+        ok(M.settle())
+        eq(view.zone, first)
+        ns.Engine.FOLLOW_PATH = false
+        ns.Zones.PlanZone = function(map, ...)
+            local p = realPlan(map, ...)
+            if map == first then
+                for i, k in ipairs(p.order) do
+                    if k == view.itinerary.segments[1].leaveKey then table.remove(p.order, i); table.remove(p.steps, i); break end
+                end
+            end
+            return p
+        end
+        key = view.plan.order[1]
+        view.itinerary = path()
+        ns.Engine.Replan()
+        ok(M.settle())
+        ns.Zones.PlanZone, ns.Engine.FOLLOW_PATH = realPlan, true
+        eq(view.zone, first, "Engine.FOLLOW_PATH off: the shown zone is not left")
+    end)
 end)

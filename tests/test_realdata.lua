@@ -574,7 +574,7 @@ H.suite("Itinerary (real data)", function()
         ns, state, ctx, ranked = setup()
         it = ns.Zones.Itinerary(state, ctx, ranked)
         ok(it, "an itinerary")
-        ok(it.horizon >= ns.Zones.HORIZON, "the horizon, or longer when two zones take longer")
+        eq(it.horizon, ns.Zones.HORIZON)
         ok(#it.segments >= 2, "more than one zone")
         ok(it.xp > it.stay, string.format("%d XP against %d in one zone", it.xp, it.stay))
         local clock, xp, seen = 0, 0, {}
@@ -598,6 +598,10 @@ H.suite("Itinerary (real data)", function()
         -- the same zone plans, and a step-time model that says all travel takes `factor` times as long.
         -- The two-hour plan can fill the horizon to the second, so a big factor may leave no room for
         -- the second zone on some data builds: take the largest factor that keeps it.
+        -- (without the credit for quests under way at the horizon: with it, a slower trip can
+        -- tip a close call between two second zones, and this test is about the trip alone)
+        ns.Zones.END_CREDIT = false
+        local it = ns.Zones.Itinerary(state, ctx, ranked)
         local slow, factor
         for _, f in ipairs({ 1.5, 1.2, 1.05 }) do
             ctx.stepModel = { v = ns.Learn.STEP_VERSION, n = 5, w = { 0, 0, 0, 0, math.log(f), 0, 0, 0, 0 } }
@@ -605,6 +609,7 @@ H.suite("Itinerary (real data)", function()
             ctx.stepModel = nil
             if slow and #slow.segments >= 2 then break end
         end
+        ns.Zones.END_CREDIT = true
         ok(slow and #slow.segments >= 2)
         eq({ slow.segments[1].map, slow.segments[2].map, slow.segments[1].leaveKey },
             { it.segments[1].map, it.segments[2].map, it.segments[1].leaveKey }, "the same way through the zones")
@@ -620,27 +625,13 @@ H.suite("Itinerary (real data)", function()
         ok(plan.steps[first.leave].cumXP == first.xp or math.abs(plan.steps[first.leave].cumXP - first.xp) < 1)
     end)
 
-    test("a short horizon still has a second zone: the itinerary runs past it", function()
+    test("a short horizon leaves no time for a second zone", function()
         local was = ns.Zones.HORIZON
         ns.Zones.HORIZON = 1500
         local short = ns.Zones.Itinerary(state, ctx, ranked)
         ns.Zones.HORIZON = was
-        eq(#short.segments, 2)
-        ok(short.horizon > 1500, "longer than the horizon: " .. short.horizon)
-        ok(short.segments[1].leave, "the first zone is left at a step")
-        local clock = 0
-        for _, seg in ipairs(short.segments) do clock = clock + seg.travel + seg.seconds end
-        ok(clock <= short.horizon + 1, "inside the time it covers: " .. clock)
-    end)
-
-    test("with Zones.PAST_HORIZON off and no time for a second zone, one zone is the answer", function()
-        local was = ns.Zones.HORIZON
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = 1500, false
-        local short = ns.Zones.Itinerary(state, ctx, ranked)
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = was, true
         eq(#short.segments, 1)
         eq(short.xp, short.stay)
-        eq(short.horizon, 1500)
     end)
 
     test("the shown order of zones is kept unless another is clearly better", function()
@@ -824,12 +815,11 @@ H.suite("Itinerary (real data)", function()
     end)
 
     test("three zones: the second and third are planned from where the one before is left", function()
-        -- (inside the horizon only: past it, two zones followed further can do better than three)
         local was = ns.Zones.HORIZON
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = 5 * 3600, false
+        ns.Zones.HORIZON = 5 * 3600
         local long = ns.Zones.Itinerary(state, ctx, ranked)
         local again = ns.Zones.Itinerary(state, ctx, ranked)
-        ns.Zones.HORIZON, ns.Zones.PAST_HORIZON = was, true
+        ns.Zones.HORIZON = was
         eq(#long.segments, 3, "five hours are enough for three zones")
         ok(long.xp > long.stay)
         local clock, xp, seen = 0, 0, {}
@@ -856,12 +846,15 @@ H.suite("Itinerary (real data)", function()
             if z.map ~= first and #z.plan.steps > 0 then shown = z end -- the worst-ranked other zone
         end
         local with = ns.Zones.Itinerary(state, ctx, ranked, { shown = shown.map })
-        ok(with.here and with.here > 0 and with.xp >= with.here, string.format("%d against %d starting here", with.xp, with.here or 0))
-        ok(with.segments[1].map ~= shown.map, "the itinerary starts elsewhere")
+        ok(with.here and with.here > 0, "something is left in the shown zone")
+        eq(with.segments[1].map, shown.map, "the itinerary starts in the shown zone: the player chose it")
+        eq(with.xp, with.here)
+        ok(with.alt and with.alt.map ~= shown.map and with.alt.xp > with.here,
+            string.format("starting elsewhere earns more: %d against %d", with.alt and with.alt.xp or 0, with.here))
         local m = ns.Zones.MoveOn(shown.plan, ranked, nil, with)
-        eq(m.map, with.segments[1].map, "the banner names the itinerary's first zone")
-        H.near(m.gain, with.xp / with.here - 1, 1e-9)
-        eq(m.suggest, with.xp / with.here > ns.Zones.MOVE_ON_ENTER)
+        eq(m.map, with.alt.map, "the banner names the better start")
+        H.near(m.gain, with.alt.xp / with.here - 1, 1e-9)
+        eq(m.suggest, with.alt.xp / with.here > ns.Zones.MOVE_ON_ENTER)
         eq(m.horizon, with.horizon)
         -- shown zone = the itinerary's first zone: nothing to suggest
         local stay = ns.Zones.Itinerary(state, ctx, ranked, { shown = first })

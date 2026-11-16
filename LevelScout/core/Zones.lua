@@ -328,7 +328,8 @@ end
 --- usable position). `seed` keeps a previous order.
 --- opts = { warm = order of an earlier plan to start the search from (false: from scratch),
 ---          weights = that search's operator weights, readOnly = do not write the memory,
----          front = with a seed: stops to bring to the route's front (see Planner.Plan) }.
+---          front = with a seed: stops to bring to the route's front (see Planner.Plan),
+---          first = with a seed: the stop to put first (see Planner.Plan) }.
 --- With ctx.memory and without opts.warm, the zone's last plan in the memory is the warm start.
 function Zones.PlanZone(map, ctx, seed, from, opts)
     if from then
@@ -345,7 +346,7 @@ function Zones.PlanZone(map, ctx, seed, from, opts)
     if warm == nil and mem and not seed and Planner.WARM_START and not Zones.Dungeon(map) then
         warm, weights = ns.Memory.Seed(mem, map)
     end
-    local plan = Zones.PlanOne(map, ctx, seed, warm or nil, weights, opts.front)
+    local plan = Zones.PlanOne(map, ctx, seed, warm or nil, weights, opts.front, opts.first)
     if warm then plan.warmSeed, plan.warmWeights = warm, weights end -- (the debug view plans the same again)
     if mem and not seed and not opts.readOnly and not Zones.Dungeon(map) then
         ns.Memory.Remember(mem, map, plan, plan.search and plan.search.warm or false)
@@ -354,7 +355,7 @@ function Zones.PlanZone(map, ctx, seed, from, opts)
 end
 
 -- (PlanZone without the memory: from the position in ctx.start)
-function Zones.PlanOne(map, ctx, seed, warm, weights, front)
+function Zones.PlanOne(map, ctx, seed, warm, weights, front, first)
     local dungeon = Zones.Dungeon(map)
     if dungeon then
         -- Travel to the door, the givers and the prerequisite quests is all on the clock, so
@@ -363,7 +364,7 @@ function Zones.PlanOne(map, ctx, seed, warm, weights, front)
         ctx.dungeon = dungeonFor(dungeon, ctx)
         ctx.start = start or ctx.dungeon.loc
         ctx.near = ctx.dungeon.loc
-        local plan = Planner.Plan(dungeon.map, ctx, { overhead = 0, seed = seed, front = front })
+        local plan = Planner.Plan(dungeon.map, ctx, { overhead = 0, seed = seed, front = front, first = first })
         ctx.dungeon, ctx.start, ctx.near = nil, start, nil
         plan.zone, plan.dungeon = map, dungeon.name
         return plan
@@ -374,7 +375,7 @@ function Zones.PlanOne(map, ctx, seed, warm, weights, front)
         ctx.start = entryPoint(map, ctx.side)
     end
     ctx.near = Zones.EntryPoint(map, ctx.side)
-    local plan = Planner.Plan(map, ctx, { overhead = overhead, seed = seed, warm = warm, weights = weights, front = front })
+    local plan = Planner.Plan(map, ctx, { overhead = overhead, seed = seed, warm = warm, weights = weights, front = front, first = first })
     ctx.start, ctx.near = start, nil
     return plan
 end
@@ -605,12 +606,13 @@ function Zones.MoveOn(active, ranked, was, itinerary)
     -- (Nothing left here, or an itinerary made while another zone was shown: the rule below.)
     if itinerary and itinerary.segments and itinerary.segments[1] and active and #active.steps > 0
         and itinerary.shown ~= nil and itinerary.shown == active.zone then
-        local first = itinerary.segments[1].map
+        -- (an itinerary pinned to the shown zone names the better start as its `alt`)
+        local first = itinerary.alt and itinerary.alt.map or itinerary.segments[1].map
         if first == active.zone then return { suggest = false } end
         if not itinerary.here or itinerary.here <= 0 then
             return { suggest = true, map = first, gain = nil, horizon = itinerary.horizon }
         end
-        local lead = itinerary.xp / itinerary.here
+        local lead = (itinerary.alt and itinerary.alt.xp or itinerary.xp) / itinerary.here
         local threshold = (was and was.suggest and was.map == first) and Zones.MOVE_ON_EXIT or Zones.MOVE_ON_ENTER
         return { suggest = lead > threshold, map = first, gain = lead - 1, horizon = itinerary.horizon }
     end
@@ -647,7 +649,7 @@ Zones.MIN_STAY = 600           -- a zone is not visited for less than this (the 
 -- a worse itinerary (5% and 11% less XP), so the full search is kept.
 Zones.ITINERARY_ROUNDS = 40 -- with ITINERARY_WARM: the later zones start from their ranked plans
 Zones.KEEP_ITINERARY = 1.05    -- a different order of zones replaces the shown one only when 5% better
-Zones.PAST_HORIZON = true     -- two long zones: the first may be left late and the second followed past the horizon (see Zones.Itinerary)
+Zones.PIN_SHOWN = true        -- the itinerary starts in the shown zone while that has something left; a better start elsewhere is its `alt`
 Zones.SHORT_IN_HAND = true     -- the zone on screen may be left after less than MIN_STAY: we are in it already
 
 -- Step indices after which a plan may be left: its best moment, the first turn-in after each
@@ -676,9 +678,63 @@ local function since(plan, i)
     return plan.steps[i].t - first.t + first.seconds
 end
 
+-- Quests under way when the horizon cuts a plan (Zones.END_CREDIT). A turn-in that falls
+-- after the horizon pays nothing inside it, so a plain cut marks down whatever is started
+-- late: the last half hour of an itinerary would rather do small things that pay at once than
+-- start a quest worth more. Each quest whose turn-in is still ahead therefore counts for the
+-- share of its time already spent: its turn-in XP times (seconds put into its steps so far /
+-- seconds its steps take up to and with the turn-in). A step's seconds (the way to it and
+-- the work there) are shared equally among its quests.
+-- credit(plan)[i] = that XP when the plan is cut after step i (0 when nothing is under way).
+Zones.END_CREDIT = true
+local credits = setmetatable({}, { __mode = "k" })
+local function credit(plan)
+    local c = credits[plan]
+    if c then return c end
+    local steps = plan.steps
+    local turn, pays, total = {}, {}, {}
+    for i, s in ipairs(steps) do
+        if s.kind == "turnin" then
+            local n = #(s.quests or {})
+            for _, q in ipairs(s.quests or {}) do
+                if not turn[q.id] then turn[q.id], pays[q.id] = i, (s.xp or 0) / n end
+            end
+        end
+    end
+    local function share(s)
+        local n = #(s.quests or {})
+        return n > 0 and ((s.travel or 0) + (s.seconds or 0)) / n or 0
+    end
+    for i, s in ipairs(steps) do
+        local each = share(s)
+        for _, q in ipairs(s.quests or {}) do
+            if turn[q.id] and i <= turn[q.id] then total[q.id] = (total[q.id] or 0) + each end
+        end
+    end
+    c = { [0] = 0 }
+    local sum, put = 0, {}
+    for i, s in ipairs(steps) do
+        local each = share(s)
+        for _, q in ipairs(s.quests or {}) do
+            local t = turn[q.id]
+            if t and i < t and total[q.id] > 0 then
+                local part = pays[q.id] * each / total[q.id]
+                put[q.id] = (put[q.id] or 0) + part
+                sum = sum + part
+            elseif t == i and put[q.id] then
+                sum = sum - put[q.id]
+                put[q.id] = nil
+            end
+        end
+        c[i] = sum > 0 and sum or 0
+    end
+    credits[plan] = c
+    return c
+end
+
 -- Following a plan from `start` (the moment its first stop is reached) until the horizon:
 -- XP earned, when it ends, and the last step finished. A camp being worked when time runs
--- out counts for the share done.
+-- out counts for the share done, and so do the quests under way (see `credit`).
 local function untilHorizon(plan, start, H)
     local steps, xp, last, finish = plan.steps, 0, 0, start
     for i = 1, #steps do
@@ -689,6 +745,7 @@ local function untilHorizon(plan, start, H)
                 local done = (H - (t - s.seconds)) / s.seconds
                 if done > 0 then xp = xp + s.xp * math.min(1, done) end
             end
+            if Zones.END_CREDIT then xp = xp + credit(plan)[last] end
             return xp, H, last
         end
         xp, last, finish = steps[i].cumXP, i, t
@@ -813,19 +870,15 @@ Zones.Project = project -- (for the tests)
 ---                at its front that have nothing left by now are passed over) }
 --- The zone on screen is the one in hand: as an itinerary's first zone it may be left however
 --- little is left in it (Zones.MIN_STAY is for zones that take a trip to reach).
---- The itinerary covers Zones.HORIZON or two zones (the first and the one after it), whichever
---- is longer: with short zones up to three fit into the horizon; with long ones the first is
---- left at its best moment, however late, and the second followed to one of its leave points.
---- One zone only when nothing can follow it.
 --- Returns nil when nothing can be planned, else
----   { horizon (seconds it covers: Zones.HORIZON or longer), xp, rate (XP per hour over that),
----     stay = XP of the best single zone (over the same time),
+---   { horizon, xp, rate (XP per hour over the horizon), stay = XP of the best single zone,
 ---     shown = opts.shown, here = XP of the best itinerary that starts in the shown zone
 ---             (nil when nothing is left there, or no zone is shown),
+---     alt = { map, name, xp, next } when starting in another zone would earn more: the
+---           itinerary itself then starts in the shown zone all the same (Zones.PIN_SHOWN),
 ---     starts = { [map] = { xp = XP inside the horizon when that zone is done first and the best
----                way on is taken from where it is left, seconds = the time that covers
----                (Zones.HORIZON or longer), rate = XP per hour over it, next = the zone gone to
----                after it (nil when nothing can follow) } }
+---                way on is taken from where it is left, rate = that in XP per hour (over the time
+---                used, see below), next = the zone gone to after it (or nil) } }
 ---                for every ranked zone with something to do,
 ---     segments ={ { map, name, travel (seconds to get there), seconds (spent there), xp,
 ---                    leave = step index left after (nil: until the horizon), leaveKey,
@@ -874,33 +927,12 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         return row[plan]
     end
 
-    -- What a candidate earns per second: over the time it takes, the horizon at least. Inside
-    -- the horizon that is its XP; a candidate that runs past it (see `search`) is held to the
-    -- same measure.
-    local function pace(c) return c.xp / math.max(c.time, H) end
-
     -- Try every order (or only `order`, a list of maps; or only those starting in `first`),
     -- every leave point (or only `fixed[n]` for the n-th zone), with `swap[map]` in place of
     -- that zone's plan when it is not the first zone.
-    -- The answer covers the horizon or two zones, whichever is longer: a candidate of two zones
-    -- or more is preferred to any single zone (so what follows a zone, and from where, always
-    -- counts), the first zone may be left at any of its leave points, however late, and the
-    -- second may then be followed past the horizon, up to one of its leave points. Zones that
-    -- are short fit three into the horizon as before.
-    -- Returns the best candidate of two zones or more (the best single zone when there is
-    -- none), then the best single zone. A candidate is { xp, time (seconds it takes), segments }.
     local function search(order, fixed, swap, depthMax, first)
-        local best, alone
+        local best
         local segs, used = {}, {}
-        local function offer(depth, xp, time)
-            local cur = alone
-            if depth >= 2 then cur = best end
-            if not cur or xp / math.max(time, H) > pace(cur) then
-                cur = { xp = xp, time = time, segments = {} }
-                for i = 1, depth do cur.segments[i] = segs[i] end
-                if depth >= 2 then best = cur else alone = cur end
-            end
-        end
         local function go(depth, time, xp, loc)
             for _, z in ipairs(zones) do
                 if not used[z.map] and (not order or order[depth] == z.map) and (depth > 1 or not first or first == z.map) then
@@ -908,29 +940,19 @@ function Zones.Itinerary(state, ctx, ranked, opts)
                     local first = plan.steps[1]
                     local lead = depth == 1 and (first.t - first.seconds) or trip(loc, plan)
                     local start = time + lead
-                    if depth == 2 and Zones.PAST_HORIZON then
-                        -- the second zone past the horizon: up to one of its leave points
-                        for _, p in ipairs(leavesOf(plan)) do
-                            local t = start + since(plan, p)
-                            if t > H and since(plan, p) >= Zones.MIN_STAY then
-                                segs[depth] = { map = z.map, plan = plan, travel = lead, seconds = t - start,
-                                    xp = plan.steps[p].cumXP, last = p }
-                                offer(depth, xp + plan.steps[p].cumXP, t)
-                            end
-                        end
-                        segs[depth] = nil
-                    end
                     if start + Zones.MIN_STAY <= H or depth == 1 then
                         local gain, finish, last = untilHorizon(plan, start, H)
                         segs[depth] = { map = z.map, plan = plan, travel = lead, seconds = finish - start, xp = gain, last = last }
-                        offer(depth, xp + gain, finish)
+                        if not best or xp + gain > best.xp then
+                            best = { xp = xp + gain, segments = {} }
+                            for i = 1, depth do best.segments[i] = segs[i] end
+                        end
                         if depth < (depthMax or Zones.ITINERARY_STOPS) and (not order or order[depth + 1]) then
                             used[z.map] = true
                             for _, p in ipairs(leavesOf(plan)) do
                                 local t = start + since(plan, p)
                                 local inHand = Zones.SHORT_IN_HAND and depth == 1 and opts.shown ~= nil and z.map == opts.shown
-                                -- (the first zone may be left later than that: the second then runs past the horizon)
-                                if (t + Zones.MIN_STAY <= H or (depth == 1 and Zones.PAST_HORIZON)) and (inHand or since(plan, p) >= Zones.MIN_STAY)
+                                if t + Zones.MIN_STAY <= H and (inHand or since(plan, p) >= Zones.MIN_STAY)
                                     and not (fixed and fixed[depth] and p ~= fixed[depth]) then
                                     segs[depth] = { map = z.map, plan = plan, travel = lead, seconds = t - start,
                                         xp = plan.steps[p].cumXP, leave = p }
@@ -946,7 +968,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
             end
         end
         go(1, 0, 0, nil)
-        return best or alone, alone
+        return best
     end
 
     local single = search(nil, nil, nil, 1)
@@ -961,7 +983,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
             if #order > 0 or open[seg.map] then order[#order + 1] = seg.map end
         end
         local kept = #order > 0 and search(order) or nil
-        if kept and #kept.segments == #order and pace(best) <= pace(kept) * Zones.KEEP_ITINERARY then best = kept end
+        if kept and #kept.segments == #order and best.xp <= kept.xp * Zones.KEEP_ITINERARY then best = kept end
     end
     -- The zones after the first as they will really be found: each is planned again from where
     -- the one before is left, at the level reached by then, with that zone's turned-in quests
@@ -1005,38 +1027,55 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         end
         return got
     end
-    -- two zones or more when there are any (see `search`): one zone only when nothing follows it
+    -- an itinerary must beat simply staying in one zone
     local function settle(cand)
         local refined = refine(cand)
-        if refined and #refined.segments >= 2 then return refined end
+        if refined and #refined.segments >= 2 and single and refined.xp > single.xp then return refined end
         return single
     end
     if #best.segments >= 2 then best = settle(best) end
     if not best then return nil end
     -- Against staying: the best itinerary that starts in the shown zone, worked out the same
     -- way. (When that turns out better than the one found, it is the answer.)
-    local here
+    local here, alt
     if opts.shown then
         if best.segments[1].map == opts.shown then
-            here = best
+            here = best.xp
         else
             local stay = search(nil, nil, nil, 1, opts.shown)
             local onward = search(nil, nil, nil, nil, opts.shown)
             if onward and #onward.segments >= 2 then onward = refine(onward) end
-            onward = onward or stay
+            if stay and (not onward or onward.xp < stay.xp) then onward = stay end
             if onward then
-                here = onward
-                if pace(onward) >= pace(best) then best = onward end
+                here = onward.xp
+                if onward.xp >= best.xp then
+                    best = onward
+                elseif Zones.PIN_SHOWN then
+                    -- the path is the shown zone's: the player chose it. What starting elsewhere
+                    -- would earn is kept for the banner (Zones.MoveOn) and the Zones tab.
+                    alt, best = best, onward
+                end
             end
         end
     end
 
     -- Every ranked zone as the place to start: its route, then the best way on from where it is
-    -- left (`search` with that zone first: two zones at least, over the horizon or longer). The
-    -- plans are the ranked ones (nothing is planned again, also for the zone the itinerary
-    -- starts in), so the figures compare with each other.
+    -- left, until the horizon. What a zone is worth then no longer hangs on one hour that the
+    -- trip eats into: a short zone is not marked down for running out (the time left is spent in
+    -- the next one), and a far zone pays its trip once, over the whole horizon. The plans are
+    -- the ranked ones (nothing is planned again, also for the zone the itinerary starts in), so
+    -- the figures compare with each other.
+    -- The rate is over the time used, at least Planner.MIN_HORIZON: when the routes run out
+    -- before the horizon and no other zone fits into what is left (a trip and Zones.MIN_STAY),
+    -- that rest is not counted as earning nothing. Staying in the zone alone is tried too, and
+    -- the better rate of the two is the zone's.
     local starts = {}
     do
+        local function rate(got)
+            local used = 0
+            for _, seg in ipairs(got.segments) do used = used + seg.travel + seg.seconds end
+            return got.xp / math.max(math.min(used, H), Planner.MIN_HORIZON) * 3600
+        end
         local listed = {}
         for _, z in ipairs(zones) do listed[z.map] = true end
         for _, z in ipairs(ranked or {}) do
@@ -1044,21 +1083,22 @@ function Zones.Itinerary(state, ctx, ranked, opts)
                 local extra = not listed[z.map]
                 if extra then zones[#zones + 1] = { map = z.map, plan = z.plan } end -- (only ever the first zone: `first`)
                 local got = search(nil, nil, nil, nil, z.map)
+                local alone = search(nil, nil, nil, 1, z.map)
                 if extra then zones[#zones] = nil end
+                if alone and (not got or rate(alone) > rate(got)) then got = alone end
                 if got then
-                    starts[z.map] = { xp = math.floor(got.xp), seconds = math.max(got.time, H), rate = pace(got) * 3600,
-                        next = got.segments[2] and got.segments[2].map or nil }
+                    starts[z.map] = { xp = math.floor(got.xp), rate = rate(got), next = got.segments[2] and got.segments[2].map or nil }
                 end
             end
         end
     end
 
-    -- The itinerary's own span: the horizon, or longer when its two zones take longer. The
-    -- figures it is compared with (one zone, starting in the shown zone) are XP over that span.
-    local span = math.max(H, best.time)
-    local out = { horizon = span, xp = math.floor(best.xp), rate = best.xp / span * 3600,
-        stay = single and math.floor(pace(single) * span) or nil,
-        shown = opts.shown, here = here and math.floor(pace(here) * span) or nil, starts = starts, segments = {} }
+    local out = { horizon = H, xp = math.floor(best.xp), rate = best.xp / H * 3600, stay = single and math.floor(single.xp) or nil,
+        shown = opts.shown, here = here and math.floor(here) or nil, starts = starts, segments = {} }
+    if alt then
+        out.alt = { map = alt.segments[1].map, name = Zones.Name(alt.segments[1].map), xp = math.floor(alt.xp),
+            next = alt.segments[2] and alt.segments[2].map or nil }
+    end
     for i, seg in ipairs(best.segments) do
         -- quests brought along from the zones before and turned in here
         local carried, carriedXP = 0, 0

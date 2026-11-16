@@ -582,8 +582,7 @@ H.suite("Plan memory (real data)", function()
         local warm = ns.Zones.Itinerary(state, ctx, ranked)
         ns.Planner.SEARCH_ITERATIONS, ns.Zones.HORIZON = saved, horizon
         ok(cold and warm and #warm.segments >= 2)
-        -- (by rate: the two may cover different times, see Zones.Itinerary)
-        ok(warm.rate >= cold.rate * 0.99, string.format("%d XP/h warm against %d cold", warm.rate, cold.rate))
+        ok(warm.xp >= cold.xp * 0.99, string.format("%d XP warm against %d cold", warm.xp, cold.xp))
         local clock, xp, seen = 0, 0, {}
         for i, seg in ipairs(warm.segments) do
             ok(not seen[seg.map], "no zone twice")

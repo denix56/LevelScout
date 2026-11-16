@@ -389,7 +389,7 @@ H.suite("Engine and window (real data)", function()
         end
         -- the next hours across zones, when that is more than staying here
         local it = ns.Engine.view.itinerary
-        ok(it and #it.segments >= 1 and it.xp > 0 and it.horizon >= ns.Zones.HORIZON, "an itinerary is worked out with the ranking")
+        ok(it and #it.segments >= 1 and it.xp > 0 and it.horizon == ns.Zones.HORIZON, "an itinerary is worked out with the ranking")
         for _, m in ipairs(UI.state.models) do
             if m.itinerary then
                 ok(#it.segments > 1 or it.segments[1].map ~= ns.Engine.view.zone, "shown only when it says more than 'stay'")
