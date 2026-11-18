@@ -319,6 +319,8 @@ local function gateOf(node)
         end
         return g
     end
+    -- a red quest is accepted while red; only its work and turn-in wait for its level
+    if node.kind == "P" and node.quest and node.quest.acceptEarly then return 0 end
     return node.quest and node.quest.gate or 0
 end
 Planner.GateOf = gateOf
@@ -1314,7 +1316,7 @@ function R:batchPickups()
     local near = Planner.SAME_PLACE_YARDS
     for i = 2, #route do
         local node = route[i]
-        if node.kind == "P" and not node.quest.gate then -- (a quest for a later level stays where its level is)
+        if node.kind == "P" and gateOf(node) == 0 then -- (a quest for a later level stays where its level is)
             local lo = 1
             for _, d in ipairs(node.quest.deps or {}) do
                 local p = d.T and self.pos[d.T]
@@ -1424,7 +1426,7 @@ local function collect(zoneMap, ctx, lists, also)
     -- quests are candidates too (`also`, maps).
     local inZones = { [zoneMap] = true }
     for _, map in ipairs(also or {}) do inZones[map] = true end
-    local models, order, undecided, reds = {}, {}, {}, {}
+    local models, order, undecided = {}, {}, {}
     ctx.campKeys = {} -- camps (mob kinds, objects) the plan's quests use so far
     -- What the plan reads about quests (for ns.Memory): `ids` = every quest asked about (is it
     -- available? build its model), `used` = those of them in the log, `logSeen` = the whole log.
@@ -1445,6 +1447,8 @@ local function collect(zoneMap, ctx, lists, also)
             if g.status == "ok" then
                 if not ctx.chain and g.pickup and not inZones[g.pickup.map] and g.pickup.map ~= ctx.startMap then return nil end
                 g.gate, g.needLevel, g.deps, g.anyDeps, g.baseDeps = d, need, m.deps, m.anyDeps, m.baseDeps
+                -- red today but can be accepted: picked up now, worked from the level it is orange
+                g.acceptEarly = (m.red and not ((m.minLevel or 0) > ctx.level)) or nil
                 return g
             end
             if g.status ~= "later" or not g.needLevel or g.needLevel <= need then return nil end
@@ -1481,9 +1485,7 @@ local function collect(zoneMap, ctx, lists, also)
             for _, t in ipairs(m.tasks) do
                 if t.key then ctx.campKeys[t.key] = true end -- later quests prefer these mobs
             end
-        elseif m.status == "later" and m.red and not m.blocked and #m.tasks > 0 then
-            reds[#reds + 1] = m -- decided below, once we know where the plan goes
-        elseif m.status == "later" then later(m)
+        elseif m.status == "later" then later(m) -- (a red quest too: planned from the level it is orange)
         elseif m.status == "group" then lists.group[#lists.group + 1] = listEntry(m)
         elseif m.status == "unconfirmed" then lists.unconfirmed[#lists.unconfirmed + 1] = listEntry(m)
         elseif m.status == "unlocated" or m.status == "item" then lists.unlocated[#lists.unlocated + 1] = listEntry(m)
@@ -1581,48 +1583,6 @@ local function collect(zoneMap, ctx, lists, also)
             if here then consider(id, m) end
         end
     end
-    -- A red quest normally waits. But when everything it asks for is in a camp another quest
-    -- takes us to anyway (the same mobs, or the same spot), it comes along: the mobs are being
-    -- fought either way.
-    do
-        local keys, spots = {}, {}
-        for _, m in ipairs(order) do
-            for _, t in ipairs(m.tasks) do
-                if t.key then keys[t.key] = true end
-                if t.loc then spots[#spots + 1] = t.loc end
-            end
-        end
-        for i, red in ipairs(reds) do
-            -- build it again now that the plan's camps are known, so its drops are taken
-            -- from the mobs we will be killing anyway
-            local m = Model.Build(red.id, ctx) or red
-            reds[i], models[m.id] = m, m
-            local shared, total = 0, #m.tasks
-            for _, t in ipairs(m.tasks) do
-                local here = t.key and keys[t.key] or false
-                if not here and t.loc then
-                    for _, spot in ipairs(spots) do
-                        local d = Geo.Dist(spot, t.loc)
-                        if d and d <= Planner.ON_THE_WAY_YARDS then here = true; break end
-                    end
-                end
-                if here then shared = shared + 1 end
-            end
-            -- at least half of what it asks for is in camps we visit anyway
-            local along = m.red and not m.blocked and m.status == "later" and total > 0 and shared >= 1 and shared * 2 >= total
-            if along then
-                m.status, m.alongside = "ok", true
-                order[#order + 1] = m
-                for _, t in ipairs(m.tasks) do
-                    if t.key then keys[t.key] = true end
-                    if t.loc then spots[#spots + 1] = t.loc end
-                end
-            else
-                later(m)
-            end
-        end
-    end
-
     -- On the way: when the zone's quests send us into another zone, quests that start right
     -- where we will be standing there are worth a look too (a letter found in the camp we
     -- clear, a prisoner next to it). They are added as candidates; the usual value check
@@ -1790,7 +1750,8 @@ local function describe(r, plan)
             step.kind = node.kind == "P" and "accept" or "turnin"
             step.action, step.seconds = step.kind, (node.kind == "T" and m.border) and 0 or Cost.INTERACT_SECONDS * r.talk
             step.xp = node.kind == "T" and (lv and Model.QuestXPAt(m, lv) or (m.xp or 0)) or 0
-            step.needLevel = m.gate and (r.level + m.gate) or nil
+            step.needLevel = m.gate and not (node.kind == "P" and m.acceptEarly) and (r.level + m.gate) or nil
+            step.workLevel = m.gate and node.kind == "P" and m.acceptEarly and (r.level + m.gate) or nil
             step.target = node.kind == "P" and m.pickupName or m.turninName
             step.keep = m.keep or nil -- kept in the log after a dungeon run (its turn-in goes below)
             step.borderTo = node.kind == "P" and m.border and m.borderTo or nil -- accepted here, finished in that zone (a map)

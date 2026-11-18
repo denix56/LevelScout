@@ -229,6 +229,7 @@ local function grouped(steps)
             last.xp = last.xp + step.xp
             last.levelUp = step.levelUp or last.levelUp
             last.needLevel = step.needLevel or last.needLevel
+            last.workLevel = step.workLevel or last.workLevel
             last.borderTo = last.borderTo or step.borderTo
             for _, q in ipairs(step.quests) do last.quests[#last.quests + 1] = q end
         else

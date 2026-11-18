@@ -149,13 +149,13 @@ function Model.Build(questId, ctx)
         local others = ctx.partyOn(questId)
         if others then ctx.share, m.share = 1 + others, 1 + others end
     end
-    -- A red quest (5 or more levels above us) waits, also when it is already in the log: its
-    -- targets are meant for a higher level whatever the data says about them. Once it is
-    -- complete, only the turn-in is left and that is planned.
+    -- A red quest (5 or more levels above us) waits until it is orange, also when it is already
+    -- in the log: its targets are meant for a higher level whatever the data says about them.
+    -- Once it is complete, only the turn-in is left and that is planned.
     local shownLevel = (entry and type(entry.level) == "number" and entry.level > 0) and entry.level or q.level
     if shownLevel - ctx.level >= Cost.RED_QUEST and not (entry and entry.isComplete) then
         m.status, m.needLevel, m.detail = "later", shownLevel - Cost.RED_QUEST + 1, "red quest"
-        m.red = true -- the planner may still take it along when its work is in a camp we visit anyway
+        m.red = true -- the planner may still have it accepted now, its work waiting for that level
     end
     if not entry then
         if q.flags.repeatable or q.flags.daily or q.flags.weekly or q.flags.event then m.status = "excluded"; return m end

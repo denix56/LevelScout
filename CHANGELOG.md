@@ -1,5 +1,12 @@
 # LevelScout
 
+## Unreleased
+
+- **Red quests wait until they are orange**: a quest 5 or more levels above you is no longer
+  worked on at your level because its mobs are in a camp you visit anyway. Its work and turn-in
+  are planned after the level-up at which it turns orange; it can still be accepted earlier,
+  and its accept step says from which level it is done.
+
 ## 0.2.0
 
 - **Quests that end in the next zone are taken along**: when the next hours go on to another

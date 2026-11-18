@@ -531,48 +531,33 @@ H.suite("Planner", function()
         ok(indexOf(plan({ level = 10 }), "P:30"), "four levels above is orange: planned")
     end)
 
-    test("a red quest comes along when its work is in a camp another quest visits anyway", function()
-        local function world(objectives, extra)
-            return load(function(data)
-                data.quests[31] = quest({ name = "Red But Same Mobs", level = 14, min = 6, xp = 4000, starts = "n100", ends = "n100",
-                    objectives = objectives })
-                if extra then extra(data) end
-            end)
+    test("a red quest is accepted while red; its work and turn-in come once it is orange", function()
+        local ns = load(function(data)
+            data.quests[31] = quest({ name = "Red But Same Mobs", level = 14, min = 6, xp = 4000, starts = "n100", ends = "n100",
+                objectives = "c200:6:C" })
+        end)
+        -- level 9, quest level 14: red; orange from level 10, which the first XP reaches
+        local plan = ns.Zones.PlanZone(1, ns.Zones.Context(state({ level = 9, xp = 4490, xpMax = 4500 })))
+        local firstUp
+        for i, step in ipairs(plan.steps) do
+            if step.levelUp and step.levelUp >= 10 then firstUp = i; break end
         end
-        -- level 8; quest level 14 is red. Its boars are the ones the orange-or-lower Boars quest kills
-        local ns = world("c200:6:C")
-        local plan = ns.Zones.PlanZone(1, ns.Zones.Context(state()))
-        ok(indexOf(plan, "P:31") and indexOf(plan, "T:31"), "same mobs: taken along")
-        local later = {}
-        for _, e in ipairs(plan.lists.later) do later[e.id] = true end
-        ok(not later[31])
-        local stop = plan.steps[indexOf(plan, "W:m200")]
-        local ids = {}
-        for _, q in ipairs(stop.quests) do ids[q.id] = true end
-        ok(ids[1] and ids[31], "one boar stop for both")
-        -- different mobs, but standing in the same camp
-        local same = world("c207:4:C", function(data) data.npcs[207] = "Boar Matriarch|9|9|0|0||" .. S(1, 60.2, 50.4) end)
-        ok(indexOf(same.Zones.PlanZone(1, same.Zones.Context(state())), "P:31"), "same spot: taken along")
-        -- half of it is with our mobs, the other half elsewhere: it still comes along
-        local half = world("c200:6:C;c208:4:C", function(data) data.npcs[208] = "Hermit Boar|9|9|0|0||" .. camp(1, 10, 90) end)
-        ok(indexOf(half.Zones.PlanZone(1, half.Zones.Context(state())), "P:31"))
-        -- most of it is elsewhere: it waits
-        local far = world("c200:6:C;c208:4:C;c209:4:C", function(data)
-            data.npcs[208] = "Hermit Boar|9|9|0|0||" .. camp(1, 10, 90)
-            data.npcs[209] = "Lost Boar|9|9|0|0||" .. camp(1, 90, 10)
-        end)
-        eq(indexOf(far.Zones.PlanZone(1, far.Zones.Context(state())), "P:31"), nil)
-        -- an item that drops from several kinds of mob is taken from the kind we already kill
-        local drops = world("i310:3:C", function(data)
-            data.npcs[211] = "Tusker|8|8|0|0||" .. camp(1, 20, 20, 12)      -- a bigger camp, but nobody sends us there
-            data.items[310] = "Old Tome|211:50:f 200:50:f||"
-        end)
-        local tomes = drops.Zones.PlanZone(1, drops.Zones.Context(state()))
-        ok(indexOf(tomes, "P:31"), "its tomes drop from our boars: taken along")
-        eq(indexOf(tomes, "W:m211"), nil, "not from the other mob that also drops them")
-        -- its own mobs are too strong: it waits whatever else is there
-        local strong = world("c200:6:C;c203:2:C")
-        eq(indexOf(strong.Zones.PlanZone(1, strong.Zones.Context(state())), "P:31"), nil)
+        ok(firstUp, "the route reaches level 10")
+        local p, t = indexOf(plan, "P:31"), indexOf(plan, "T:31")
+        ok(p and t, "planned")
+        eq(plan.steps[p].needLevel, nil, "the accept waits for no level")
+        eq(plan.steps[p].workLevel, 10, "the accept says from when it is done")
+        ok(t > firstUp, "turned in after level 10")
+        for i, step in ipairs(plan.steps) do
+            if step.kind == "work" then
+                for _, q in ipairs(step.quests or {}) do
+                    if q.id == 31 then ok(i > firstUp, "worked on after level 10") end
+                end
+            end
+        end
+        -- at level 8 the route does not reach level 10 in time: nothing of it is planned
+        local low = ns.Zones.PlanZone(1, ns.Zones.Context(state()))
+        eq(indexOf(low, "T:31"), nil, "not taken along with the boars")
     end)
 
     test("a finished quest in the log is only turned in; a finished objective is not worked", function()

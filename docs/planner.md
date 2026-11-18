@@ -677,11 +677,14 @@ until it is done, then the zones take over again.
   Earning Your Salt (78091), which lets its chain be planned to the end.
   QuestieDB carries such quests over from other versions of the game, for example Season of
   Discovery's "Duskwood Mission" quests. They are listed under Quests.
-- **Red quests**: a quest 5 or more levels above you (red in the quest log) waits under "Later"
-  until it is no longer red, also when it is already in your log. Once complete, its turn-in is
-  planned. Exception: a red quest is taken along when at least half of its objectives are in
-  camps another planned quest visits anyway (the same mobs, or within 80 yards), unless its own
-  targets are 4 or more levels above you.
+- **Red quests**: a quest 5 or more levels above you (red in the quest log) is not worked on
+  while it is red, also when it is already in your log. It is planned like any quest for a later
+  level (see "Level-ups along the route"): its work and turn-in go after the level-up at which it
+  is orange (its level minus 4); when the route does not get there it waits under "Later". If you
+  can accept it today (its minimum level), the accept is not held back: it may go anywhere before
+  its work, and its step says "red: done from level N" (`acceptEarly`, `step.workLevel`). Once it
+  is complete, its turn-in is planned. (Before: a red quest was taken along at today's level when
+  half of its objectives were in camps another quest visits anyway.)
 - **Drops from several kinds of mob**: an item is taken from the kind another planned quest
   already has you killing, so both quests share one stop and one set of kills.
 - **Left out of zone plans**: dungeon and raid quests (dungeon quests are planned under their

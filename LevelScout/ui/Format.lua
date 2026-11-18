@@ -101,6 +101,7 @@ function Format.StepDetail(step)
         if step.target then bits[#bits + 1] = step.target end
         if step.guessed then bits[#bits + 1] = "turn-in place is a guess" end
         if step.needLevel and step.kind == "accept" then bits[#bits + 1] = "needs level " .. step.needLevel end
+        if step.workLevel and step.kind == "accept" then bits[#bits + 1] = "red: done from level " .. step.workLevel end
         if step.keep then bits[#bits + 1] = "for the run; the rest is done elsewhere" end
         if step.borderTo then bits[#bits + 1] = "finished in " .. (Format.MapName and Format.MapName(step.borderTo) or "the next zone") end
         if step.ready then bits[#bits + 1] = "|cff59ff59ready to turn in|r" end
