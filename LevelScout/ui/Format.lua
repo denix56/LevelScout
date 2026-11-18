@@ -92,6 +92,7 @@ function Format.StepTitle(step)
     return verb .. " " .. target
 end
 ns.StepTitle = Format.StepTitle
+Format.MapName = nil -- set by the window: map id -> name (Format itself knows no names)
 
 --- The second line: who or where, progress, and what it takes.
 function Format.StepDetail(step)
@@ -101,6 +102,7 @@ function Format.StepDetail(step)
         if step.guessed then bits[#bits + 1] = "turn-in place is a guess" end
         if step.needLevel and step.kind == "accept" then bits[#bits + 1] = "needs level " .. step.needLevel end
         if step.keep then bits[#bits + 1] = "for the run; the rest is done elsewhere" end
+        if step.borderTo then bits[#bits + 1] = "finished in " .. (Format.MapName and Format.MapName(step.borderTo) or "the next zone") end
         if step.ready then bits[#bits + 1] = "|cff59ff59ready to turn in|r" end
     else
         local parts = step.parts or {}

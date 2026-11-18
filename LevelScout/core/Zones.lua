@@ -345,10 +345,13 @@ end
 --- opts = { warm = order of an earlier plan to start the search from (false: from scratch),
 ---          weights = that search's operator weights, readOnly = do not write the memory,
 ---          front = with a seed: stops to bring to the route's front (see Planner.Plan),
----          first = with a seed: the stop to put first (see Planner.Plan) }.
+---          first = with a seed: the stop to put first (see Planner.Plan),
+---          border = with a seed: quests taken along to the next zone (see Planner.Plan) }.
 --- With ctx.memory and without opts.warm, the zone's last plan in the memory is the warm start.
 --- The plan keeps what it was made from, for ns.Snapshot: warmSeed and warmWeights (the warm start
---- it was given) and seedOrder, seedFront and seedFirst (the seed and `front` and `first`).
+--- it was given) and seedOrder, seedFront, seedFirst and seedBorder (the seed and `front`, `first` and
+--- `border`), and `from` (Zones.BORDER only: where it was planned from, so that Zones.WithBorder can
+--- plan it again from there).
 function Zones.PlanZone(map, ctx, seed, from, opts)
     if from then
         -- plan as if leaving from `from` (see Zones.Rank), then put the real position back
@@ -364,7 +367,9 @@ function Zones.PlanZone(map, ctx, seed, from, opts)
     if warm == nil and mem and not seed and Planner.WARM_START and not Zones.Dungeon(map) then
         warm, weights = ns.Memory.Seed(mem, map)
     end
-    local plan = Zones.PlanOne(map, ctx, seed, warm or nil, weights, opts.front, opts.first)
+    local plan = Zones.PlanOne(map, ctx, seed, warm or nil, weights, opts.front, opts.first, opts.border)
+    if Zones.BORDER then plan.from = ctx.start end -- (where it was planned from: Zones.WithBorder plans it again from there)
+    if opts.border then plan.seedBorder = opts.border end -- (ns.Snapshot)
     plan.seedOrder, plan.seedFront, plan.seedFirst = seed, opts.front, opts.first -- how it was made (ns.Snapshot)
     if warm then plan.warmSeed, plan.warmWeights = warm, weights end -- (the debug view plans the same again)
     if mem and not seed and not opts.readOnly and not Zones.Dungeon(map) then
@@ -374,7 +379,7 @@ function Zones.PlanZone(map, ctx, seed, from, opts)
 end
 
 -- (PlanZone without the memory: from the position in ctx.start)
-function Zones.PlanOne(map, ctx, seed, warm, weights, front, first)
+function Zones.PlanOne(map, ctx, seed, warm, weights, front, first, border)
     local dungeon = Zones.Dungeon(map)
     if dungeon then
         -- Travel to the door, the givers and the prerequisite quests is all on the clock, so
@@ -394,9 +399,118 @@ function Zones.PlanOne(map, ctx, seed, warm, weights, front, first)
         ctx.start = entryPoint(map, ctx.side)
     end
     ctx.near = Zones.EntryPoint(map, ctx.side)
-    local plan = Planner.Plan(map, ctx, { overhead = overhead, seed = seed, warm = warm, weights = weights, front = front, first = first })
+    local plan = Planner.Plan(map, ctx, { overhead = overhead, seed = seed, warm = warm, weights = weights, front = front, first = first, border = border })
     ctx.start, ctx.near = start, nil
     return plan
+end
+
+-- Does the quest end on another map than `map`: a spot of its turn-in (players' first, else its
+-- NPCs' or objects') elsewhere? A cheap look before its model is built.
+local function endsOutside(id, map)
+    local Data = ns.Data
+    local q = Data.GetQuest(id)
+    if not q then return false end
+    local spots = q.spots and q.spots.finish or {}
+    if #spots == 0 then
+        for _, g in ipairs(q.finishers or {}) do
+            local e = (g.kind == "npc" and Data.GetNpc(g.id)) or (g.kind == "object" and Data.GetObject(g.id)) or nil
+            for _, s in ipairs(e and e.spots or {}) do if s.map ~= map then return true end end
+        end
+        return false
+    end
+    for _, s in ipairs(spots) do if s.map ~= map then return true end end
+    return false
+end
+
+--- The quests of zone `map` that an itinerary going on to `later` (maps, in order) can take along:
+--- accepted here (or in the log already), their work on this map done here, the rest left to the
+--- later zones, whose plans weigh them as quests brought along (see `project`): the turn-in
+--- anywhere outside this zone, and any other work only on the map of a later zone. Looked at: the
+--- quests `plan` (the zone's plan, left after step `leave`) leaves out as slow, and the ones it
+--- turns in outside the zone, unless it accepts them before leaving and turns them in after (they
+--- are brought along already). Not: a quest of the step the zone is left after, one skipped by the
+--- player, one that cannot be done yet, any when the plan already fills the quest log.
+--- Returns { { id, to = the zone of its turn-in }, ... } by id, at most Zones.BORDER_MAX (most XP first).
+function Zones.BorderQuests(map, ctx, plan, leave, later)
+    local out = {}
+    if plan.logFull or not plan.steps[leave] then return out end
+    local isLater, prefer = {}, { map }
+    for _, m in ipairs(later) do isLater[m] = true; prefer[#prefer + 1] = m end
+    local function zoneOf(loc) -- (a spot on this zone's own map is in it; one on a continent map is resolved)
+        if not loc then return nil end
+        if loc.map == map then return map end
+        return Zones.ZoneAt(loc, prefer) or loc.map
+    end
+    local firstAt, T = {}, {}
+    for i, step in ipairs(plan.steps) do
+        for _, q in ipairs(step.quests or {}) do
+            if not firstAt[q.id] then firstAt[q.id] = i end
+            if step.kind == "turnin" then T[q.id] = i end
+        end
+    end
+    local atLeave = {}
+    for _, q in ipairs(plan.steps[leave].quests or {}) do atLeave[q.id] = true end
+    local ids, seen = {}, {}
+    local function add(id) if not seen[id] then seen[id] = true; ids[#ids + 1] = id end end
+    for _, e in ipairs(plan.lists and plan.lists.skipped or {}) do
+        if ctx.log[e.id] or (e.loc and e.loc.map == map) then add(e.id) end -- (given here, or in the log)
+    end
+    for id, i in pairs(T) do
+        if zoneOf(plan.steps[i].loc) ~= map then add(id) end
+    end
+    table.sort(ids) -- (T was walked with pairs)
+    local near = ctx.near
+    ctx.near = entryPoint(map, ctx.side) -- (as Zones.PlanOne plans the zone: the same models)
+    local found = {}
+    for _, id in ipairs(ids) do
+        if ctx.checkpoint then ctx.checkpoint() end
+        local inLog = ctx.log[id] ~= nil
+        local carriedAlready = T[id] and firstAt[id] <= leave and T[id] > leave
+        if not atLeave[id] and not (ctx.ignored and ctx.ignored[id]) and not carriedAlready
+            and (T[id] or endsOutside(id, map)) then
+            local m = ns.Model.Build(id, ctx)
+            if m and m.status == "ok" and m.turnin and (m.xp or 0) > 0
+                and (inLog or (m.pickup and m.pickup.map == map)) then
+                local to = zoneOf(m.turnin)
+                local ok = to ~= map
+                for _, t in ipairs(m.tasks) do
+                    if t.loc.map ~= map and not isLater[t.loc.map] then ok = false end
+                end
+                -- (in the log with nothing to do here: only worth it when the plan goes out of the zone for it)
+                if ok and inLog and not T[id] then
+                    local here = false
+                    for _, t in ipairs(m.tasks) do if t.loc.map == map then here = true end end
+                    ok = here or m.tasks[1] == nil
+                end
+                if ok then found[#found + 1] = { id = id, to = to, xp = m.xp } end
+            end
+        end
+    end
+    ctx.near = near
+    table.sort(found, function(a, b) if a.xp ~= b.xp then return a.xp > b.xp end return a.id < b.id end)
+    for i = #found, Zones.BORDER_MAX + 1, -1 do found[i] = nil end
+    table.sort(found, function(a, b) return a.id < b.id end)
+    for _, q in ipairs(found) do out[#out + 1] = { id = q.id, to = q.to } end
+    return out
+end
+
+--- The route on screen with the quests the itinerary takes along (`border` = an itinerary's
+--- `border`, kept by the Engine as chardb.border): `plan` planned again in its own order with
+--- only their stops here added (Planner.Plan's opts.border). Of `front` (stops we stand at, as for
+--- Zones.PlanZone) only their accepts are brought forward: nothing else of `plan` moves.
+--- `plan` itself when the set is not for this zone or nothing of it is left; otherwise the new
+--- plan, whose `base` is `plan`.
+function Zones.WithBorder(map, ctx, plan, border, front)
+    if not (Zones.BORDER and border and border.zone == map and plan and #plan.steps > 0 and not plan.chain) then return plan end
+    local taken, mine = {}, nil
+    for _, id in ipairs(border.ids or {}) do taken["P:" .. id] = true end
+    for _, key in ipairs(front or {}) do
+        if taken[key] then mine = mine or {}; mine[#mine + 1] = key end
+    end
+    local got = Zones.PlanZone(map, ctx, plan.order, plan.from, { border = border, front = mine })
+    if #(got.borderIds or {}) == 0 or #got.steps == 0 then return plan end
+    got.base = plan
+    return got
 end
 
 local zoneAtCache = setmetatable({}, { __mode = "k" })
@@ -670,6 +784,10 @@ Zones.ITINERARY_ROUNDS = 40 -- with ITINERARY_WARM: the later zones start from t
 Zones.KEEP_ITINERARY = 1.05    -- a different order of zones replaces the shown one only when 5% better
 Zones.PIN_SHOWN = true        -- the itinerary starts in the shown zone while that has something left; a better start elsewhere is its `alt`
 Zones.SHORT_IN_HAND = true     -- the zone on screen may be left after less than MIN_STAY: we are in it already
+Zones.BORDER = true            -- the itinerary takes along quests that end beyond its first zone: accepted there, finished in a zone it goes on to
+Zones.BORDER_MAX = 4           -- such quests at most (most XP first)
+Zones.BORDER_ROUNDS = 20       -- search rounds for the later zones planned again with them in the log (warm from their plain plans)
+Zones.BORDER_GAIN = 0.005      -- a new set is taken when the itinerary earns this much more; the set on screen stays while it earns no less
 
 -- Step indices after which a plan may be left: its best moment, the first turn-in after each
 -- quarter of an hour, and its end.
@@ -695,6 +813,23 @@ end
 local function since(plan, i)
     local first = plan.steps[1]
     return plan.steps[i].t - first.t + first.seconds
+end
+
+-- (for the quests taken along, Zones.Itinerary)
+local function keyIndex(order, key)
+    for i, k in ipairs(order or {}) do if k == key then return i end end
+    return nil
+end
+local function sameIds(a, b) -- two sorted lists of ids
+    if not a or not b or #a ~= #b then return false end
+    for i = 1, #a do if a[i] ~= b[i] then return false end end
+    return true
+end
+local function within(a, b) -- every id of the list a is in the list b
+    local set = {}
+    for _, id in ipairs(b or {}) do set[id] = true end
+    for _, id in ipairs(a) do if not set[id] then return false end end
+    return true
 end
 
 -- Quests under way when the horizon cuts a plan (Zones.END_CREDIT). A turn-in that falls
@@ -779,6 +914,8 @@ end
 -- then turn them in or finish them where that happens on its map.
 -- Returns the state and the ids of the quests carried on that this itinerary has put time into
 -- (`carried` = those of the zones before, still in the log).
+-- Quests the plan takes along to the next zone (plan.border) go on as brought along, with their
+-- work elsewhere still to do.
 local function project(state, ctx, plan, leave, carried)
     local steps = plan.steps
     local at = steps[leave]
@@ -819,6 +956,13 @@ local function project(state, ctx, plan, leave, carried)
                 end
             end
         end
+    end
+    -- Quests taken along to the next zone (plan.border, Zones.BORDER): their objectives elsewhere
+    -- are still to do, so a quest with work left there is not finished.
+    local along = plan.border
+    for _, id in ipairs(along and plan.borderIds or {}) do
+        local h = held[id]
+        if h then h.left = h.left + (along[id].left or 0) end
     end
     local ups, d = ctx.levelUps or {}, 0
     while ups[d + 1] and gained >= ups[d + 1] do d = d + 1 end
@@ -865,7 +1009,7 @@ local function project(state, ctx, plan, leave, carried)
             local h = held[entry.id]
             inLog[entry.id] = true
             next_.log[#next_.log + 1] = (h and h.touched) and entryFor(h, entry) or entry
-            if h and h.touched then out[entry.id] = true end
+            if (h and h.touched) or (along and along[entry.id]) then out[entry.id] = true end
         end
     end
     table.sort(ids)
@@ -886,7 +1030,10 @@ Zones.Project = project -- (for the tests)
 --- `ranked` from Zones.Rank.
 --- opts = { shown = map of the zone on screen, plan = its plan (used instead of the ranked one),
 ---          was = the previous itinerary (its order of zones is kept unless clearly beaten; zones
----                at its front that have nothing left by now are passed over) }
+---                at its front that have nothing left by now are passed over),
+---          border = the set of quests taken along that is on screen (chardb.border; optional),
+---          borderPlan = the shown zone's route with them (Zones.WithBorder; `plan` is then the
+---                       route without them) }
 --- The zone on screen is the one in hand: as an itinerary's first zone it may be left however
 --- little is left in it (Zones.MIN_STAY is for zones that take a trip to reach).
 --- Returns nil when nothing can be planned, else
@@ -899,6 +1046,9 @@ Zones.Project = project -- (for the tests)
 ---                way on is taken from where it is left, rate = that in XP per hour (over the time
 ---                used, see below), next = the zone gone to after it (or nil) } }
 ---                for every ranked zone with something to do,
+---     border = { zone, ids, to = { [id] = map }, before = the leave step's key, gain = XP more
+---              than without them } when quests are taken along across the border (Zones.BORDER):
+---              the first zone's plan is then the one with them (Zones.WithBorder makes the same),
 ---     segments ={ { map, name, travel (seconds to get there), seconds (spent there), xp,
 ---                    leave = step index left after (nil: until the horizon), leaveKey,
 ---                    carried, carriedXP = quests brought along from the zones before and turned
@@ -948,14 +1098,15 @@ function Zones.Itinerary(state, ctx, ranked, opts)
 
     -- Try every order (or only `order`, a list of maps; or only those starting in `first`),
     -- every leave point (or only `fixed[n]` for the n-th zone), with `swap[map]` in place of
-    -- that zone's plan when it is not the first zone.
-    local function search(order, fixed, swap, depthMax, first)
+    -- that zone's plan when it is not the first zone, and `leadPlans[map]` in place of that zone's
+    -- plan when it is the first zone.
+    local function search(order, fixed, swap, depthMax, first, leadPlans)
         local best
         local segs, used = {}, {}
         local function go(depth, time, xp, loc)
             for _, z in ipairs(zones) do
                 if not used[z.map] and (not order or order[depth] == z.map) and (depth > 1 or not first or first == z.map) then
-                    local plan = (swap and depth > 1 and swap[z.map]) or z.plan
+                    local plan = (depth == 1 and leadPlans and leadPlans[z.map]) or (swap and depth > 1 and swap[z.map]) or z.plan
                     local first = plan.steps[1]
                     local lead = depth == 1 and (first.t - first.seconds) or trip(loc, plan)
                     local start = time + lead
@@ -1009,7 +1160,9 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     -- done and the quests still held in the log (see `project`). The moment to leave each zone
     -- is chosen with the zones before it settled. A zone with nothing to do by then is dropped,
     -- with everything after it.
-    local function refine(cand)
+    -- (`how`, optional, for the quests taken along: { lead = { [map] = plan of the first zone },
+    -- warmFrom = { [map] = plan each later zone starts its search from }, rounds = search rounds })
+    local function refine(cand, how)
         if not cand or #cand.segments < 2 or not cand.segments[1].leave then return cand end
         local order = {}
         for i, seg in ipairs(cand.segments) do order[i] = seg.map end
@@ -1024,21 +1177,21 @@ function Zones.Itinerary(state, ctx, ranked, opts)
             after.memory = nil -- a projected state never reads or writes the memory
             after.altRate = after.altRate or ctx.altRate
             local cx2 = Zones.Context(after)
-            cx2.searchRounds = Zones.ITINERARY_ROUNDS
+            cx2.searchRounds = (how and how.rounds) or Zones.ITINERARY_ROUNDS
             -- start from the order this zone was ranked with: today's state, not the projected one,
             -- but most of the route is the same (what is done or gone by then is left out)
-            local ranked_ = rankedPlan[order[depth]]
+            local ranked_ = (how and how.warmFrom and how.warmFrom[order[depth]]) or rankedPlan[order[depth]]
             local again = Zones.PlanZone(order[depth], cx2, nil, nil, { readOnly = true,
                 warm = Zones.ITINERARY_WARM and ranked_ and (ranked_.searchOrder or ranked_.order) or false,
                 weights = ranked_ and ranked_.search and ranked_.search.weights or nil })
             if #again.steps == 0 then
                 for i = #order, depth, -1 do order[i] = nil end
-                got = search(order, fixed, swap)
+                got = search(order, fixed, swap, nil, nil, how and how.lead)
                 break
             end
             again.carried = carried
             swap[order[depth]] = again
-            got = search(order, fixed, swap)
+            got = search(order, fixed, swap, nil, nil, how and how.lead)
             local seg = got and got.segments[depth]
             if not seg or not seg.leave then break end -- nothing follows: every zone in it is planned again
             fixed[depth] = seg.leave
@@ -1078,6 +1231,98 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         end
     end
 
+    -- Quests taken along across the border (Zones.BORDER). The winner's first zone is planned once
+    -- more in its own order with the quests it can take along to the zones after it (accepted
+    -- there, finished later: Zones.BorderQuests); the later zones are planned again from where it is
+    -- left, where they find those quests in the log (see `project`); quests they do not use are
+    -- left out again; and that itinerary replaces the winner when it earns more (a set already on
+    -- screen: no less). The choice of zones, their order and the first moment to leave stand.
+    local border
+    local function takeAlong(cand)
+        local seg1 = cand.segments[1]
+        if not (seg1.leave and cand.segments[2]) or Zones.Dungeon(seg1.map) then return nil end
+        local A, plainA = seg1.map, seg1.plan
+        local leaveKey = plainA.order[seg1.leave]
+        local later, warmFrom = {}, {}
+        for i, seg in ipairs(cand.segments) do
+            if i > 1 then
+                warmFrom[seg.map] = seg.plan
+                if not Zones.Dungeon(seg.map) then later[#later + 1] = seg.map end
+            end
+        end
+        if #later == 0 then return nil end
+        local list = Zones.BorderQuests(A, ctx, plainA, seg1.leave, later)
+        if #list == 0 then return nil end
+        local was = opts.border
+        local function withThem(ids, to)
+            -- (the route on screen is that already)
+            if was and opts.borderPlan and opts.borderPlan.base == plainA and was.zone == A
+                and was.before == leaveKey and sameIds(was.ids, ids) then return opts.borderPlan end
+            local p = Zones.PlanZone(A, ctx, plainA.order, plainA.from, { readOnly = true,
+                border = { zone = A, ids = ids, to = to, before = leaveKey } })
+            p.base = plainA
+            return p
+        end
+        -- (the step it is left after may not be one of the leave points of the route with them: it stands)
+        local function pinLeave(plan, at)
+            local points = leavesOf(plan)
+            for _, p in ipairs(points) do if p == at then return end end
+            points[#points + 1] = at
+            table.sort(points)
+        end
+        local ids, to = {}, {}
+        for i, q in ipairs(list) do ids[i], to[q.id] = q.id, q.to end
+        local plan = withThem(ids, to)
+        local at = keyIndex(plan.order, leaveKey)
+        if not at or #(plan.borderIds or {}) == 0 then return nil end
+        pinLeave(plan, at)
+        local trial = { segments = { { map = A, plan = plan, leave = at } } }
+        for i = 2, #cand.segments do trial.segments[i] = { map = cand.segments[i].map } end
+        local got = refine(trial, { lead = { [A] = plan }, warmFrom = warmFrom, rounds = Zones.BORDER_ROUNDS })
+        if not got or #got.segments < 2 then return nil end
+        -- the quests a later zone does something with; the others are left out again
+        local used = {}
+        for i = 2, #got.segments do
+            for _, step in ipairs(got.segments[i].plan.steps) do
+                for _, q in ipairs(step.quests or {}) do used[q.id] = true end
+            end
+        end
+        local keepIds, keepTo = {}, {}
+        for _, id in ipairs(plan.borderIds) do
+            if used[id] then keepIds[#keepIds + 1] = id; keepTo[id] = to[id] end
+        end
+        if #keepIds == 0 then return nil end
+        if #keepIds < #plan.borderIds then
+            local plan2 = withThem(keepIds, keepTo)
+            local at2 = keyIndex(plan2.order, leaveKey)
+            if not at2 or #(plan2.borderIds or {}) == 0 then return nil end
+            pinLeave(plan2, at2)
+            -- (the later zones stay as planned, so their moments to leave stand too)
+            local order, swap, fixed2 = {}, {}, { at2 }
+            for i, seg in ipairs(got.segments) do
+                order[i] = seg.map
+                if i > 1 then
+                    swap[seg.map] = seg.plan
+                    fixed2[i] = seg.leave
+                end
+            end
+            got = search(order, fixed2, swap, nil, nil, { [A] = plan2 })
+            if not got or #got.segments < 2 then return nil end
+            plan, ids, to = plan2, keepIds, keepTo
+        end
+        -- (a set on screen stays while it earns no less; a new one has to earn Zones.BORDER_GAIN more)
+        local kept = was and was.zone == A and within(ids, was.ids)
+        if got.xp < cand.xp or (not kept and got.xp <= cand.xp * (1 + Zones.BORDER_GAIN)) then return nil end
+        return got, { zone = A, ids = plan.borderIds, to = to, before = leaveKey, gain = math.floor(got.xp - cand.xp) }
+    end
+    if Zones.BORDER then
+        local got, b = takeAlong(best)
+        if got then
+            best, border = got, b
+            if opts.shown and best.segments[1].map == opts.shown then here = best.xp end
+        end
+    end
+
     -- Every ranked zone as the place to start: its route, then the best way on from where it is
     -- left, until the horizon. What a zone is worth then no longer hangs on one hour that the
     -- trip eats into: a short zone is not marked down for running out (the time left is spent in
@@ -1113,7 +1358,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     end
 
     local out = { horizon = H, xp = math.floor(best.xp), rate = best.xp / H * 3600, stay = single and math.floor(single.xp) or nil,
-        shown = opts.shown, here = here and math.floor(here) or nil, starts = starts, segments = {} }
+        shown = opts.shown, here = here and math.floor(here) or nil, starts = starts, segments = {}, border = border }
     if alt then
         out.alt = { map = alt.segments[1].map, name = Zones.Name(alt.segments[1].map), xp = math.floor(alt.xp),
             next = alt.segments[2] and alt.segments[2].map or nil }

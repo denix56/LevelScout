@@ -327,7 +327,9 @@ function R:value(node, skip, d)
     if not Planner.VALUE_CACHE then
         if node.kind == "W" then return taskTotals(node, skip, lv, self.fix) end
         if node.kind == "T" then
-            return Cost.INTERACT_SECONDS * self.talk, lv and Model.QuestXPAt(node.quest, lv) or (node.quest.xp or 0), 0
+            -- (the turn-in of a quest taken along to the next zone is no stop here: no time)
+            local s = node.quest.border and 0 or Cost.INTERACT_SECONDS * self.talk
+            return s, lv and Model.QuestXPAt(node.quest, lv) or (node.quest.xp or 0), 0
         end
         return Cost.INTERACT_SECONDS * self.talk, 0, 0
     end
@@ -349,7 +351,8 @@ function R:value(node, skip, d)
     if isW then
         s, x, k, a = taskTotals(node, nil, lv, self.fix)
     elseif node.kind == "T" then
-        s, x, k = Cost.INTERACT_SECONDS * self.talk, lv and Model.QuestXPAt(node.quest, lv) or (node.quest.xp or 0), 0
+        s = node.quest.border and 0 or Cost.INTERACT_SECONDS * self.talk
+        x, k = lv and Model.QuestXPAt(node.quest, lv) or (node.quest.xp or 0), 0
     else
         s, x, k = Cost.INTERACT_SECONDS * self.talk, 0, 0
     end
@@ -470,6 +473,7 @@ function R:service(node)
         return (taskTotals(node, nil, nil, self.fix))
     end
     if node.kind == "S" then return 0 end
+    if node.kind == "T" and node.quest.border then return 0 end
     return Cost.INTERACT_SECONDS * self.talk
 end
 
@@ -549,6 +553,20 @@ function R:bounds(node, noGate)
             local at = self:gateIndex(g)
             if not at then lo = hi + 1 elseif at > lo then lo = at end
         end
+    end
+    -- Quests taken along to the next zone (Planner.Plan's opts.border) are added after the first
+    -- stop, so where we stand now does not move them about, and before the stop the zone is left
+    -- after (`cap`); their turn-in of no time may also go right after that stop. When that stop is
+    -- the first one, they may go before it.
+    local b = self.borderFill
+    if b then
+        local cap = b.cap and self.pos[b.cap]
+        if cap then
+            local top = node.kind == "T" and cap or cap - 1
+            if top < hi then hi = top end
+        end
+        local from = min(2, (cap or #self.route + 1) - 1)
+        if lo < from then lo = from end
     end
     return lo, hi
 end
@@ -733,7 +751,7 @@ function R:add(m, private, undo)
     local p, d, g = self:best(m.T, lo, hi)
     self:place(m.T, p)
     undo[#undo + 1] = { "node", m.T }
-    return added + d + Cost.INTERACT_SECONDS * self.talk, gain, regret + g
+    return added + d + (m.border and 0 or Cost.INTERACT_SECONDS * self.talk), gain, regret + g
 end
 
 function R:rollback(m, undo)
@@ -1249,6 +1267,75 @@ local function listEntry(m, reason)
         reason = reason or m.detail, loc = m.pickup, at = m.pickupName, xp = m.xp }
 end
 
+-- The stop of the route with this order key ("P:12", "T:12", "W:m200"), or nil.
+local function nodeOfKey(r, key)
+    if not key then return nil end
+    for i = 2, #r.route do
+        local n = r.route[i]
+        local k = n.kind == "W" and ("W:" .. n.key) or (n.kind .. ":" .. n.quest.id)
+        if k == key then return n end
+    end
+    return nil
+end
+
+-- Quests taken along to the next zone (Planner.Plan's opts.border): accepted here, their work on
+-- this map done here, the rest (their work elsewhere and the turn-in) left to the zone they are
+-- finished in. Here such a quest pays nothing (its XP is kept as `borderXP`, for the check that
+-- drops slow quests); its turn-in is a stop of no time at its last place here, and no step (see
+-- describe). One with nothing to do here (in the log, its work and turn-in elsewhere) is taken
+-- out; so is every quest that follows one of them (its prerequisite is turned in elsewhere).
+-- Returns the candidates left and the ids of those taken out with nothing to do here, sorted.
+local function takeAlong(candidates, zoneMap, border, lists, checkpoint)
+    local want = {}
+    for _, id in ipairs(border.ids or {}) do want[id] = true end
+    local keep, nothingHere, goneIds = {}, {}, {}
+    for _, m in ipairs(candidates) do
+        if checkpoint then checkpoint() end
+        if want[m.id] and m.status == "ok" and not m.gate and not m.dungeon and not m.keep then
+            local here, left = {}, 0
+            for _, t in ipairs(m.tasks) do
+                if t.loc and t.loc.map == zoneMap then here[#here + 1] = t else left = left + 1 end
+            end
+            if not m.pickup and #here == 0 then
+                nothingHere[m] = true
+                goneIds[#goneIds + 1] = m.id
+                lists.skipped[#lists.skipped + 1] = listEntry(m, "finished in the next zone")
+            else
+                m.border, m.borderTo, m.borderLeft, m.borderXP = true, border.to and border.to[m.id], left, m.xp or 0
+                m.xp, m.xpLow, m.xpHigh = 0, nil, nil
+                m.tasks = here
+                local last = here[#here]
+                m.turnin, m.turninName, m.turninGuessed = (last and last.loc) or m.pickup, nil, nil
+                keep[#keep + 1] = m
+            end
+        else
+            keep[#keep + 1] = m
+        end
+    end
+    -- what follows a quest taken along waits for its turn-in elsewhere (and so on down the chain)
+    local changed = true
+    while changed do
+        changed = false
+        for i = #keep, 1, -1 do
+            local m, waits = keep[i], false
+            for _, list in ipairs({ m.deps or {}, m.baseDeps or {}, m.anyDeps or {} }) do
+                for _, d in ipairs(list) do
+                    if d.border or nothingHere[d] then waits = true end
+                end
+            end
+            if waits then
+                table.remove(keep, i)
+                nothingHere[m], changed = true, true
+                local e = listEntry(m, "follows a quest finished in the next zone")
+                if m.borderXP then e.xp = m.borderXP end
+                lists.later[#lists.later + 1] = e
+            end
+        end
+    end
+    table.sort(goneIds)
+    return keep, goneIds
+end
+
 -- Models of every quest relevant to the zone, sorted into routable ones and the lists.
 local function collect(zoneMap, ctx, lists)
     local Data = ns.Data
@@ -1606,11 +1693,13 @@ local function describe(r, plan)
         else
             local m = node.quest
             step.kind = node.kind == "P" and "accept" or "turnin"
-            step.action, step.seconds = step.kind, Cost.INTERACT_SECONDS * r.talk
+            step.action, step.seconds = step.kind, (node.kind == "T" and m.border) and 0 or Cost.INTERACT_SECONDS * r.talk
             step.xp = node.kind == "T" and (lv and Model.QuestXPAt(m, lv) or (m.xp or 0)) or 0
             step.needLevel = m.gate and (r.level + m.gate) or nil
             step.target = node.kind == "P" and m.pickupName or m.turninName
             step.keep = m.keep or nil -- kept in the log after a dungeon run (its turn-in goes below)
+            step.borderTo = node.kind == "P" and m.border and m.borderTo or nil -- accepted here, finished in that zone (a map)
+            step.border = (node.kind == "T" and m.border) or nil -- (its turn-in elsewhere: no step, see below)
             step.fromBag = node.kind == "P" and m.fromBag or nil -- started from an item in the bags: no place to go
             step.guessed = node.kind == "T" and m.turninGuessed or nil
             step.quests = { { id = m.id, name = m.name, level = m.level } }
@@ -1634,11 +1723,12 @@ local function describe(r, plan)
         if d > 0 and (r.level + d) ~= (lv or r.level) then step.levelUp = r.level + d end -- this step levels us up
         steps[#steps + 1] = step
     end
-    -- The turn-in of a quest kept in the log after a dungeon run (Model: `keep`) is no step: its
-    -- time goes to the step after it, so every step's `t` stays as it was.
+    -- The turn-in of a quest kept in the log after a dungeon run (Model: `keep`) and the turn-in
+    -- of a quest taken along to the next zone (Planner.Plan's opts.border) are no steps: their
+    -- time goes to the step after them, so every step's `t` stays as it was.
     for i = #steps, 1, -1 do
         local s = steps[i]
-        if s.kind == "turnin" and s.keep then
+        if s.kind == "turnin" and (s.keep or s.border) then
             local after = steps[i + 1]
             if after then after.travel = after.travel + s.travel + s.seconds end
             remove(steps, i)
@@ -1714,15 +1804,27 @@ end
 ---                  the front of the route, in this order, as far as the order rules and levels
 ---                  allow (the player stands at them now),
 ---          first = with a seed: the key of the stop to put first (the step in hand), when the
----                  order rules and levels allow }
+---                  order rules and levels allow,
+---          border = with a seed: quests taken along to the next zone (Zones.Itinerary, Zones.WithBorder):
+---                   { zone, ids = { questId, ... }, to = { [questId] = map where it is turned in },
+---                   before = key of the stop the zone is left after (optional) }. Only their stops on
+---                   this map are added (after the first stop, before `before`); nothing else is added
+---                   and only they may be dropped as slow. Their turn-in is no step here }
 --- Returns { zone, steps, order, rate, score, peak, seconds, xp, lists, quests, fronted = the
---- keys of `front` that were brought forward (nil: none) }.
+--- keys of `front` that were brought forward (nil: none),
+--- border = { [id] = { to, left = objectives left after this zone, gone = true when nothing of it
+--- is done here } }, borderIds = those ids, sorted (only with opts.border) }.
 function Planner.Plan(zoneMap, ctx, opts)
     opts = opts or {}
     local checkpoint = ctx.checkpoint
     local lists = { later = {}, group = {}, skipped = {}, unlocated = {}, ignored = {}, unconfirmed = {} }
     ctx.near = ctx.near or ctx.start
     local candidates, _, inputs = collect(zoneMap, ctx, lists)
+    -- Quests taken along to the next zone (opts.border, with a seed: Zones.Itinerary and
+    -- Zones.WithBorder): only their part on this map is planned here, and nothing else is added.
+    local border = opts.seed and opts.border or nil
+    local borderGone
+    if border then candidates, borderGone = takeAlong(candidates, zoneMap, border, lists, checkpoint) end
     -- Always in the same order: a table keyed by quest models is walked in memory order, which
     -- differs from one run to the next, and the first quest tried at a camp decides where
     -- that camp's stop is.
@@ -1803,7 +1905,7 @@ function Planner.Plan(zoneMap, ctx, opts)
     -- taken) goes earlier. With `floorRatio`, quests paying less than that stay out. For a
     -- dungeon (`leadUp`), the quests leading up to it are placed first, then the dungeon's own
     -- quests around the one run.
-    local function fill(regretWeight, floorRatio, leadUp, fresh)
+    local function fill(regretWeight, floorRatio, leadUp, fresh, only)
         local parked, retried, scans = {}, false, 0
         while true do
             local best, bestKey
@@ -1811,6 +1913,7 @@ function Planner.Plan(zoneMap, ctx, opts)
             for _, m in ipairs(candidates) do
                 -- (`fresh` = quests a search round just took out: the others that are out are tried on the first pass only)
                 if remaining[m] and not parked[m] and not (fresh and not fresh[m] and scans > 1)
+                    and not (only and not m.border)
                     and not exclusiveWith(m, routedIds) and ready(r, m) and not (leadUp and m.dungeon) then
                     local added, gain, regret = r:try(m, false)
                     if added then
@@ -1888,7 +1991,7 @@ function Planner.Plan(zoneMap, ctx, opts)
         for _, m in ipairs(candidates) do byId[m.id] = m end
         local open = {} -- quests whose P is placed (or that need none) and whose T is not
         for _, m in ipairs(candidates) do
-            if not m.pickup then m.W = {}; open[m] = true end
+            if not m.pickup and not m.border then m.W = {}; open[m] = true end
         end
         local function append(node)
             r.route[#r.route + 1] = node
@@ -1911,7 +2014,7 @@ function Planner.Plan(zoneMap, ctx, opts)
             local kind, rest = key:match("^(%a):(.+)$")
             if kind == "P" then
                 local m = byId[tonumber(rest)]
-                if m and m.pickup and remaining[m] and not m.P and ready(r, m) then
+                if m and m.pickup and remaining[m] and not m.P and ready(r, m) and not m.border then
                     m.P = r:node("P", m.pickup)
                     m.P.quest, m.W = m, {}
                     append(m.P)
@@ -1957,7 +2060,17 @@ function Planner.Plan(zoneMap, ctx, opts)
 
     if opts.seed then rebuild(opts.seed) end
 
-    if ctx.chain then fillChain() else fill(0, nil, ctx.dungeon ~= nil) end
+    if ctx.chain then
+        fillChain()
+    elseif border then
+        -- only the quests taken along, after the first stop and before the stop the zone is left
+        -- after (see R:bounds)
+        r.borderFill = { cap = nodeOfKey(r, border.before) }
+        fill(0, nil, false, nil, true)
+        r.borderFill = nil
+    else
+        fill(0, nil, ctx.dungeon ~= nil)
+    end
 
     -- Stops the player stands at now, further down the kept route: brought to its front, each
     -- after the one before, when nothing they wait for (an accept, the work, a prerequisite's
@@ -2092,8 +2205,14 @@ function Planner.Plan(zoneMap, ctx, opts)
             if remaining[m] and not exclusiveWith(m, routedIds) then
                 -- after a search, a quest that fits but stayed out is one that did not pay
                 local added, gain
-                if searched and ready(r, m) then added, gain = r:try(m, false) end
-                if m.gate then
+                -- (a route kept with quests taken along adds nothing else: what stayed out is weighed
+                -- as after a search)
+                if (searched or border) and ready(r, m) and not m.border then added, gain = r:try(m, false) end
+                if m.border then
+                    local e = listEntry(m, "not before leaving for the next zone")
+                    e.xp = m.borderXP
+                    lists.skipped[#lists.skipped + 1] = e
+                elseif m.gate then
                     lists.later[#lists.later + 1] = listEntry(m) -- the route does not reach its level (or not in time)
                 elseif added then
                     lists.skipped[#lists.skipped + 1] = listEntry(m,
@@ -2115,9 +2234,12 @@ function Planner.Plan(zoneMap, ctx, opts)
             if t0 <= 0 then break end
             local worst, worstRatio
             for _, m in ipairs(candidates) do
-                if r.routed[m] and not m.must and #(m.dependents or {}) == 0 then
+                -- (with quests taken along only they may go: the rest of the route is kept as it is)
+                if r.routed[m] and not m.must and #(m.dependents or {}) == 0 and (not border or m.border) then
                     local t1, x1 = r:totals(m)
                     local ratio = (x0 - x1) / max(t0 - t1, 1)
+                    -- (a quest taken along pays where it is finished: that XP against its time here)
+                    if m.borderXP then ratio = (x0 - x1 + m.borderXP) / max(t0 - t1, 1) end
                     local rest = x1 / max(t1, 1) -- what the route earns per second without this quest
                     if ratio < rest * Planner.PRUNE_RATIO and (not worst or ratio < worstRatio
                         or (ratio == worstRatio and m.id < worst.id)) then
@@ -2127,8 +2249,9 @@ function Planner.Plan(zoneMap, ctx, opts)
                 if checkpoint then checkpoint() end
             end
             if not worst then break end
-            lists.skipped[#lists.skipped + 1] = listEntry(worst,
-                string.format("slow: about %d XP per hour here", floor(worstRatio * 3600)))
+            local e = listEntry(worst, string.format("slow: about %d XP per hour here", floor(worstRatio * 3600)))
+            if worst.borderXP then e.xp = worst.borderXP end -- (the XP it pays where it is finished)
+            lists.skipped[#lists.skipped + 1] = e
             r:removeQuest(worst)
             nRouted = nRouted - 1
         end
@@ -2188,6 +2311,21 @@ function Planner.Plan(zoneMap, ctx, opts)
     end
 
     local plan = finish(searched)
+    if border then
+        -- what is taken along (for Zones' `project`): what is left of each after this zone
+        plan.border, plan.borderIds = {}, {}
+        for _, m in ipairs(candidates) do
+            if m.border and r.routed[m] then
+                plan.border[m.id] = { to = m.borderTo, left = m.borderLeft }
+                plan.borderIds[#plan.borderIds + 1] = m.id
+            end
+        end
+        for _, id in ipairs(borderGone) do
+            plan.border[id] = { to = border.to and border.to[id], left = 0, gone = true }
+            plan.borderIds[#plan.borderIds + 1] = id
+        end
+        table.sort(plan.borderIds)
+    end
     if fronted then -- (what the tidy-up kept of it)
         local kept, inPlan = {}, {}
         for _, key in ipairs(plan.order) do inPlan[key] = true end

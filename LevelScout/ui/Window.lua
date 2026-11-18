@@ -229,6 +229,7 @@ local function grouped(steps)
             last.xp = last.xp + step.xp
             last.levelUp = step.levelUp or last.levelUp
             last.needLevel = step.needLevel or last.needLevel
+            last.borderTo = last.borderTo or step.borderTo
             for _, q in ipairs(step.quests) do last.quests[#last.quests + 1] = q end
         else
             local copy = {}
@@ -256,6 +257,7 @@ end
 local function zoneName(map)
     return (ns.Zones and ns.Zones.Name(map)) or Game.MapName(map) or ("Map " .. tostring(map))
 end
+Format.MapName = zoneName
 
 -- A step outside the zone being planned (a giver in a city or the next zone, a turn-in far
 -- away) names its zone in a pale mint (C.place), so it is seen before setting off. `zone` is
@@ -559,6 +561,11 @@ local function zoneRows(view)
                         lines[#lines + 1] = { string.format("    %d quest%s brought along and turned in there", seg.carried, seg.carried == 1 and "" or "s"),
                             right = Format.Number(seg.carriedXP or 0) .. " XP", color = C.faint }
                     end
+                end
+                if it.border then
+                    local n = #it.border.ids
+                    lines[#lines + 1] = { string.format("%d quest%s accepted in %s and finished later", n, n == 1 and "" or "s",
+                        it.segments[1].name or "the first zone"), right = "+" .. Format.Number(it.border.gain or 0) .. " XP", color = C.faint }
                 end
                 if it.stay then lines[#lines + 1] = { "Best single zone", right = Format.Number(it.stay) .. " XP" } end
                 if it.here and it.segments[1].map ~= view.zone then
