@@ -567,6 +567,10 @@ local function zoneRows(view)
                     lines[#lines + 1] = { string.format("%d quest%s accepted in %s and finished later", n, n == 1 and "" or "s",
                         it.segments[1].name or "the first zone"), right = "+" .. Format.Number(it.border.gain or 0) .. " XP", color = C.faint }
                 end
+                if it.seam then
+                    lines[#lines + 1] = { string.format("The way from %s into %s planned together", it.segments[1].name or "the first zone",
+                        it.segments[2] and it.segments[2].name or "the next zone"), right = "+" .. Format.Number(it.seam.gain or 0) .. " XP", color = C.faint }
+                end
                 if it.stay then lines[#lines + 1] = { "Best single zone", right = Format.Number(it.stay) .. " XP" } end
                 if it.here and it.segments[1].map ~= view.zone then
                     lines[#lines + 1] = { "Starting with " .. (view.zoneName or "the zone shown"), right = Format.Number(it.here) .. " XP" }

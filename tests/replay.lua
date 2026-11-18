@@ -204,7 +204,8 @@ function R.Remake(ns, ctx, ranked, made, zone)
     local Z, S = ns.Zones, ns.Snapshot
     if not zone then return nil, "no zone was shown" end
     if not made or made.kind == "chain" then return nil, "a class quest chain was shown" end
-    -- the route without the quests taken along to the next zone (made.border: laid over it below)
+    -- the route without the way across planned together and the quests taken along to the next zone
+    -- (made.seam and made.border: laid over it below)
     local base
     if made.kind == "ranked" then
         for _, z in ipairs(ranked) do
@@ -219,10 +220,14 @@ function R.Remake(ns, ctx, ranked, made, zone)
     else
         return nil, "unknown way of making the route: " .. tostring(made.kind)
     end
-    if made.border then
-        return Z.WithBorder(zone, ctx, base, made.border, made.borderFront and S.SplitList(made.borderFront) or nil), nil, base
+    local plain = base
+    if made.seam then
+        base = Z.WithSeam(zone, ctx, base, made.seam, made.seamFront and S.SplitList(made.seamFront) or nil)
     end
-    return base, nil, base
+    if made.border then
+        return Z.WithBorder(zone, ctx, base, made.border, made.borderFront and S.SplitList(made.borderFront) or nil), nil, plain
+    end
+    return base, nil, plain
 end
 
 --- Plan the snapshot again as the Engine's full run does (see Engine.lua, run and
@@ -254,7 +259,8 @@ function R.Replay(ns, snap, opts)
             for i, map in ipairs(snap.itineraryWas) do was.segments[i] = { map = map } end
         end
         itinerary = Z.Itinerary(state, ictx, ranked, { shown = zone, plan = base or plan, was = was,
-            border = snap.borderWas, borderPlan = base and plan ~= base and plan or nil })
+            border = snap.borderWas, borderPlan = (base and plan ~= base and plan.base) and plan or nil,
+            seam = snap.seamWas, seamPlan = Z.SeamLayer(plan) })
     end
     local t3 = os.clock()
     local moveOn = Z.MoveOn(plan, ranked, snap.moveOnWas, itinerary)

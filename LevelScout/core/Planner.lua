@@ -331,6 +331,7 @@ function R:value(node, skip, d)
             local s = node.quest.border and 0 or Cost.INTERACT_SECONDS * self.talk
             return s, lv and Model.QuestXPAt(node.quest, lv) or (node.quest.xp or 0), 0
         end
+        if node.kind == "E" then return 0, 0, 0 end -- (the end of a seam route: a place, no stop)
         return Cost.INTERACT_SECONDS * self.talk, 0, 0
     end
     local isW = node.kind == "W"
@@ -353,6 +354,8 @@ function R:value(node, skip, d)
     elseif node.kind == "T" then
         s = node.quest.border and 0 or Cost.INTERACT_SECONDS * self.talk
         x, k = lv and Model.QuestXPAt(node.quest, lv) or (node.quest.xp or 0), 0
+    elseif node.kind == "E" then
+        s, x, k = 0, 0, 0
     else
         s, x, k = Cost.INTERACT_SECONDS * self.talk, 0, 0
     end
@@ -472,7 +475,7 @@ function R:service(node)
         if Planner.VALUE_CACHE then return (self:value(node, nil, 0)) end
         return (taskTotals(node, nil, nil, self.fix))
     end
-    if node.kind == "S" then return 0 end
+    if node.kind == "S" or node.kind == "E" then return 0 end
     if node.kind == "T" and node.quest.border then return 0 end
     return Cost.INTERACT_SECONDS * self.talk
 end
@@ -542,6 +545,18 @@ local function orderRange(self, node, i, len)
     return lo, hi
 end
 
+-- The side of the crossing a stop of a seam route is on (Planner.Plan's opts.seam): its own, set
+-- when the route was rebuilt, else that of its quest (a camp: of its first quest; all quests at a
+-- camp are on one side, the far side's camps having keys of their own).
+local function seamSide(node)
+    local s = node.side
+    if s then return s end
+    local q = node.quest or (node.reqs and node.reqs[1] and node.reqs[1].quest)
+    s = q and q.seamSide
+    node.side = s
+    return s
+end
+
 -- Allowed insertion range for a node: it may go after route index lo..hi. With `noGate`, the
 -- order rules alone (the level a quest needs is then left to whoever judges the route).
 function R:bounds(node, noGate)
@@ -567,6 +582,22 @@ function R:bounds(node, noGate)
         end
         local from = min(2, (cap or #self.route + 1) - 1)
         if lo < from then lo = from end
+    end
+    -- The way across a zone border planned together (Planner.Plan's opts.seam): a stop stays on its
+    -- side of the crossing (`cross`: the route index of the last stop before it), and every stop goes
+    -- before the place the rest of the path starts at (`endNode`).
+    local c = self.cross
+    if c then
+        if seamSide(node) == "A" then
+            if c < hi then hi = c end
+        elseif c > lo then
+            lo = c
+        end
+        local e = self.endNode
+        if e then
+            local pe = self.pos[e] - 1
+            if pe < hi then hi = pe end
+        end
     end
     return lo, hi
 end
@@ -664,6 +695,8 @@ end
 function R:place(node, p)
     insert(self.route, p + 1, node)
     self:reindex(p + 1)
+    local c = self.cross -- (a seam route: one more stop before the crossing)
+    if c and seamSide(node) == "A" then self.cross = c + 1 end
     local t = self.touched -- repair log: the stops placed since a search round began
     if t then t[#t + 1] = node end
 end
@@ -673,6 +706,8 @@ function R:unplace(node)
     remove(self.route, p)
     self.pos[node] = nil
     self:reindex(p)
+    local c = self.cross
+    if c and p <= c then self.cross = c - 1 end
 end
 
 -- Add a quest to the route. Returns added seconds and gained XP, or nil when the order rules
@@ -969,6 +1004,37 @@ function R:goalWorth(overhead)
     return rate + v / Planner.MIN_HORIZON
 end
 
+-- The way across a zone border planned together (Planner.Plan's opts.seam): what the route is worth
+-- as the itinerary judges it, the XP inside the horizon (self.seam.horizon, seconds from the
+-- itinerary's start; `overhead` is when the route starts). Stops after the crossing (`cross`) are
+-- later by the zone switch (self.seam.switch). A work stop cut by the horizon counts for the share
+-- done. When the route ends inside the horizon, what follows it adds self.seam.tail(when, where).
+-- A route with a stop before its level is worth -1.
+function R:seamValue(overhead)
+    local sm = self.seam
+    local c = self:prefix(overhead)
+    local n = c.n
+    if not c.OK[n] then return -1 end
+    local T, X, D, H = c.T, c.X, c.D, sm.horizon
+    local cross, sw, route = self.cross or n, sm.switch or 0, self.route
+    for i = 2, n do
+        local t = T[i] + (i > cross and sw or 0)
+        if t > H then
+            local node, xp = route[i], X[i - 1]
+            if node.kind == "W" then
+                local s = self:value(node, nil, D[i - 1])
+                if s > 0 then
+                    local done = (H - (t - s)) / s
+                    if done > 0 then xp = xp + (X[i] - X[i - 1]) * min(1, done) end
+                end
+            end
+            return xp
+        end
+    end
+    local tEnd = T[n] + (n > cross and sw or 0)
+    return X[n] + (sm.tail and sm.tail(tEnd, route[n].loc) or 0)
+end
+
 -- The whole route as it stands, to come back to later.
 function R:snapshot()
     local s = { route = {}, reqs = {}, quests = {} }
@@ -1016,6 +1082,11 @@ function R:restore(s, candidates)
                 d.dependents[#d.dependents + 1] = m
             end
         end
+    end
+    if self.cross then -- (a seam route: the crossing is after the last stop of the first side)
+        local c = 1
+        for i = 2, #self.route do if seamSide(self.route[i]) == "A" then c = i end end
+        self.cross = c
     end
 end
 
@@ -1337,8 +1408,12 @@ local function takeAlong(candidates, zoneMap, border, lists, checkpoint)
 end
 
 -- Models of every quest relevant to the zone, sorted into routable ones and the lists.
-local function collect(zoneMap, ctx, lists)
+local function collect(zoneMap, ctx, lists, also)
     local Data = ns.Data
+    -- The way across a zone border planned together (Planner.Plan's opts.seam): the other zone's
+    -- quests are candidates too (`also`, maps).
+    local inZones = { [zoneMap] = true }
+    for _, map in ipairs(also or {}) do inZones[map] = true end
     local models, order, undecided, reds = {}, {}, {}, {}
     ctx.campKeys = {} -- camps (mob kinds, objects) the plan's quests use so far
     -- What the plan reads about quests (for ns.Memory): `ids` = every quest asked about (is it
@@ -1358,7 +1433,7 @@ local function collect(zoneMap, ctx, lists)
             local g = Model.Build(m.id, setmetatable({ level = need }, { __index = ctx }))
             if not g then return nil end
             if g.status == "ok" then
-                if not ctx.chain and g.pickup and g.pickup.map ~= zoneMap and g.pickup.map ~= ctx.startMap then return nil end
+                if not ctx.chain and g.pickup and not inZones[g.pickup.map] and g.pickup.map ~= ctx.startMap then return nil end
                 g.gate, g.needLevel, g.deps, g.anyDeps, g.baseDeps = d, need, m.deps, m.anyDeps, m.baseDeps
                 return g
             end
@@ -1409,6 +1484,16 @@ local function collect(zoneMap, ctx, lists)
     -- quest plan (ctx.chain) is built the same way from the chain's quests: those and their
     -- lead-up are the plan's must-dos (`must`), whatever they pay.
     local entries = Data.QuestsInZone(zoneMap) or {}
+    if also and #also > 0 and not (ctx.dungeon or ctx.chain) then
+        local merged, have = {}, {}
+        for _, e in ipairs(entries) do merged[#merged + 1] = e; have[e.id] = true end
+        for _, map in ipairs(also) do
+            for _, e in ipairs(Data.QuestsInZone(map) or {}) do
+                if not have[e.id] then merged[#merged + 1] = e; have[e.id] = true end
+            end
+        end
+        entries = merged
+    end
     if ctx.dungeon or ctx.chain then
         entries = {}
         local added = {}
@@ -1463,9 +1548,9 @@ local function collect(zoneMap, ctx, lists)
             end
         elseif not seen[id] then
             local m = Model.Build(id, ctx)
-            local here = m and m.turnin and m.turnin.map == zoneMap
+            local here = m and m.turnin and inZones[m.turnin.map]
             for _, t in ipairs(m and m.tasks or {}) do
-                if t.loc and t.loc.map == zoneMap then here = true end
+                if t.loc and inZones[t.loc.map] then here = true end
             end
             if not here and m and ctx.carried and ctx.carried[id] and entry.isComplete and m.turnin then here = true end
             if here then consider(id, m) end
@@ -1479,9 +1564,9 @@ local function collect(zoneMap, ctx, lists)
         if not seen[id] and not ctx.log[id] and not ctx.dungeon and not ctx.chain and Data.IsAvailable(id, ctx.avail) then
             seen[id] = true
             local m = Model.Build(id, ctx)
-            local here = m and m.zone == zoneMap or (m and m.turnin and m.turnin.map == zoneMap)
+            local here = m and inZones[m.zone] or (m and m.turnin and inZones[m.turnin.map])
             for _, t in ipairs(m and m.tasks or {}) do
-                if t.loc and t.loc.map == zoneMap then here = true end
+                if t.loc and inZones[t.loc.map] then here = true end
             end
             if here then consider(id, m) end
         end
@@ -1536,7 +1621,7 @@ local function collect(zoneMap, ctx, lists)
         local stops, maps = {}, {}
         for _, m in ipairs(order) do
             for _, t in ipairs(m.tasks) do
-                if t.loc and t.loc.map and t.loc.map ~= zoneMap then stops[#stops + 1] = t.loc; maps[t.loc.map] = true end
+                if t.loc and t.loc.map and not inZones[t.loc.map] then stops[#stops + 1] = t.loc; maps[t.loc.map] = true end
             end
         end
         for map in pairs(maps) do
@@ -1809,7 +1894,13 @@ end
 ---                   { zone, ids = { questId, ... }, to = { [questId] = map where it is turned in },
 ---                   before = key of the stop the zone is left after (optional) }. Only their stops on
 ---                   this map are added (after the first stop, before `before`); nothing else is added
----                   and only they may be dropped as slow. Their turn-in is no step here }
+---                   and only they may be dropped as slow. Their turn-in is no step here,
+---          exact = with a seed: the seed is the route as it is: nothing else is added and nothing
+---                  is dropped as slow (what is done or gone is left out, as always; what stayed out is
+---                  listed as after a search). Zones.WithSeam and the next zone of a way across,
+---          seam = the way across a zone border planned together (Zones.PlanSeam; no seed): see
+---                 seamSearch below. The result is then { zone, seam = (seamSearch's result or nil),
+---                 work } instead of a plan }
 --- Returns { zone, steps, order, rate, score, peak, seconds, xp, lists, quests, fronted = the
 --- keys of `front` that were brought forward (nil: none),
 --- border = { [id] = { to, left = objectives left after this zone, gone = true when nothing of it
@@ -1819,11 +1910,12 @@ function Planner.Plan(zoneMap, ctx, opts)
     local checkpoint = ctx.checkpoint
     local lists = { later = {}, group = {}, skipped = {}, unlocated = {}, ignored = {}, unconfirmed = {} }
     ctx.near = ctx.near or ctx.start
-    local candidates, _, inputs = collect(zoneMap, ctx, lists)
+    local candidates, _, inputs = collect(zoneMap, ctx, lists, opts.seam and opts.seam.also)
     -- Quests taken along to the next zone (opts.border, with a seed: Zones.Itinerary and
     -- Zones.WithBorder): only their part on this map is planned here, and nothing else is added.
     local border = opts.seed and opts.border or nil
     local borderGone
+    local exact = opts.seed and opts.exact or nil
     if border then candidates, borderGone = takeAlong(candidates, zoneMap, border, lists, checkpoint) end
     -- Always in the same order: a table keyed by quest models is walked in memory order, which
     -- differs from one run to the next, and the first quest tried at a camp decides where
@@ -1904,7 +1996,7 @@ function Planner.Plan(zoneMap, ctx, opts)
     -- With `regretWeight`, a quest that would lose much by waiting (its good place may be
     -- taken) goes earlier. With `floorRatio`, quests paying less than that stay out. For a
     -- dungeon (`leadUp`), the quests leading up to it are placed first, then the dungeon's own
-    -- quests around the one run.
+    -- quests around the one run. With `only` (a set of quests), only those are added.
     local function fill(regretWeight, floorRatio, leadUp, fresh, only)
         local parked, retried, scans = {}, false, 0
         while true do
@@ -1913,7 +2005,7 @@ function Planner.Plan(zoneMap, ctx, opts)
             for _, m in ipairs(candidates) do
                 -- (`fresh` = quests a search round just took out: the others that are out are tried on the first pass only)
                 if remaining[m] and not parked[m] and not (fresh and not fresh[m] and scans > 1)
-                    and not (only and not m.border)
+                    and not (only and not only[m])
                     and not exclusiveWith(m, routedIds) and ready(r, m) and not (leadUp and m.dungeon) then
                     local added, gain, regret = r:try(m, false)
                     if added then
@@ -2058,15 +2150,237 @@ function Planner.Plan(zoneMap, ctx, opts)
         end
     end
 
+    -- The way across a zone border planned together (opts.seam, from Zones.Itinerary through
+    -- Zones.PlanSeam). The route is the stretch around the crossing only: it starts where the first
+    -- zone's route is before the stretch (ctx is the character as they will be there), holds the
+    -- stretch's stops of both zones (sp.keysA, then sp.keysB; camps on the far side named "...@B") and
+    -- ends at the place the rest of the path starts at (sp.endLoc: `endNode`, no time). A stop stays on
+    -- its side of the crossing (`cross`, see R:bounds). Only quests done inside the stretch on one side
+    -- (sp.side "A"/"B") and those that may come in (sp.free) move; a quest done on both sides ("X"),
+    -- one that goes on after the stretch (sp.ghost: its stops here are kept, but belong to no planned
+    -- quest), and every quest those or the next zone's rest (sp.after) follow stay as they are. Judged
+    -- by R:seamValue. Returns { keysA, keysB (each side's keys as found, far-side names undone),
+    -- out (ids of moving quests left out), added (ids of quests that came in), start, value
+    -- (R:seamValue before and after), legStart, legBest (seconds of the leg across the crossing),
+    -- rounds, moving } or nil when the stretch cannot be rebuilt.
+    local function seamSearch()
+        local sp = opts.seam
+        local side, ghost, free = sp.side or {}, sp.ghost or {}, sp.free or {}
+        local byId = {}
+        for _, m in ipairs(candidates) do
+            byId[m.id] = m
+            local s = (side[m.id] == "A" or side[m.id] == "B") and side[m.id] or free[m.id]
+            if s and not ghost[m.id] then
+                m.seamSide = s
+                if s == "B" then -- (a camp on the far side is another stop than one of that name here)
+                    for _, t in ipairs(m.tasks) do
+                        if t.key and not t.key:find("@B", 1, true) then t.key = t.key .. "@B" end
+                    end
+                end
+            end
+        end
+        local route, pos = r.route, r.pos
+        local part, open = "A", {}
+        for _, m in ipairs(candidates) do
+            if (side[m.id] or ghost[m.id]) and not m.pickup then m.W = {}; open[m] = true end
+        end
+        local function append(node)
+            route[#route + 1] = node
+            pos[node] = #route
+            node.side = part
+        end
+        local function onSide(key) -- a task's key as it is named on this part's side
+            if part == "B" and not key:find("@B", 1, true) then return key .. "@B" end
+            return key
+        end
+        local function attach(m, task, key)
+            local node = r.taskNodes[key]
+            if not node or not pos[node] then
+                node = r:node("W", task.loc, key)
+                node.mob = task.kills ~= nil
+                r:setReqs(node, {})
+                r.taskNodes[key], r.nodeCache[key] = node, node
+                append(node)
+            end
+            local req = task.req
+            if not req or req.quest ~= m then req = { quest = m, task = task }; task.req = req end
+            r:addReq(node, req)
+            if not ghost[m.id] then m.W[#m.W + 1] = node end
+            task.placed = true
+        end
+        local function step(key)
+            local kind, rest = key:match("^(%a):(.+)$")
+            if kind == "P" then
+                local m = byId[tonumber(rest)]
+                if m and (side[m.id] or ghost[m.id]) and m.pickup and not open[m] and not r.routed[m] and ready(r, m) then
+                    local node = m.nodeP or r:node("P", m.pickup)
+                    m.nodeP, node.quest = node, m
+                    if not ghost[m.id] then m.P = node end
+                    m.W = m.W or {}
+                    append(node)
+                    open[m] = true
+                end
+            elseif kind == "W" then
+                local base, priv = rest:match("^([^#]*)(.*)$")
+                local jk = onSide(base) .. priv
+                for _, m in ipairs(candidates) do
+                    if open[m] then
+                        for _, task in ipairs(m.tasks) do
+                            if not task.placed and task.key then
+                                local tk = onSide(task.key)
+                                if tk == jk or (tk .. "#" .. m.id) == jk then
+                                    task.key = tk
+                                    attach(m, task, jk)
+                                end
+                            end
+                        end
+                    end
+                end
+            elseif kind == "T" then
+                local m = byId[tonumber(rest)]
+                if m and open[m] and not ghost[m.id] then
+                    for _, task in ipairs(m.tasks) do
+                        if not task.placed and task.key then
+                            local tk = onSide(task.key)
+                            task.key = tk
+                            attach(m, task, tk .. "#" .. m.id)
+                        end
+                    end
+                    local node = m.nodeT or r:node("T", m.turnin)
+                    m.nodeT, node.quest, m.T = node, m, node
+                    append(node)
+                    open[m] = nil
+                    r.routed[m], remaining[m], routedIds[m.id] = true, nil, true
+                    for _, d in ipairs(m.deps or {}) do
+                        d.dependents = d.dependents or {}
+                        d.dependents[#d.dependents + 1] = m
+                    end
+                end
+            end
+        end
+        for _, key in ipairs(sp.keysA or {}) do step(key); if checkpoint then checkpoint() end end
+        part = "B"
+        for _, key in ipairs(sp.keysB or {}) do step(key); if checkpoint then checkpoint() end end
+        -- a quest started in the stretch and not finished there (and not one that goes on after it): out again
+        for _, m in ipairs(candidates) do
+            if open[m] and not ghost[m.id] then
+                if m.P or #(m.W or {}) > 0 then r:removeQuest(m) else m.W = nil end
+                open[m] = nil
+            end
+        end
+        if sp.endLoc then
+            local e = r:node("E", sp.endLoc)
+            route[#route + 1] = e
+            pos[e] = #route
+            e.side = "B"
+            r.endNode = e
+        end
+        r:reindex(1)
+        for _, m in ipairs(candidates) do
+            for _, task in ipairs(m.tasks) do task.placed = nil end
+        end
+        local c = 1
+        for i = 2, #r.route do if r.route[i].side == "A" then c = i end end
+        r.cross = c
+        if not r:valid() then return nil end
+        -- what stays as it is: a quest done on both sides, and every quest that one of those, one going
+        -- on after the stretch or one of the next zone's rest follows (taking it out takes those along)
+        local fixed = {}
+        for _, m in ipairs(candidates) do
+            if side[m.id] == "X" and r.routed[m] then fixed[m] = true end
+        end
+        for _, m in ipairs(candidates) do
+            if ghost[m.id] or (sp.after and sp.after[m.id]) then
+                for _, list in ipairs({ m.deps or {}, m.baseDeps or {}, m.anyDeps or {} }) do
+                    for _, d in ipairs(list) do if r.routed[d] then fixed[d] = true end end
+                end
+            end
+        end
+        local changed = true
+        while changed do
+            changed = false
+            for _, m in ipairs(candidates) do
+                if fixed[m] then
+                    for _, d in ipairs(m.deps or {}) do
+                        if r.routed[d] and not fixed[d] then fixed[d], changed = true, true end
+                    end
+                end
+            end
+            if checkpoint then checkpoint() end
+        end
+        -- what moves: quests done on one side (in the route or not) and those that may come in
+        local only, list = {}, {}
+        for _, m in ipairs(candidates) do
+            if m.seamSide and not fixed[m] then only[m] = true; list[#list + 1] = m end
+        end
+        -- a quest before the level it needs: out again (one that stays: the stretch cannot be planned)
+        while true do
+            local m = r:brokenGate()
+            if not m then break end
+            if not only[m] then return nil end
+            takeOut(m)
+        end
+        r.seam = { horizon = sp.horizon, switch = sp.switch or 0, tail = sp.tail, scale = 1 }
+        local start = r:seamValue(opts.overhead)
+        local _, x0 = r:totals()
+        r.seam.scale = max(x0, 1) -- (the search's margins: a share of what the stretch earns)
+        local cr = r.cross
+        local legStart = cr < #r.route and r:tt(r.route[cr], r.route[cr + 1]) or 0
+        local found
+        if (sp.rounds or 0) > 0 then
+            -- the quests that may come in, where they pay as a search round would take them back:
+            -- kept when the stretch is worth more for it
+            local snap = r:snapshot()
+            local t, x = r:totals()
+            fill(0, Planner.PRUNE_RATIO * x / max(t, 1), nil, nil, only)
+            if not (r:seamValue(opts.overhead) > start) then r:restore(snap, candidates); sync() end
+            found = ns.Search.Run({
+                r = r, candidates = list, overhead = opts.overhead, rounds = sp.rounds, work = sp.work,
+                seed = sp.seed or 1, warm = true, checkpoint = checkpoint,
+                fill = function(regretWeight, floorRatio, fresh) fill(regretWeight, floorRatio, nil, fresh, only) end,
+                takeOut = function(m, onOut) if only[m] then takeOut(m, onOut) end end,
+                restore = function(s) r:restore(s, candidates); sync() end,
+            })
+        end
+        local keysA, keysB = {}, {}
+        for i = 2, #r.route do
+            local n = r.route[i]
+            if n.kind ~= "E" then
+                local key = n.kind == "W" and ("W:" .. (n.key:gsub("@B", "", 1))) or (n.kind .. ":" .. n.quest.id)
+                if i <= r.cross then keysA[#keysA + 1] = key else keysB[#keysB + 1] = key end
+            end
+        end
+        local outIds, added = {}, {}
+        for _, m in ipairs(list) do
+            if not r.routed[m] then
+                if side[m.id] then outIds[#outIds + 1] = m.id end
+            elseif free[m.id] then
+                added[#added + 1] = m.id
+            end
+        end
+        cr = r.cross
+        return { keysA = keysA, keysB = keysB, out = outIds, added = added, start = start,
+            value = r:seamValue(opts.overhead), rounds = found and found.rounds or 0, moving = #list,
+            legStart = legStart, legBest = cr < #r.route and r:tt(r.route[cr], r.route[cr + 1]) or 0 }
+    end
+
+    if opts.seam then
+        return { zone = zoneMap, seam = seamSearch(), work = r.work }
+    end
+
     if opts.seed then rebuild(opts.seed) end
 
-    if ctx.chain then
+    if exact then
+        -- (the seed is the route: nothing else is added)
+    elseif ctx.chain then
         fillChain()
     elseif border then
         -- only the quests taken along, after the first stop and before the stop the zone is left
         -- after (see R:bounds)
+        local taken = {}
+        for _, m in ipairs(candidates) do if m.border then taken[m] = true end end
         r.borderFill = { cap = nodeOfKey(r, border.before) }
-        fill(0, nil, false, nil, true)
+        fill(0, nil, false, nil, taken)
         r.borderFill = nil
     else
         fill(0, nil, ctx.dungeon ~= nil)
@@ -2206,8 +2520,8 @@ function Planner.Plan(zoneMap, ctx, opts)
                 -- after a search, a quest that fits but stayed out is one that did not pay
                 local added, gain
                 -- (a route kept with quests taken along adds nothing else: what stayed out is weighed
-                -- as after a search)
-                if (searched or border) and ready(r, m) and not m.border then added, gain = r:try(m, false) end
+                -- as after a search; an exact seed, too)
+                if (searched or border or exact) and ready(r, m) and not m.border then added, gain = r:try(m, false) end
                 if m.border then
                     local e = listEntry(m, "not before leaving for the next zone")
                     e.xp = m.borderXP
@@ -2229,7 +2543,8 @@ function Planner.Plan(zoneMap, ctx, opts)
         -- plan simply does not spend time on them.
         local nRouted = 0
         for _ in pairs(r.routed) do nRouted = nRouted + 1 end
-        while nRouted > 1 do
+        -- (an exact seed keeps every quest it has)
+        while nRouted > 1 and not exact do
             local t0, x0 = r:totals()
             if t0 <= 0 then break end
             local worst, worstRatio

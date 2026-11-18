@@ -22,6 +22,7 @@
 --             zones shown before, and { suggest, map } of the banner before)
 --   borderWas the set of quests taken along to the next zone that was on screen before the run
 --             ({ zone, ids, to, before }, see Zones.Itinerary)
+--   seamWas   the way across planned together that was on screen before the run (see Zones.Itinerary)
 --   shown     what the addon showed for that run (Snapshot.View): ranked, plan (and how it was
 --             made), itinerary, moveOn, chain
 --   before    a light view of what was on screen when the command was typed
@@ -276,7 +277,9 @@ end
 ---   { kind = "ranked" }                         the very plan of a ranked zone
 ---   { kind = "fresh", warm, weights }           planned for the zone on its own
 --- With `border`, `borderFront` besides: quests taken along to the next zone, laid over the route
---- made by the rest of the recipe (Zones.WithBorder).
+--- made by the rest of the recipe (Zones.WithBorder). With `seam`, `seamFront`: the way across planned
+--- together, laid over the route made by the rest of the recipe (Zones.WithSeam), under the quests
+--- taken along.
 function Snapshot.Made(plan, ranked)
     if not plan then return nil end
     if plan.base and plan.seedBorder then
@@ -284,6 +287,13 @@ function Snapshot.Made(plan, ranked)
         local made = Snapshot.Made(plan.base, ranked) or {}
         made.border = Snapshot.Copy(plan.seedBorder)
         made.borderFront = Snapshot.JoinList(plan.seedFront)
+        return made
+    end
+    if plan.seamBase and plan.seamRecipe then
+        -- the way across planned together: the route without it, made as it was, then it over it
+        local made = Snapshot.Made(plan.seamBase, ranked) or {}
+        made.seam = Snapshot.Copy(plan.seamRecipe)
+        made.seamFront = Snapshot.JoinList(plan.seedFront)
         return made
     end
     if plan.chain then return { kind = "chain" } end
