@@ -667,4 +667,96 @@ H.suite("Engine and window (real data)", function()
             ok(not (r:IsShown() and r.model and (r.model.detail or ""):find("flight paths not known", 1, true)), "no row says it")
         end
     end)
+    test("quests taken along: a malformed saved set is dropped, a set is laid over the route and forgotten with the zone", function()
+        local ns = E.installGame()
+        M.set("LevelScoutDB", nil)
+        M.set("LevelScoutCharDB", { border = { zone = "x", ids = { 1 }, to = {} } })
+        E.noSearch(ns)
+        ns.Engine.AUTO_SNAPSHOT = false
+        M.login()
+        ok(M.settle(), "planning finishes")
+        eq(LevelScoutCharDB.border, nil, "a malformed set is dropped at login")
+        ns = E.start()
+        ns.Zones.SEAM = false -- (this test is about the quests taken along alone)
+        local view = ns.Engine.view
+        local id
+        for _, e in ipairs(view.plan.lists.skipped) do
+            if e.loc and e.loc.map == view.zone then id = e.id; break end
+        end
+        ok(id, "the shown route leaves a quest of its zone out")
+        local function has(plan, key)
+            for _, k in ipairs(plan.order) do if k == key then return true end end
+            return false
+        end
+        ns.Zones.BORDER = false
+        ns.Engine.chardb.border = { zone = view.zone, ids = { id }, to = { [id] = 1453 } }
+        ns.Engine.Replan()
+        ok(M.settle())
+        eq(view.plan.base, nil, "the flag off: nothing is laid over the route")
+        ns.Zones.BORDER = true
+        ns.Engine.chardb.border = { zone = view.zone, ids = { id }, to = { [id] = 1453 } }
+        ns.Engine.Replan()
+        ok(M.settle())
+        ok(has(view.plan, "P:" .. id), "the accept is in the shown route")
+        ok(view.plan.base, "made over the route without it")
+        ok(not has({ order = ns.Engine.chardb.route.order }, "P:" .. id), "the route saved with the character is the one without it (the set is laid over it again)")
+        local other
+        for _, z in ipairs(view.ranked) do
+            if z.map > 0 and z.map ~= view.zone then other = z.map; break end
+        end
+        ok(other, "another zone is ranked")
+        ns.Engine.SetZone(other)
+        ok(M.settle())
+        eq(ns.Engine.chardb.border, nil, "choosing a zone forgets the set")
+    end)
+    test("the way across: a malformed saved one is dropped, one is laid over the route and forgotten with the zone", function()
+        local ns = E.installGame()
+        M.set("LevelScoutDB", nil)
+        M.set("LevelScoutCharDB", { seam = { zone = "x" } })
+        E.noSearch(ns)
+        ns.Engine.AUTO_SNAPSHOT = false
+        M.login()
+        ok(M.settle(), "planning finishes")
+        eq(LevelScoutCharDB.seam, nil, "a malformed way across is dropped at login")
+        ns = E.start()
+        local view = ns.Engine.view
+        local o = ns.Zones.Plain(view.plan).order
+        -- the last two accepts in a row, swapped (so that the stops we stand at are not among them)
+        local i
+        for k = #o - 1, 1, -1 do
+            if o[k]:find("^P:") and o[k + 1]:find("^P:") then i = k; break end
+        end
+        ok(i, "the shown route has two accepts in a row")
+        local recipe = { zone = view.zone, to = 0, window = { o[i], o[i + 1] }, keys = { o[i + 1], o[i] }, leave = o[i],
+            windowB = {}, head = {} }
+        -- (the next hours are not worked out here: they would judge this made-up way across and drop it)
+        ns.Zones.Itinerary = function() error("not worked out in this test") end
+        ns.Zones.SEAM = false
+        ns.Engine.chardb.seam = recipe
+        ns.Engine.Replan()
+        ok(M.settle())
+        eq(view.plan.seamBase, nil, "the flag off: nothing is laid over the route")
+        ns.Zones.SEAM = true
+        ns.Engine.chardb.seam = recipe
+        ns.Engine.Replan()
+        ok(M.settle())
+        ok(view.plan.seamBase, "made over the route without it")
+        -- (by their places relative to each other: a re-plan may have moved the rest of the route)
+        local function at(order, key)
+            for n, k in ipairs(order) do if k == key then return n end end
+        end
+        local a, b = at(view.plan.order, o[i]), at(view.plan.order, o[i + 1])
+        ok(a and b and b < a, "the two accepts swapped")
+        local saved = ns.Engine.chardb.route.order
+        local sa, sb = at(saved, o[i]), at(saved, o[i + 1])
+        ok(sa and sb and sa < sb, "the route saved with the character is the one without it (the way across is laid over it again)")
+        local other
+        for _, z in ipairs(view.ranked) do
+            if z.map > 0 and z.map ~= view.zone then other = z.map; break end
+        end
+        ok(other, "another zone is ranked")
+        ns.Engine.SetZone(other)
+        ok(M.settle())
+        eq(ns.Engine.chardb.seam, nil, "choosing a zone forgets the way across")
+    end)
 end)

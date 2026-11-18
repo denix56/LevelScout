@@ -368,15 +368,19 @@ startItinerary = function(result)
     itineraryOwed = true
     view.busy = true
     view.progress = Engine.PROGRESS and (view.progress or { fraction = Engine.SHARE_CHECK, text = "Planning the next hours" }) or nil
-    local state, zone, plan, ranked = result.state, result.zone, result.plan, view.ranked
+    local state, zone, plan, ranked = result.state, result.zone, result.base or result.plan, view.ranked
+    local shownPlan, border = result.plan, Zones.BORDER and chardb.border or nil
+    local seam, seamPlan = Zones.SEAM and chardb.seam or nil, Zones.SEAM and Zones.SeamLayer(result.plan) or nil
     Async.Run("itinerary", function(checkpoint)
         state.checkpoint = checkpoint
         state.progress = view.progress and note or nil
         local ctx = Zones.Context(state)
         phase(Engine.SHARE_CHECK, 1, "Planning the next hours", true)
         local was = view.itinerary
-        if snap and snap.state == state then snap.itineraryWas = Snapshot.Maps(was) end
-        local itinerary = Zones.Itinerary(state, ctx, ranked, { shown = zone, plan = plan, was = was })
+        if snap and snap.state == state then snap.itineraryWas = Snapshot.Maps(was); snap.borderWas = Snapshot.Copy(border); snap.seamWas = Snapshot.Copy(seam) end
+        local itinerary = Zones.Itinerary(state, ctx, ranked, { shown = zone, plan = plan, was = was,
+            border = border, borderPlan = (shownPlan ~= plan and shownPlan.base) and shownPlan or nil,
+            seam = seam, seamPlan = seamPlan })
         for _, seg in ipairs(itinerary and itinerary.segments or {}) do
             seg.name = seg.name or Game.MapName(seg.map) or ("Map " .. tostring(seg.map))
         end
@@ -393,7 +397,13 @@ startItinerary = function(result)
             ctx.trace = nil
             if traced.trace then trace = { zone = zone, frames = traced.trace } end
         end
-        return { itinerary = itinerary, trace = trace }
+        -- the route on screen follows the itinerary: with the quests it takes along, or without them again
+        local show
+        local first = itinerary and itinerary.segments[1]
+        if (Zones.BORDER or Zones.SEAM) and first and first.map == zone and first.plan ~= shownPlan then
+            show = { plan = first.plan, flightStops = Zones.FlightStops(first.plan, ctx, chardb.skippedNodes) }
+        end
+        return { itinerary = itinerary, trace = trace, show = show }
     end, function(ok, out)
         itineraryOwed = false
         view.busy = Async.IsRunning("plan")
@@ -401,6 +411,27 @@ startItinerary = function(result)
         local mine = snap and snap.ranked and snap.state == state -- the run a snapshot waits for
         if ok then
             view.itinerary = out.itinerary
+            if (Zones.BORDER or Zones.SEAM) and not view.chain then
+                local function copy(list) local out = {}; for i, k in ipairs(list or {}) do out[i] = k end; return out end
+                if Zones.BORDER then
+                    local b = out.itinerary and out.itinerary.border
+                    -- (a plain copy for SavedVariables: the ids list is the plan's own borderIds)
+                    local ids, to = {}, {}
+                    for i, id in ipairs(b and b.ids or {}) do ids[i], to[id] = id, b.to and b.to[id] end
+                    chardb.border = b and { zone = b.zone, ids = ids, to = to, before = b.before } or nil
+                end
+                if Zones.SEAM then
+                    local sm = out.itinerary and out.itinerary.seam
+                    chardb.seam = sm and { zone = sm.zone, to = sm.to, window = copy(sm.window), keys = copy(sm.keys),
+                        leave = sm.leave, windowB = copy(sm.windowB), head = copy(sm.head), leaveB = sm.leaveB } or nil
+                end
+                if out.show and view.zone == zone and view.plan == shownPlan then
+                    view.plan, view.flightStops = out.show.plan, out.show.flightStops
+                    chardb.route = { zone = zone, order = Zones.Plain(view.plan).order } -- (the overlays are laid over it again)
+                    Tracker.OnPlan(view.plan, { now = Game.Now(), level = state.level, group = state.groupSize,
+                        log = state.log, completed = completed })
+                end
+            end
             view.trace = Engine.trace and out.trace or nil
             local was = view.moveOn
             moveOn(view.plan, view.ranked, out.itinerary)
@@ -529,7 +560,7 @@ local function record(s, moveOnWas)
         version = { addon = ns.version, client = pctx.clientBuild, data = Data.status.build,
             generated = Data.status.generated, sources = Snapshot.Copy(Data.status.sources) },
         settings = Snapshot.Settings(), zone = s.zone, input = s.input, warm = Snapshot.Warm(view.ranked),
-        itineraryWas = s.itineraryWas,
+        itineraryWas = s.itineraryWas, borderWas = s.borderWas, seamWas = s.seamWas,
         moveOnWas = moveOnWas and { suggest = moveOnWas.suggest and true or false, map = moveOnWas.map } or nil,
         shown = shown, before = s.before, names = names,
     }
@@ -727,6 +758,8 @@ local function run()
         local saved = chardb.route
         if not view.plan and not chardb.chain and saved and saved.zone == chardb.zone then
             local early = Zones.PlanZone(saved.zone, ctx, saved.order)
+            if Zones.SEAM then early = Zones.WithSeam(saved.zone, ctx, early, chardb.seam) end -- (as shown before the relog)
+            if Zones.BORDER then early = Zones.WithBorder(saved.zone, ctx, early, chardb.border) end -- (as shown before the relog)
             if #early.steps > 0 then
                 view.plan, view.zone = early, saved.zone
                 view.zoneName = Zones.Name(saved.zone) or Game.MapName(saved.zone) or ("Map " .. tostring(saved.zone))
@@ -810,7 +843,10 @@ local function run()
                 chain = active, chainAfter = after, offers = offersOf(chains, ctx, active.id, nil, best) }
         end
         -- (a class quest plan shown until now is no zone's route: nothing of it is kept)
-        local shown = (view.plan and not view.plan.chain) and view.plan or nil
+        -- (with quests taken along to the next zone, the route without them: its order rebuilt
+        -- without Zones.WithBorder would plan them whole, their far turn-in included; and without the
+        -- way across planned together)
+        local shown = (view.plan and not view.plan.chain) and Zones.Plain(view.plan) or nil
         local zone, fresh, finished = chardb.zone, nil, nil
         -- A quick re-plan that finds the shown zone's route used up: the zones are ranked at
         -- once, so the next zone follows without waiting for the next ranking.
@@ -840,7 +876,15 @@ local function run()
                 return false
             end
             -- (the shown route in its own order, as it stands now: the leave step is gone from it when it is done)
-            if has(shown.order) and not has(Zones.PlanZone(zone, ctx, shown.order).order) then
+            -- (with the way across planned together, the step is one of that route: it is laid over the
+            -- route as it stands now, as below)
+            local before, rebuilt = shown.order, Zones.PlanZone(zone, ctx, shown.order)
+            local now = rebuilt.order
+            local layer = Zones.SEAM and chardb.seam and chardb.seam.zone == zone and Zones.SeamLayer(view.plan) or nil
+            if layer then
+                before, now = layer.order, Zones.WithSeam(zone, ctx, rebuilt, chardb.seam).order
+            end
+            if has(before) and not has(now) then
                 if not full then
                     full = true
                     phase(0.1, Engine.SHARE_RANK, "Ranking zones")
@@ -887,22 +931,37 @@ local function run()
             local kept = Zones.PlanZone(zone, ctx, keep, nil, frontKeys and { front = frontKeys } or nil)
             if kept.fronted or not Zones.PreferFresh(kept, fresh) then
                 plan = kept
-            elseif Engine.KEEP_GOAL and shown and shown.zone == zone and not movedOn
-                and kept.order[1] and fresh.order[1] ~= kept.order[1] then
+            elseif Engine.KEEP_GOAL and shown and shown.zone == zone and not movedOn and kept.order[1] then
                 -- The step in hand stays the step in hand: the better route is taken in its own
                 -- order with that step put first. Where that cannot be done (it waits for
                 -- something, or the new route does not have it) or it is no longer better than
                 -- the shown route, the shown route stays until the step is done.
+                -- (with the way across planned together on screen, the step in hand is that route's first)
                 local goal = kept.order[1]
-                local pinned = Zones.PlanZone(zone, ctx, fresh.order, nil, { first = goal })
-                if #pinned.steps > 0 and pinned.order[1] == goal and pinned.score > kept.score then
-                    plan = pinned
-                else
-                    plan = kept
+                if Zones.SEAM and chardb.seam and chardb.seam.zone == zone then
+                    goal = Zones.WithSeam(zone, ctx, kept, chardb.seam).order[1] or goal
+                end
+                if fresh.order[1] ~= goal then
+                    local pinned = Zones.PlanZone(zone, ctx, fresh.order, nil, { first = goal })
+                    if #pinned.steps > 0 and pinned.order[1] == goal and pinned.score > kept.score then
+                        plan = pinned
+                    else
+                        plan = kept
+                    end
                 end
             end
         end
-        return { ranked = ranked, plan = plan, fresh = fresh, zone = zone, state = state, full = full, travel = ctx.travel,
+        -- The way across the border planned together (chardb.seam) and the quests the itinerary takes
+        -- along (chardb.border) go over the chosen route, in that order (Zones.WithSeam, Zones.WithBorder).
+        -- The keep rule above compared the routes without them; `base` is the route without them.
+        local base = plan
+        if Zones.SEAM and chardb.seam and chardb.seam.zone == zone then
+            plan = Zones.WithSeam(zone, ctx, plan, chardb.seam, frontKeys)
+        end
+        if Zones.BORDER and chardb.border and chardb.border.zone == zone then
+            plan = Zones.WithBorder(zone, ctx, plan, chardb.border, frontKeys)
+        end
+        return { ranked = ranked, plan = plan, base = base, fresh = fresh, zone = zone, state = state, full = full, travel = ctx.travel,
             flightStops = Zones.FlightStops(plan, ctx, chardb.skippedNodes),
             offers = offersOf(chains, ctx, nil, plan, best), ended = ended, movedOn = movedOn }
     end, function(ok, result)
@@ -934,7 +993,14 @@ local function run()
         if not chain then
             chardb.zone = result.zone
             -- the shown route's order, for the first plan of the next session (see `keep` above)
-            chardb.route = #result.plan.steps > 0 and { zone = result.zone, order = result.plan.order } or nil
+            -- (without the quests taken along: chardb.border lays them over it again after a relog)
+            chardb.route = #result.plan.steps > 0 and { zone = result.zone, order = (result.base or result.plan).order } or nil
+            -- quests taken along from a zone no longer shown (moved on, or another zone): nothing to take along
+            if chardb.border and chardb.border.zone ~= result.zone then chardb.border = nil end
+            if chardb.seam and chardb.seam.zone ~= result.zone then chardb.seam = nil end
+        else
+            chardb.border = nil -- (a class quest chain is followed: there is no itinerary)
+            chardb.seam = nil
         end
         view.ranked, view.plan, view.zone = result.ranked, result.plan, result.zone
         view.zoneName = chain and chainTitle(result.plan) or mapName(result.zone)
@@ -1062,6 +1128,8 @@ function Engine.SetZone(map)
     if chardb.chain then leaveChain() end
     chardb.zone = map
     chardb.route = nil
+    chardb.border = nil
+    chardb.seam = nil
     Engine.view.plan = nil
     Engine.Replan(true)
 end
@@ -1184,6 +1252,8 @@ end
 --- plans are forgotten, so nothing holds the new plan to the old order.
 function Engine.ReplanFresh()
     chardb.route = nil
+    chardb.border = nil
+    chardb.seam = nil
     Engine.view.plan = nil
     Engine.ResetMemory()
     Engine.Replan(true)
@@ -1515,6 +1585,26 @@ function Engine.Start()
         if type(key) ~= "string" then valid = false break end
     end
     chardb.route = valid and route or nil
+    -- quests the itinerary takes along to the next zone (Zones.BORDER): { zone, ids, to = { [id] = map }, before }
+    local b = chardb.border
+    local bValid = type(b) == "table" and type(b.zone) == "number" and type(b.ids) == "table" and type(b.to) == "table"
+        and (b.before == nil or type(b.before) == "string")
+    for _, id in ipairs(bValid and b.ids or {}) do
+        if type(id) ~= "number" then bValid = false break end
+    end
+    chardb.border = bValid and b or nil
+    -- the way across the border planned together (Zones.SEAM): { zone, to, window, keys, leave, windowB, head, leaveB }
+    local sm = chardb.seam
+    local function keyList(t)
+        if type(t) ~= "table" then return false end
+        for _, k in ipairs(t) do if type(k) ~= "string" then return false end end
+        return true
+    end
+    local smValid = type(sm) == "table" and type(sm.zone) == "number" and type(sm.to) == "number"
+        and type(sm.leave) == "string" and keyList(sm.window) and #sm.window > 0 and keyList(sm.keys)
+        and (sm.windowB == nil or keyList(sm.windowB)) and (sm.head == nil or keyList(sm.head))
+        and (sm.leaveB == nil or type(sm.leaveB) == "string")
+    chardb.seam = smValid and sm or nil
     chardb.skippedNodes = type(chardb.skippedNodes) == "table" and chardb.skippedNodes or {}
     -- the class quest chain being followed (its lowest quest id), and what was said about each
     chardb.chain = type(chardb.chain) == "number" and chardb.chain or nil

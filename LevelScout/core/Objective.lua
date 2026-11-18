@@ -13,6 +13,8 @@
 --                rate R held fixed for the whole search (the route's r.goalR, from ctx.altRate):
 --                max over leaving points of XP - R * time (R:surplus), reported as R + V / H like
 --                dinkelbach. The best route is kept by this same number, and so is the final choice.
+--   "seam"       (a route with r.seam: Planner.Plan's opts.seam, chosen automatically then) the way across
+--                a zone border planned together: the XP inside the itinerary's horizon (R:seamValue).
 -- The number is only what a round is judged by while searching: the loop keeps its best route
 -- by today's worth (the evaluator's second result), and the final choices are today's.
 -- Polish (Objective.POLISH) moves short runs of stops after a repair, judged by the same number,
@@ -43,7 +45,8 @@ local function planner() return ns.Planner end
 --- An evaluator for route `r` with `overhead` seconds before the first stop.
 function Objective.New(r, overhead)
     local mode = Objective.MODE
-    if r.goalR then mode = "surplus" elseif mode == "surplus" then mode = "worth" end -- the route's goal decides
+    if r.seam then mode = "seam" -- (the way across a zone border planned together: XP inside the horizon, R:seamValue)
+    elseif r.goalR then mode = "surplus" elseif mode == "surplus" then mode = "worth" end -- the route's goal decides
     local ev = setmetatable({ r = r, overhead = overhead, mode = mode }, Ev)
     if mode == "surplus" then ev.R = r.goalR end
     if ev.mode == "dinkelbach" then
@@ -69,6 +72,10 @@ end
 --- obj (larger is better; units depend on the mode), worth (today's R:worth, XP/s), memo
 --- (opaque: lets objOf value this route again later without restoring it)
 function Ev:eval()
+    if self.mode == "seam" then
+        local o = self.r:seamValue(self.overhead)
+        return o, o, o
+    end
     if self.mode == "surplus" then
         local o = self.r:goalWorth(self.overhead)
         return o, o, o
@@ -106,6 +113,7 @@ end
 
 --- the magnitude used for relative margins around `ref`
 function Ev:scale(ref)
+    if self.mode == "seam" then return self.r.seam.scale end
     if self.mode == "surplus" then return max(abs(ref), self.R) end
     if self.mode ~= "dinkelbach" then return ref end
     return max(abs(ref), self.R)
@@ -237,7 +245,7 @@ end
 --- when the objective rises. `touched` = the stops placed during the repair (some may be gone).
 --- Draws no random numbers; calls the checkpoint.
 function Objective.Polish(r, ev, touched, S)
-    if ev.mode == "surplus" then return end -- (polish is not built for the surplus goal)
+    if ev.mode == "surplus" or ev.mode == "seam" then return end -- (polish is not built for these)
     if not Objective.POLISH or not touched or #touched == 0 then return end
     local route, pos = r.route, r.pos
     local radius, reach, seg = Objective.POLISH_RADIUS, Objective.POLISH_REACH, Objective.POLISH_SEG

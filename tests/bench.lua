@@ -29,11 +29,16 @@
 --        Search, Objective or Zones; a value is a number, true, false, nil or a string.
 --        Example: SET="dink:Objective.MODE=dinkelbach;rrt:Search.ACCEPT=rrt,Search.RRT_MARGIN=0.01"
 --   ONLYSET=1     skip the built-in configs except "old" and "search+exact" (shown as "base")
+--   BASE_SET="Module.KEY=value,..."   with ONLYSET: overrides for the "base" config, parsed like SET
+--        (so base can be a flag off, and a change is judged against it directly)
+--   DUMP=1        per character and salt: one line per ranked zone (map, score, xp, seconds, order) and one for
+--        the itinerary (maps, leave keys, xp), so two runs can be diffed
 --   BUDGET="0.25 0.5 1 2"   per config, one run per multiple of the search work "base" spent on
 --        each zone (a zone's plan.search.work), rounds capped at 100000; adds a curve table
 --   SALTS="0 1 2 3 4"       run every config once per Search.SEED_SALT; shows the mean over salts
 --        and the standard error of the mean-zone figure
 --   REPEAT=3      CPU ms = the minimum over repeats (scores are deterministic, time is noisy)
+--   CHARS=2       the held-out second set of eight characters
 --   ITIN=0        skip the itinerary (on by default; the headline then uses the 120-minute XP)
 --   CHARS=2       the held-out second set of eight characters; CHARS=all both sets (16)
 --   CRN=1         common random numbers: every config's search, base included, draws round t's numbers
@@ -81,6 +86,20 @@ local SECOND = {
 if os.getenv("CHARS") == "2" then CHARACTERS = SECOND
 elseif os.getenv("CHARS") == "all" then for _, c in ipairs(SECOND) do CHARACTERS[#CHARACTERS + 1] = c end end
 
+-- CHARS=2: a second, held-out set of characters (to check that a change found on the first set carries over)
+if os.getenv("CHARS") == "2" then
+    CHARACTERS = {
+        { 10, "Alliance", "HUNTER", 3, 1426, 46.8, 52.4, "Dun Morogh, Kharanos" },
+        { 18, "Alliance", "DRUID", 4, 1439, 37.0, 44.0, "Darkshore, Auberdine" },
+        { 26, "Alliance", "PRIEST", 1, 1437, 10.0, 59.0, "Wetlands, Menethil" },
+        { 38, "Alliance", "MAGE", 7, 1434, 27.0, 77.0, "Stranglethorn, Booty Bay" },
+        { 9, "Horde", "WARRIOR", 6, 1412, 48.0, 59.0, "Mulgore, Bloodhoof" },
+        { 17, "Horde", "ROGUE", 5, 1421, 45.0, 41.0, "Silverpine, Sepulcher" },
+        { 29, "Horde", "HUNTER", 8, 1440, 73.0, 61.0, "Ashenvale, Splintertree" },
+        { 40, "Horde", "SHAMAN", 2, 1434, 27.0, 77.0, "Stranglethorn, Booty Bay" },
+    }
+end
+
 -- A config is { name, overrides } with overrides = list of { Module, KEY, value } applied to the
 -- freshly loaded addon: { "Planner", "EXACT_WINDOW", 0 } sets ns.Planner.EXACT_WINDOW = 0.
 local function planner(t)
@@ -90,13 +109,29 @@ local function planner(t)
     return list
 end
 
+local function parseValue(v)
+    if v == "true" then return true elseif v == "false" then return false elseif v == "nil" then return nil end
+    return tonumber(v) or v
+end
+local MODULES = { Planner = true, Search = true, Objective = true, Zones = true }
+-- "Module.KEY=value,Module.KEY=value" as a list of { Module, KEY, value }
+local function parseOverrides(rest)
+    local list = {}
+    for item in rest:gmatch("[^,]+") do
+        local mod, key, value = item:match("^%s*(%a+)%.([%w_]+)=(.*)$")
+        assert(mod and MODULES[mod], "SET: unknown module in '" .. item .. "'")
+        list[#list + 1] = { mod, key, parseValue(value) }
+    end
+    return list
+end
+
 local ONLYSET = os.getenv("ONLYSET") and os.getenv("ONLYSET") ~= "" and os.getenv("ONLYSET") ~= "0"
 local CONFIGS = {
     { "old", planner({ SEARCH_ITERATIONS = 0, EXACT_WINDOW = 0 }) },
 }
 local BASE -- index of the config the budgets and the cost calibration refer to
 if ONLYSET then
-    CONFIGS[2] = { "base", {} }
+    CONFIGS[2] = { "base", os.getenv("BASE_SET") and parseOverrides(os.getenv("BASE_SET")) or {} }
     BASE = 2
 else
     CONFIGS[2] = { "search", planner({ EXACT_WINDOW = 0 }) }
@@ -115,22 +150,11 @@ end
 local REFERENCE
 for ci, c in ipairs(CONFIGS) do if c[1] == "reference" then REFERENCE = ci end end
 
-local function parseValue(v)
-    if v == "true" then return true elseif v == "false" then return false elseif v == "nil" then return nil end
-    return tonumber(v) or v
-end
-local MODULES = { Planner = true, Search = true, Objective = true, Zones = true }
 if os.getenv("SET") then
     for spec in os.getenv("SET"):gmatch("[^;]+") do
         local name, rest = spec:match("^%s*([^:]+):(.*)$")
         assert(name, "SET: expected name:Module.KEY=value in '" .. spec .. "'")
-        local list = {}
-        for item in rest:gmatch("[^,]+") do
-            local mod, key, value = item:match("^%s*(%a+)%.([%w_]+)=(.*)$")
-            assert(mod and MODULES[mod], "SET: unknown module in '" .. item .. "'")
-            list[#list + 1] = { mod, key, parseValue(value) }
-        end
-        CONFIGS[#CONFIGS + 1] = { name, list }
+        CONFIGS[#CONFIGS + 1] = { name, parseOverrides(rest) }
     end
 end
 
@@ -159,6 +183,7 @@ end
 local BUDGETS = os.getenv("BUDGET") and numbers("BUDGET", "") or {}
 local REPEAT = math.max(1, tonumber(os.getenv("REPEAT")) or 1)
 local ITIN = os.getenv("ITIN") ~= "0" and os.getenv("ITIN") ~= ""
+local DUMP = os.getenv("DUMP") and os.getenv("DUMP") ~= "" and os.getenv("DUMP") ~= "0"
 local JUDGED = ITIN and "itinXP" or "xp120"
 
 -- XP earned in the first `limit` seconds of a plan: its steps in order (the zone switch included in
@@ -270,10 +295,43 @@ local function run(char, overrides, salt, budget)
     out.top = ranked[1] and ranked[1].map
     out.xp60, out.xp120 = xpWithin(top, 3600), xpWithin(top, 7200)
     if ITIN then
+        -- (the work of every plan the itinerary makes: its later zones planned again, the quests taken along)
+        local plan, itinWork = ns.Zones.PlanZone, 0
+        ns.Zones.PlanZone = function(...)
+            local p = plan(...)
+            itinWork = itinWork + (p.work or 0)
+            return p
+        end
+        local planSeam = ns.Zones.PlanSeam -- (the way across planned together: its search is itinerary work too)
+        ns.Zones.PlanSeam = function(...)
+            local a, w = planSeam(...)
+            itinWork = itinWork + (w or 0)
+            return a, w
+        end
         local t1 = os.clock()
         local it = ns.Zones.Itinerary(state, ctx, ranked)
         out.itinMs = (os.clock() - t1) * 1000
+        ns.Zones.PlanZone, ns.Zones.PlanSeam = plan, planSeam
         out.itinXP = it and it.xp or 0
+        out.itinWork = itinWork
+        out.border = it and it.border
+        out.seam, out.seamInfo = it and it.seam, it and it.seamInfo
+        if DUMP and it then
+            local maps, keys = {}, {}
+            for i, seg in ipairs(it.segments) do maps[i], keys[i] = seg.map, seg.leaveKey or "-" end
+            out.dumpItin = string.format("itinerary %s  leave %s  xp %.2f%s", table.concat(maps, ">"), table.concat(keys, " "), it.xp,
+                it.border and ("  border " .. table.concat(it.border.ids, ",")) or "")
+            if it.seam then
+                out.dumpItin = out.dumpItin .. "  seam " .. table.concat(it.seam.keys, ",") .. " | " .. table.concat(it.seam.head, ",")
+            end
+        end
+    end
+    if DUMP then
+        out.dump = {}
+        for _, z in ipairs(ranked) do
+            out.dump[#out.dump + 1] = string.format("zone %d  score %.2f  xp %.2f  seconds %.1f  %s", z.map, z.plan.score or 0,
+                z.plan.xp or 0, z.plan.seconds or 0, table.concat(z.plan.order or {}, " "))
+        end
     end
     return out
 end
@@ -417,7 +475,7 @@ end
 -- Per config: aggregates over characters (and per salt, for the standard error).
 local totals = {}
 local header = string.format("%-28s %-13s %8s %8s %8s %9s %9s %8s %8s %9s", "character", "settings", "best", "mean", "worst", "top zone", "CPU ms", "stall ms", "work k", "ms/kwork")
-if ITIN then header = header .. string.format(" %9s %8s", "itin XP", "itin ms") end
+if ITIN then header = header .. string.format(" %9s %8s %10s", "itin XP", "itin ms", "itin work k") end
 print(header)
 -- ratio of CPU ms to work for base, per character: the calibration other configs are held to
 local calibration = {}
@@ -429,14 +487,14 @@ for i, char in ipairs(CHARACTERS) do
     for ci, config in ipairs(CONFIGS) do
         local runs = results[ci][i]
         if runs then
-            local bests, means, worsts, tops, mss, longs, works, itinXP, itinMs = {}, {}, {}, {}, {}, {}, {}, {}, {}
+            local bests, means, worsts, tops, mss, longs, works, itinXP, itinMs, itinWork = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
             for si = 1, #SALTS do
                 local res = runs[si]
                 local sum, n, best, worst, top = compare(results[1][i][1], res, os.getenv("VERBOSE") and si == 1, config[1])
                 bests[si], means[si], worsts[si], tops[si] = best, n > 0 and sum / n or 0, worst, top
                 mss[si], longs[si], works[si] = res.ms, res.longest, res.work
-                itinXP[si], itinMs[si] = res.itinXP or 0, res.itinMs or 0
-                local t = totals[ci] or { sum = {}, n = {}, top = {}, chars = 0, ms = 0, longest = 0, worst = 1e9, work = 0, itinXP = 0, itinMs = 0 }
+                itinXP[si], itinMs[si], itinWork[si] = res.itinXP or 0, res.itinMs or 0, res.itinWork or 0
+                local t = totals[ci] or { sum = {}, n = {}, top = {}, chars = 0, ms = 0, longest = 0, worst = 1e9, work = 0, itinXP = 0, itinMs = 0, itinWork = 0 }
                 totals[ci] = t
                 t.sum[si], t.n[si], t.top[si] = (t.sum[si] or 0) + sum, (t.n[si] or 0) + n, (t.top[si] or 0) + top
                 t.worst = math.min(t.worst, worst)
@@ -444,14 +502,22 @@ for i, char in ipairs(CHARACTERS) do
             local t = totals[ci]
             t.chars, t.ms, t.longest = t.chars + 1, t.ms + mean(mss), math.max(t.longest, mean(longs))
             t.work, t.itinXP, t.itinMs = t.work + mean(works), t.itinXP + mean(itinXP), t.itinMs + mean(itinMs)
+            t.itinWork = t.itinWork + mean(itinWork)
             local work = mean(works)
             local ratio = work > 0 and mean(mss) / (work / 1000) or 0
             local flag = (calibration[i] and ratio > 0 and math.abs(ratio / calibration[i] - 1) > 0.2) and "*" or " "
             local line = string.format("%-28s %-13s %+7.1f%% %+7.1f%% %+7.1f%% %+8.1f%% %9.0f %8.1f %8.0f %8.2f%s",
                 ci == 1 and (char[1] .. " " .. char[8]) or "", config[1], mean(bests), mean(means), mean(worsts), mean(tops),
                 mean(mss), mean(longs), work / 1000, ratio, flag)
-            if ITIN then line = line .. string.format(" %9.0f %8.0f", mean(itinXP), mean(itinMs)) end
+            if ITIN then line = line .. string.format(" %9.0f %8.0f %10.0f", mean(itinXP), mean(itinMs), mean(itinWork) / 1000) end
             print(line)
+            if DUMP then
+                for si, salt in ipairs(SALTS) do
+                    print(string.format("  DUMP %s %s salt %s", char[1] .. " " .. char[8], config[1], tostring(salt)))
+                    for _, l in ipairs(runs[si].dump or {}) do print("    " .. l) end
+                    if runs[si].dumpItin then print("    " .. runs[si].dumpItin) end
+                end
+            end
         end
     end
 end
@@ -493,7 +559,7 @@ end
 local MEASURE = ITIN and "itinerary" or "top zone 120 min"
 print("")
 print("HEADLINE: XP earned over the next 2 hours, paired against base (same character and salt); sum over characters, mean over salts")
-print(string.format("%-13s %-17s %9s %8s %8s %7s %7s %6s  %8s %8s  %s", "settings", "measure", "XP", "vs base", "paired", "+-SE", "worst", "n<-.5", "work k", "CPU ms", "verdict"))
+print(string.format("%-13s %-17s %9s %8s %8s %7s %7s %6s  %8s %8s%s  %s", "settings", "measure", "XP", "vs base", "paired", "+-SE", "worst", "n<-.5", "work k", "CPU ms", ITIN and string.format(" %8s", "itin wk") or "", "verdict"))
 local seen = {}
 for ci, config in ipairs(CONFIGS) do
     if totals[ci] then
@@ -501,6 +567,7 @@ for ci, config in ipairs(CONFIGS) do
         local p1, p2 = paired(ci, "itinXP"), paired(ci, "xp120")
         local judged = ITIN and p1 or p2
         local cost = string.format("%8.0f %8.0f", t.work / t.chars / 1000, t.ms / t.chars)
+        if ITIN then cost = cost .. string.format(" %8.0f", t.itinWork / t.chars / 1000) end
         local v = ci == BASE and "(base)" or verdict(judged)
         if ITIN then
             print(string.format("%-13s %-17s %9.0f %+7.1f%% %+7.2f%% %7.2f %+6.1f%% %3d/%-2d %s  %s", config[1], "itinerary 2 h", p1.xp, p1.vs, p1.mean, p1.se, p1.worst, p1.worse, t.chars, cost, v))
@@ -511,6 +578,99 @@ for ci, config in ipairs(CONFIGS) do
     end
 end
 local nChars = totals[BASE] and totals[BASE].chars or #CHARACTERS
+-- Quests taken along across a zone border (Zones.BORDER): in how many runs, how many, what they add, what they cost.
+if ITIN then
+    for ci, config in ipairs(CONFIGS) do
+        local t = totals[ci]
+        if t and ci ~= 1 then
+            local runsN, took, quests, gainXP, gainBase = 0, 0, 0, 0, 0
+            local workMine, workBase = 0, 0
+            for i in ipairs(CHARACTERS) do
+                for si = 1, #SALTS do
+                    local r, b = results[ci][i] and results[ci][i][si], results[BASE][i] and results[BASE][i][si]
+                    if r then
+                        runsN = runsN + 1
+                        workMine, workBase = workMine + (r.itinWork or 0), workBase + ((b and b.itinWork) or 0)
+                        if r.border then
+                            took, quests = took + 1, quests + #r.border.ids
+                            gainXP, gainBase = gainXP + (r.border.gain or 0), gainBase + ((b and b.itinXP) or 0)
+                        end
+                    end
+                end
+            end
+            print(string.format("BORDER %s: quests taken along in %d of %d runs (%.1f quests per such run, +%.0f XP = +%.1f%% when taken); itinerary planning work %.0f k per run (%+.0f%% vs base)",
+                config[1], took, runsN, took > 0 and quests / took or 0, took > 0 and gainXP / took or 0,
+                gainBase > 0 and gainXP / gainBase * 100 or 0, runsN > 0 and workMine / runsN / 1000 or 0,
+                workBase > 0 and (workMine / workBase - 1) * 100 or 0))
+        end
+    end
+end
+-- The way across a zone border planned together (Zones.SEAM): where the gate was on, where it ran, where it was
+-- taken, which sides moved, and what it cost.
+if ITIN then
+    for ci, config in ipairs(CONFIGS) do
+        local t = totals[ci]
+        if t and ci ~= 1 then
+            local runsN, on, ran, taken, new, kept = 0, 0, 0, 0, 0, 0
+            local off = { one = 0, dungeon = 0, empty = 0, far = 0, short = 0, apart = 0 }
+            local sideA, sideB, both, outA, outB, added = 0, 0, 0, 0, 0, 0
+            local legN, leg1, leg2, leaveN, leave1, leave2 = 0, 0, 0, 0, 0, 0
+            local gainXP, gainBase = 0, 0
+            local proxyN, proxyXP, planXP = 0, 0, 0
+            local searchN, searchWork, workMine, workBase = 0, 0, 0, 0
+            for i in ipairs(CHARACTERS) do
+                for si = 1, #SALTS do
+                    local r, b = results[ci][i] and results[ci][i][si], results[BASE][i] and results[BASE][i][si]
+                    if r then
+                        runsN = runsN + 1
+                        workMine, workBase = workMine + (r.itinWork or 0), workBase + ((b and b.itinWork) or 0)
+                        local info = r.seamInfo
+                        if not info then
+                            off.one = off.one + 1
+                        elseif info.gated then
+                            off[info.gated] = (off[info.gated] or 0) + 1
+                        else
+                            on = on + 1
+                        end
+                        if info and info.ran then
+                            ran = ran + 1
+                            searchN, searchWork = searchN + 1, searchWork + (info.work or 0)
+                        end
+                        if info and info.newXP and info.proxyBest and info.proxyStart then
+                            proxyN = proxyN + 1
+                            proxyXP, planXP = proxyXP + (info.proxyBest - info.proxyStart), planXP + (info.newXP - info.stitchedXP)
+                        end
+                        if r.seam and info then
+                            taken = taken + 1
+                            if info.won == "kept" then kept = kept + 1 else new = new + 1 end
+                            if info.changedA then sideA = sideA + 1 end
+                            if info.changedB then sideB = sideB + 1 end
+                            if info.changedA and info.changedB then both = both + 1 end
+                            outA, outB, added = outA + (info.deferredA or 0), outB + (info.deferredB or 0), added + (info.added or 0)
+                            if info.legBefore and info.legAfter then legN, leg1, leg2 = legN + 1, leg1 + info.legBefore, leg2 + info.legAfter end
+                            if info.leaveBefore and info.leaveAfter then
+                                leaveN, leave1, leave2 = leaveN + 1, leave1 + info.leaveBefore, leave2 + info.leaveAfter
+                            end
+                            gainXP, gainBase = gainXP + (r.seam.gain or 0), gainBase + ((b and b.itinXP) or 0)
+                        end
+                    end
+                end
+            end
+            print(string.format("SEAM %s: gate on in %d of %d runs (off: one zone %d, dungeon %d, empty %d, far %d, short %d, apart %d); searched in %d,",
+                config[1], on, runsN, off.one, off.dungeon, off.empty, off.far, off.short, off.apart, ran))
+            print(string.format("  taken in %d (new %d, kept %d); per taken run: first side changed %d, next side changed %d, both %d;",
+                taken, new, kept, sideA, sideB, both))
+            print(string.format("  quests left out A %d / B %d, added %d; leg across %.0f -> %.0f s; first zone left after %.0f -> %.0f s;",
+                outA, outB, added, legN > 0 and leg1 / legN or 0, legN > 0 and leg2 / legN or 0,
+                leaveN > 0 and leave1 / leaveN or 0, leaveN > 0 and leave2 / leaveN or 0))
+            print(string.format("  +%.0f XP = +%.1f%% when taken; the stretch's own figure said %+.0f XP where a new way was judged, the plans gave %+.0f;",
+                taken > 0 and gainXP / taken or 0, gainBase > 0 and gainXP / gainBase * 100 or 0,
+                proxyN > 0 and proxyXP / proxyN or 0, proxyN > 0 and planXP / proxyN or 0))
+            print(string.format("  search work %.0f k per run where it ran; itinerary work %+.0f%% vs base",
+                searchN > 0 and searchWork / searchN / 1000 or 0, workBase > 0 and (workMine / workBase - 1) * 100 or 0))
+        end
+    end
+end
 print(string.format("(%d characters x %d salts = %d pairs per config; CPU is the minimum over REPEAT=%d runs on a possibly shared machine: indicative only; measure for the verdict: %s)",
     nChars, #SALTS, nChars * #SALTS, REPEAT, MEASURE))
 print("")
