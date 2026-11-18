@@ -53,6 +53,8 @@ local function questNames(step, levels)
     for _, q in ipairs(quests) do names[#names + 1] = one(q) end
     return table.concat(names, ", ")
 end
+--- The step's quests by name ("A", "A, B", "A +2 more"); `levels`: each with its level in front.
+Format.QuestNames = questNames
 
 -- The different things one stop collects or kills: { "Dirty Knucklebones 2/9", "Recovered Tome 0/5" }.
 local function partLines(step)

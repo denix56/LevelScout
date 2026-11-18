@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Search view (debug)**: the window can be resized from its corner and keeps its size and place
+  across `/reload`. The map numbers the route's stops in order (steps at one place share a marker:
+  "3-5"), a list of the route's steps sits to the right of the map and follows the slider, and
+  hovering a step lights up its marker, and hovering a marker its steps.
 - **`/ls snapshot [note]`**: saves what LevelScout planned from and what it showed (the zones, the
   route, the next hours) with your character, so a surprising suggestion can be looked into
   later. It plans once more to record this; chat says when it is saved. The last 5 are kept and
