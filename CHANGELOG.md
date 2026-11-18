@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **More zones compared**: up to nine zones are planned and ranked at a time (it was six).
 - **Zones one level early**: a zone is offered from one level before its suggested range (it was:
   only from the bottom of the range). Leveling guides enter many zones a level early. Such a
   zone is listed in addition to the usual ones, never in place of one. Dungeons are unchanged.

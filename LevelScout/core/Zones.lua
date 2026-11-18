@@ -8,7 +8,7 @@ ns.Zones = Zones
 
 local Geo, Cost, Travel, Planner = ns.Geo, ns.Cost, ns.Travel, ns.Planner
 
-Zones.SHORTLIST = 6
+Zones.SHORTLIST = 9          -- zones planned at a time (those with most quests that give XP now first); dungeons come on top
 Zones.EARLY = 1             -- a zone is offered this many levels before its suggested range starts (dungeons: see DUNGEON_FROM)
 Zones.EARLY_EXTRA = 1       -- such early zones never push a zone in its range off the shortlist: they take its free places, and this many more
 Zones.DUNGEON_SHORTLIST = 3
