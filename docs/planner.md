@@ -462,6 +462,12 @@ Limits and unknowns:
 - The window's footer shows "Rested" and "+N% XP" when they apply; the XP-per-hour tooltip names
   the buffs.
 
+## Which zones are offered (`Zones.Shortlist`)
+
+A zone of the character's side is offered from `Zones.EARLY` (1) level before its suggested range starts until two levels past its end, when it has a quest that gives XP now; the zone the character stands in and the one chosen by hand always. Up to `Zones.SHORTLIST` (6) are planned, those with most such quests first. A zone offered early never takes a place from a zone in its range: early zones come last, fill the places left, and get `Zones.EARLY_EXTRA` (1) more.
+
+History: at first zones were offered one level early; on 2026-11-14 the user asked for none above their level (Swamp of Sorrows, 35-43, was offered at 34), and they were offered only from the bottom of their range. On 2026-11-18 two published Alliance guides (Sage, solo; MarkyMark, for a group) were compared with the planner section by section: Sage enters a zone before its range in 10 of 42 zone visits, 7 of them by one level; neither goes to Swamp of Sorrows or Arathi at 34. The user chose one level early again. Measured on that comparison (the guide's zone: our best start / in our top three / offered at all; the guide's turn-ins our route for the zone has), before and after: Sage 26% / 47% / 70%, 40% and 30% / 53% / 79%, 49%; MarkyMark 34% / 50% / 95%, 52% and 29% / 50% / 95%, 53%. Without the extra place (early zones taking a place in the six) a zone in its range was pushed off the list in several sections. Not benchmarked.
+
 ## Dungeons
 
 A dungeon run is planned like a zone and ranked with the zones (it shows as "Dungeon" in the

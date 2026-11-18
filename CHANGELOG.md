@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Zones one level early**: a zone is offered from one level before its suggested range (it was:
+  only from the bottom of the range). Leveling guides enter many zones a level early. Such a
+  zone is listed in addition to the usual ones, never in place of one. Dungeons are unchanged.
 - **Play log (`/ls play`)**: LevelScout now keeps, with your character, what the plan promised
   for the next 15, 30 and 60 minutes and what you really earned, and where you did something
   else than the plan: a zone chosen by hand, a skipped quest, quests turned in out of the
