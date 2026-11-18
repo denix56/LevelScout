@@ -417,7 +417,7 @@ startItinerary = function(result)
                 chardb.border = b and { zone = b.zone, ids = ids, to = to, before = b.before } or nil
                 if out.show and view.zone == zone and view.plan == shownPlan then
                     view.plan, view.flightStops = out.show.plan, out.show.flightStops
-                    chardb.route = { zone = zone, order = view.plan.order }
+                    chardb.route = { zone = zone, order = (view.plan.base or view.plan).order } -- (the set is laid over it again)
                     Tracker.OnPlan(view.plan, { now = Game.Now(), level = state.level, group = state.groupSize,
                         log = state.log, completed = completed })
                 end
@@ -832,7 +832,9 @@ local function run()
                 chain = active, chainAfter = after, offers = offersOf(chains, ctx, active.id, nil, best) }
         end
         -- (a class quest plan shown until now is no zone's route: nothing of it is kept)
-        local shown = (view.plan and not view.plan.chain) and view.plan or nil
+        -- (with quests taken along to the next zone, the route without them: its order rebuilt
+        -- without Zones.WithBorder would plan them whole, their far turn-in included)
+        local shown = (view.plan and not view.plan.chain) and (view.plan.base or view.plan) or nil
         local zone, fresh, finished = chardb.zone, nil, nil
         -- A quick re-plan that finds the shown zone's route used up: the zones are ranked at
         -- once, so the next zone follows without waiting for the next ranking.
@@ -963,7 +965,8 @@ local function run()
         if not chain then
             chardb.zone = result.zone
             -- the shown route's order, for the first plan of the next session (see `keep` above)
-            chardb.route = #result.plan.steps > 0 and { zone = result.zone, order = result.plan.order } or nil
+            -- (without the quests taken along: chardb.border lays them over it again after a relog)
+            chardb.route = #result.plan.steps > 0 and { zone = result.zone, order = (result.base or result.plan).order } or nil
             -- quests taken along from a zone no longer shown (moved on, or another zone): nothing to take along
             if chardb.border and chardb.border.zone ~= result.zone then chardb.border = nil end
         else

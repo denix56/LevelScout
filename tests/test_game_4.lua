@@ -698,7 +698,7 @@ H.suite("Engine and window (real data)", function()
         ok(M.settle())
         ok(has(view.plan, "P:" .. id), "the accept is in the shown route")
         ok(view.plan.base, "made over the route without it")
-        ok(has({ order = ns.Engine.chardb.route.order }, "P:" .. id), "and in the route saved with the character")
+        ok(not has({ order = ns.Engine.chardb.route.order }, "P:" .. id), "the route saved with the character is the one without it (the set is laid over it again)")
         local other
         for _, z in ipairs(view.ranked) do
             if z.map > 0 and z.map ~= view.zone then other = z.map; break end
