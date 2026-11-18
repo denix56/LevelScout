@@ -331,6 +331,8 @@ end
 ---          front = with a seed: stops to bring to the route's front (see Planner.Plan),
 ---          first = with a seed: the stop to put first (see Planner.Plan) }.
 --- With ctx.memory and without opts.warm, the zone's last plan in the memory is the warm start.
+--- The plan keeps what it was made from, for ns.Snapshot: warmSeed and warmWeights (the warm start
+--- it was given) and seedOrder, seedFront and seedFirst (the seed and `front` and `first`).
 function Zones.PlanZone(map, ctx, seed, from, opts)
     if from then
         -- plan as if leaving from `from` (see Zones.Rank), then put the real position back
@@ -347,6 +349,7 @@ function Zones.PlanZone(map, ctx, seed, from, opts)
         warm, weights = ns.Memory.Seed(mem, map)
     end
     local plan = Zones.PlanOne(map, ctx, seed, warm or nil, weights, opts.front, opts.first)
+    plan.seedOrder, plan.seedFront, plan.seedFirst = seed, opts.front, opts.first -- how it was made (ns.Snapshot)
     if warm then plan.warmSeed, plan.warmWeights = warm, weights end -- (the debug view plans the same again)
     if mem and not seed and not opts.readOnly and not Zones.Dungeon(map) then
         ns.Memory.Remember(mem, map, plan, plan.search and plan.search.warm or false)

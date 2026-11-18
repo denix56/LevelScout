@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`/ls snapshot [note]`**: saves what LevelScout planned from and what it showed (the zones, the
+  route, the next hours) with your character, so a surprising suggestion can be looked into
+  later. It plans once more to record this; chat says when it is saved. The last 5 are kept and
+  written to disk at logout or `/reload`. (For developers: `tests/replay.lua` plans a saved
+  snapshot again outside the game and shows what differs.)
 - **Flights from a flight master you have not unlocked yet**: when the fastest way is to walk to
   a flight master of your side that you do not know, unlock the point there and fly on to one you
   know, the route and the waypoint take it: "unlock Lakeshire and fly to Darkshire". Flights

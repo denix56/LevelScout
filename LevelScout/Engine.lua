@@ -4,7 +4,7 @@
 
 local _, ns = ...
 local Data, Game, Async, Zones, Geo, Guide, Tracker = ns.Data, ns.Game, ns.Async, ns.Zones, ns.Geo, ns.Guide, ns.Tracker
-local Classes = ns.Classes
+local Classes, Snapshot = ns.Classes, ns.Snapshot
 
 local Engine = {}
 ns.Engine = Engine
@@ -21,6 +21,7 @@ Engine.PROGRESS_EVERY = 0.15 -- seconds between two progress notices to the wind
 Engine.SHARE_RANK, Engine.SHARE_CHECK = 0.75, 0.8
 Engine.MOVE_EVERY = 1        -- seconds between two looks at where the player is (travel speed, see ns.Tracker.OnMove)
 Engine.NEAR_YARDS = 40       -- an accept or turn-in further down the route this close comes to its front
+Engine.SNAPSHOTS = 5         -- snapshots kept with the character, the oldest dropped first (see Engine.Snapshot)
 
 local memory = ns.Memory.New()   -- plans kept between rankings (reused) and as warm starts (ns.Memory); never saved
 
@@ -50,6 +51,7 @@ local rankAfter                  -- a plan made at once (Engine.ReplanNow): the 
 local quickNow                   -- the next plan is the shown route only, however old the ranking (Engine.ReplanNow)
 local freshWay                   -- the next plan's way to the current step is taken at once (Guide.Follow)
 local frontAsked = {}            -- [key] = the quest log and level it was last asked for with (asked once each)
+local snap, saveSnapshot         -- the snapshot being taken (Engine.Snapshot), and what saves it (defined below)
 
 Engine.REMIND_SLEEPING_BAG = 600 -- seconds before the sleeping-bag buff ends
 Engine.REMIND_OTHER = 180        -- seconds before any other XP buff (food) ends
@@ -360,7 +362,9 @@ startItinerary = function(result)
         state.progress = view.progress and note or nil
         local ctx = Zones.Context(state)
         phase(Engine.SHARE_CHECK, 1, "Planning the next hours", true)
-        local itinerary = Zones.Itinerary(state, ctx, ranked, { shown = zone, plan = plan, was = view.itinerary })
+        local was = view.itinerary
+        if snap and snap.state == state then snap.itineraryWas = Snapshot.Maps(was) end
+        local itinerary = Zones.Itinerary(state, ctx, ranked, { shown = zone, plan = plan, was = was })
         for _, seg in ipairs(itinerary and itinerary.segments or {}) do
             seg.name = seg.name or Game.MapName(seg.map) or ("Map " .. tostring(seg.map))
         end
@@ -382,12 +386,19 @@ startItinerary = function(result)
         itineraryOwed = false
         view.busy = Async.IsRunning("plan")
         if not view.busy then view.progress, scope, zoneSpan = nil, nil, nil end
+        local mine = snap and snap.ranked and snap.state == state -- the run a snapshot waits for
         if ok then
             view.itinerary = out.itinerary
             view.trace = Engine.trace and out.trace or nil
+            local was = view.moveOn
             moveOn(view.plan, view.ranked, out.itinerary)
+            if mine then saveSnapshot(was) end
         else
             ns.Print("|cffff5555Planning the next hours failed: %s|r", tostring(out))
+            if mine then
+                ns.Print("Snapshot not taken: planning the next hours failed.")
+                snap = nil
+            end
         end
         publish()
     end)
@@ -451,6 +462,78 @@ end
 
 local function mapName(map)
     return map and (Zones.Name(map) or Game.MapName(map) or ("Map " .. tostring(map))) or nil
+end
+
+---------------------------------------------------------------------------------------------
+-- Snapshots (ns.Snapshot): what a plan was made from and what was shown for it
+---------------------------------------------------------------------------------------------
+-- `/ls snapshot` records a light view of what is on screen (snap.before), then plans once more
+-- in full. That run's state is copied to plain data as it is gathered (snap.input; only while a
+-- snapshot is pending), and when its plan job and its itinerary job have both finished, what
+-- came out is recorded and saved. The input and the result of one record belong to one run, so
+-- a replay (tests/replay.lua) can plan the input again and compare. Every hook checks that it is
+-- still the state of that run (snap.state): a job that was stopped never reports, and the next
+-- run takes the input again.
+
+-- The input of the run the snapshot waits for, as gathered (`state` is nil: it could not be).
+local function takeInput(state, why)
+    if not state then
+        ns.Print("Snapshot not taken: %s.", tostring(why))
+        snap = nil
+        return
+    end
+    snap.state, snap.ranked, snap.itineraryWas, snap.zone = state, nil, nil, nil
+    local ok, input = pcall(Snapshot.Capture, state)
+    if not ok then
+        ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(input))
+        snap = nil
+        return
+    end
+    snap.input = input
+    if ns.Planner.GOAL == "surplus" then snap.input.altRate = lastAltRate end -- (set in the job, see run)
+end
+
+-- The record of the finished run: `moveOnWas` is the banner before this run's itinerary changed it.
+local function record(s, moveOnWas)
+    local view = Engine.view
+    local pctx = Game.GetPlayerContext()
+    local names = {}
+    local function name(map) if map then names[map] = mapName(map) end end
+    local shown = Snapshot.View(view)
+    name(s.input.map)
+    name(shown.zone)
+    for _, z in ipairs(shown.ranked) do name(z.map) end
+    for _, seg in ipairs(shown.itinerary and shown.itinerary.segments or {}) do name(seg.map) end
+    if shown.itinerary and shown.itinerary.alt then name(shown.itinerary.alt.map) end
+    local clock = rawget(_G, "date")
+    return {
+        format = Snapshot.FORMAT, note = s.note,
+        date = type(clock) == "function" and clock("%Y-%m-%d %H:%M:%S") or nil,
+        asked = s.asked, saved = Game.Now(), rankedAt = lastRank,
+        version = { addon = ns.version, client = pctx.clientBuild, data = Data.status.build,
+            generated = Data.status.generated, sources = Snapshot.Copy(Data.status.sources) },
+        settings = Snapshot.Settings(), zone = s.zone, input = s.input, warm = Snapshot.Warm(view.ranked),
+        itineraryWas = s.itineraryWas,
+        moveOnWas = moveOnWas and { suggest = moveOnWas.suggest and true or false, map = moveOnWas.map } or nil,
+        shown = shown, before = s.before, names = names,
+    }
+end
+
+saveSnapshot = function(moveOnWas)
+    local s = snap
+    snap = nil
+    if not s then return end
+    local ok, rec = pcall(record, s, moveOnWas)
+    if not ok then
+        ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(rec))
+        return
+    end
+    local id = (tonumber(chardb.snapshotCount) or 0) + 1
+    chardb.snapshotCount, rec.id = id, id
+    local list = chardb.snapshots
+    list[#list + 1] = rec
+    while #list > Engine.SNAPSHOTS do table.remove(list, 1) end
+    ns.Print("Snapshot %d saved%s. It is written to disk at logout or /reload.", id, s.note and (" (" .. s.note .. ")") or "")
 end
 
 -- The zones a plan's steps are in, in route order, each once (names).
@@ -563,6 +646,7 @@ local function run()
         return -- the index job replans when it finishes
     end
     local state, why = gather()
+    if snap then takeInput(state, why) end
     if not state then
         Tracker.Interrupt() -- no plan is followed: the step that was being timed is not timed any more
         setStatus("paused", why)
@@ -658,6 +742,7 @@ local function run()
         -- route, then the itinerary. A quick re-plan is the shown zone's plan and that check.
         phase(0, full and Engine.SHARE_RANK or 0.7, full and "Ranking zones" or "Planning the route")
         local function rank()
+            if snap and snap.state == state then snap.zone = chardb.zone end -- (what Zones.Rank is asked to include)
             ranked = Zones.Rank(ctx, chardb.zone)
             state.altRate = ctx.altRate -- (worked out by the ranking when there was none) for the itinerary
         end
@@ -783,6 +868,10 @@ local function run()
         if not more then view.progress, scope, zoneSpan = nil, nil, nil end
         if not ok then
             setStatus("error", "Planning failed: " .. tostring(result))
+            if snap then
+                ns.Print("Snapshot not taken: planning failed.")
+                snap = nil
+            end
             return publish()
         end
         if result.full then
@@ -863,6 +952,14 @@ local function run()
         local fresh = freshWay
         freshWay = false
         publish(fresh)
+        if snap and snap.state == result.state then
+            if result.full then
+                snap.ranked = true -- the record is saved when the itinerary is in (see startItinerary)
+                if not more then saveSnapshot(nil) end -- a class quest chain is shown: no itinerary follows
+            else
+                pendingFull = true -- the snapshot waits for a full plan: the code below asks for one
+            end
+        end
         if more then startItinerary(result) end
         -- a plan made at once for the shown route: the zones are ranked next
         if rankAfter then
@@ -1033,6 +1130,21 @@ function Engine.ReplanFresh()
     Engine.view.plan = nil
     Engine.ResetMemory()
     Engine.Replan(true)
+end
+
+--- Save a snapshot: what the plan is made from and what is shown for it, with the character
+--- (chardb.snapshots, the last Engine.SNAPSHOTS), for tests/replay.lua. What is on screen now is
+--- noted first (snap.before); then the zones are ranked and the route and the next hours worked
+--- out once more, and the record is saved when that has finished (see takeInput). Returns true,
+--- or false and the reason; the outcome is told in chat.
+function Engine.Snapshot(note)
+    if not (started and chardb) then return false, "LevelScout has not started yet" end
+    if not Data.usable then return false, Data.status.message or "the data is not usable" end
+    if snap then return false, "a snapshot is being taken already" end
+    local viewed, before = pcall(Snapshot.View, Engine.view, true)
+    snap = { note = note, asked = Game.Now(), before = viewed and before or nil }
+    Engine.Replan(true)
+    return true
 end
 
 --- Leave a quest out of all plans, or bring it back.
@@ -1306,6 +1418,8 @@ function Engine.Start()
     db, chardb = LevelScoutDB, LevelScoutCharDB
     chardb.ignored = type(chardb.ignored) == "table" and chardb.ignored or {}
     chardb.knownNodes = type(chardb.knownNodes) == "table" and chardb.knownNodes or {}
+    chardb.snapshots = type(chardb.snapshots) == "table" and chardb.snapshots or {} -- see Engine.Snapshot
+    chardb.snapshotCount = tonumber(chardb.snapshotCount) or #chardb.snapshots
     -- which zone a spot recorded on a continent map is in: the game knows the real borders
     Zones.ZoneResolver = function(loc)
         if not (loc.map and loc.mx and loc.my) then return nil end

@@ -50,6 +50,7 @@ core\Memory.lua
 core\Zones.lua
 core\Classes.lua
 core\Find.lua
+core\Snapshot.lua
 
 Async.lua
 Guide.lua

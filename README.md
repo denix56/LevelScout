@@ -182,8 +182,8 @@ ln -s "$PWD/LevelScout" "/Applications/World of Warcraft/_forever_/Interface/Add
 ```
 
 `/ls` (or `/levelscout`) shows or hides the window. Debug commands: `/ls status`, `/ls plan`,
-`/ls replan [fresh]`, `/ls learn [reset]`, `/ls buffs`, `/ls debug`, `/ls quest <id>`,
-`/ls zone [uiMapID]`, `/ls log`, `/ls pos`, `/ls taxi`, `/ls about`. QuestieDB must be installed
+`/ls replan [fresh]`, `/ls snapshot [note]`, `/ls learn [reset]`, `/ls buffs`, `/ls debug`,
+`/ls quest <id>`, `/ls zone [uiMapID]`, `/ls log`, `/ls pos`, `/ls taxi`, `/ls about`. QuestieDB must be installed
 and enabled in the same AddOns folder.
 
 To see what the planner would do for any character without the game:
@@ -193,3 +193,11 @@ To see what the planner would do for any character without the game:
 ```
 
 (level, faction, class, race id, uiMapID, x, y).
+
+To plan a real situation again: `/ls snapshot` in game, `/reload`, then
+
+```
+.tools/bin/lua5.1 tests/replay.lua "<WoW>/_forever_/WTF/Account/<ACCOUNT>/<Realm>/<Character>/SavedVariables/LevelScout.lua"
+```
+
+(`--list` shows the saved ones). It prints what differs from what the game showed.
