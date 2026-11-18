@@ -78,7 +78,8 @@ return function(H, M)
 
     -- Log in with fresh saved variables and let the first plan finish.
     -- opts: noTomTom, search (the route search on, as in the game), rounds (with search: rounds
-    -- per zone), goal (Planner.GOAL).
+    -- per zone), goal (Planner.GOAL), autoSnapshot (snapshots taken by themselves, as in the game:
+    -- off here, since each one plans once more in full, which the tests that count plans do not expect).
     function E.start(over, opts)
         local ns = E.installGame(over)
         if opts and opts.noTomTom then M.set("TomTom", nil) end
@@ -87,6 +88,7 @@ return function(H, M)
         if not (opts and opts.search) then E.noSearch(ns) end
         if opts and opts.rounds then ns.Planner.SEARCH_ITERATIONS = opts.rounds end
         if opts and opts.goal then ns.Planner.GOAL = opts.goal end
+        ns.Engine.AUTO_SNAPSHOT = (opts and opts.autoSnapshot) and true or false
         M.login()
         H.ok(M.settle(), "planning finishes")
         return ns

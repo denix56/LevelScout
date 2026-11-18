@@ -182,9 +182,12 @@ ln -s "$PWD/LevelScout" "/Applications/World of Warcraft/_forever_/Interface/Add
 ```
 
 `/ls` (or `/levelscout`) shows or hides the window. Debug commands: `/ls status`, `/ls plan`,
-`/ls replan [fresh]`, `/ls snapshot [note]`, `/ls learn [reset]`, `/ls buffs`, `/ls debug`,
+`/ls replan [fresh]`, `/ls snapshot [note]`, `/ls play [reset]`, `/ls learn [reset]`, `/ls buffs`, `/ls debug`,
 `/ls quest <id>`, `/ls zone [uiMapID]`, `/ls log`, `/ls pos`, `/ls taxi`, `/ls about`. QuestieDB must be installed
 and enabled in the same AddOns folder.
+
+`/ls play` prints the play log: what the plan promised for the next 15, 30 and 60 minutes against
+what you earned, and where you overruled the plan.
 
 To see what the planner would do for any character without the game:
 

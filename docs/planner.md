@@ -600,6 +600,17 @@ until it is done, then the zones take over again.
   higher level, repeatables and seasonal quests, quests that start from an item, quests with an
   objective no database can locate.
 
+## Play log (`core/Play.lua`)
+
+The planner is judged on its own forecasts (`tests/bench.lua`). The play log is the other side: the same forecasts next to what play brought, and the moments the player overruled the plan. It is kept with the character (`LevelScoutCharDB.play`); `/ls play` prints it, `/ls play reset` empties it.
+
+- **Forecasts.** When an itinerary comes in (so after a full plan), at most every `Play.FORECAST_EVERY` (600) seconds of play for the same zone, the XP the path promises inside 15, 30 and 60 minutes (`Play.WINDOWS`) is written down with the XP earned in the session so far. The path is the shown route up to where the itinerary leaves it, then the itinerary's later zones with their trips (`Play.Within`); a camp being worked when the window ends counts for the share done, the end-of-horizon credit for quests under way does not. When that much play has passed (`Play.Tick`, once a second from `Engine.TrackMove`), the XP earned since is written next to it, and how often the plan was overruled in between. A forecast whose path covers less than 90% of a window (the route ran out) is not compared for that window.
+- **Time** is the Tracker's active clock: standing still for more than 15 seconds is not play. That clock starts anew with each game session, so a forecast is only settled in the session it was made in.
+- **XP** is counted from `PLAYER_XP_UPDATE` (`Play.XP`): the difference to the last look; over a level-up the rest of the old level and the new XP, whether the game reports the new level first or the new XP first.
+- **Events.** `zone` (the shown zone changed by hand: `Engine.SetZone`; `banner` when the banner had suggested it, `back` when the path had moved on from that zone within `Engine.BACK_WITHIN`), `skip` / `unskip` (`Engine.Ignore`), `order` (a turn-in more than `Play.ORDER_FRONT` = 5 steps down the shown route), `extra` (a turn-in the shown route does not have), `banner` (the move-on banner came up or names another zone), `moved` (the path moved on by itself). `zone`, `skip`, `order` and `extra` count as overruling the plan.
+- **Snapshots by themselves** (`Engine.AUTO_SNAPSHOT`). A zone chosen by hand against the plan (not when the banner suggested it) and a skipped quest take a snapshot (see below), quietly, at most one every `Engine.AUTO_SNAPSHOT_EVERY` (900) seconds. It is asked for before the change is made, so its `before` view is what the player rejected; its `input` is the state the plan after the change was made from. The event carries the snapshot's id (`snap`), the snapshot `auto = true`. The last `Engine.AUTO_SNAPSHOTS` (3) are kept, apart from the ones asked for. The tests' game has this off (`game_env`'s `start`, `opts.autoSnapshot`): each one plans once more in full.
+- **What it does not say.** Why the XP differs (slower kills, a death, a detour for a vendor, a quest that was not there): only that it does, and by how much when the plan was kept to. Accepting a quest the route does not have is not an event. A class quest chain being followed writes no forecasts.
+
 ## Snapshots and replay (`core/Snapshot.lua`, `tests/replay.lua`)
 
 `/ls snapshot [note]` saves what a plan was made from and what was shown for it, with the character
@@ -666,6 +677,7 @@ and must not fire from a snapshot's own re-plan.
 | `LevelScout/core/Memory.lua` | Plan memory between re-rankings |
 | `LevelScout/core/Zones.lua` | Planning context, shortlist, ranking, move-on, order stability |
 | `LevelScout/core/Classes.lua` | Class quest chains: which are available, the plan for one |
+| `LevelScout/core/Play.lua` | The play log: forecasts against the XP that came in, and the events where the player overruled the plan |
 | `LevelScout/core/Snapshot.lua` | A snapshot of the planning input and what was shown, and back to a planner state |
 | `LevelScout/Engine.lua` | Reads game state, runs the planner in the background, publishes the view |
 | `LevelScout/Tracker.lua` | Turns quest-log progress, kills, positions and finished steps into samples for `Learn`; keeps the step log |

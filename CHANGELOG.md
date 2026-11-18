@@ -6,6 +6,12 @@
   across `/reload`. The map numbers the route's stops in order (steps at one place share a marker:
   "3-5"), a list of the route's steps sits to the right of the map and follows the slider, and
   hovering a step lights up its marker, and hovering a marker its steps.
+- **Play log (`/ls play`)**: LevelScout now keeps, with your character, what the plan promised
+  for the next 15, 30 and 60 minutes and what you really earned, and where you did something
+  else than the plan: a zone chosen by hand, a skipped quest, quests turned in out of the
+  route's order. Only time you are playing counts. When you overrule the plan, a snapshot is
+  taken quietly (at most one every 15 minutes), so the moment can be looked into later.
+  `/ls play reset` empties the log.
 - **`/ls snapshot [note]`**: saves what LevelScout planned from and what it showed (the zones, the
   route, the next hours) with your character, so a surprising suggestion can be looked into
   later. It plans once more to record this; chat says when it is saved. The last 5 are kept and

@@ -51,6 +51,7 @@ core\Zones.lua
 core\Classes.lua
 core\Find.lua
 core\Snapshot.lua
+core\Play.lua
 
 Async.lua
 Guide.lua
