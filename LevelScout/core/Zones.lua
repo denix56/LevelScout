@@ -8,7 +8,9 @@ ns.Zones = Zones
 
 local Geo, Cost, Travel, Planner = ns.Geo, ns.Cost, ns.Travel, ns.Planner
 
-Zones.SHORTLIST = 6
+Zones.SHORTLIST = 9          -- zones planned at a time (those with most quests that give XP now first); dungeons come on top
+Zones.EARLY = 1             -- a zone is offered this many levels before its suggested range starts (dungeons: see DUNGEON_FROM)
+Zones.EARLY_EXTRA = 1       -- such early zones never push a zone in its range off the shortlist: they take its free places, and this many more
 Zones.DUNGEON_SHORTLIST = 3
 Zones.DUNGEON_FROM = 0.25   -- a dungeon is offered from this far into its suggested level range
 Zones.MOVE_ON_ENTER = 1.20  -- suggest another zone when it beats this one by 20%...
@@ -129,7 +131,7 @@ end
 Zones.EntryPoint = entryPoint
 
 --- Zones worth planning: the right side and level, ordered by how many quests give XP now.
---- A zone whose suggested range starts above the character's level is not offered.
+--- A zone is offered from Zones.EARLY levels before its suggested range starts, not sooner.
 --- Always includes ctx.startMap and `always` (the active zone) when they have quests.
 function Zones.Shortlist(ctx, always)
     local Data = ns.Data
@@ -140,7 +142,7 @@ function Zones.Shortlist(ctx, always)
         local sideOk = info and (info.side == "C" or info.side == "B"
             or (info.side == "A" and ctx.side == "a") or (info.side == "H" and ctx.side == "h"))
         local forced = map == ctx.startMap or map == always
-        if info and info.lo and (forced or (sideOk and ctx.level >= info.lo and ctx.level <= info.hi + 2)) then
+        if info and info.lo and (forced or (sideOk and ctx.level >= info.lo - Zones.EARLY and ctx.level <= info.hi + 2)) then
             local n = 0
             for i, e in ipairs(Data.QuestsInZone(map) or {}) do
                 if ctx.checkpoint and i % 8 == 0 then ctx.checkpoint() end
@@ -154,19 +156,33 @@ function Zones.Shortlist(ctx, always)
                     end
                 end
             end
-            if n > 0 then out[#out + 1] = { map = map, quests = n, forced = forced, lo = info.lo, hi = info.hi } end
+            if n > 0 then
+                out[#out + 1] = { map = map, quests = n, forced = forced, lo = info.lo, hi = info.hi,
+                    early = (not forced and ctx.level < info.lo) or nil }
+            end
             seen[map] = true
             if ctx.checkpoint then ctx.checkpoint() end
         end
     end
+    -- (zones offered early come last: they do not take a place from a zone in its range)
     table.sort(out, function(a, b)
         if a.forced ~= b.forced then return a.forced end
+        if (a.early or false) ~= (b.early or false) then return not a.early end
         if a.quests ~= b.quests then return a.quests > b.quests end
         return a.map < b.map
     end)
-    local forcedCount = 0
-    for _, z in ipairs(out) do if z.forced then forcedCount = forcedCount + 1 end end
-    for i = #out, math.max(Zones.SHORTLIST, forcedCount) + 1, -1 do out[i] = nil end
+    local forcedCount, inRange = 0, 0
+    for _, z in ipairs(out) do
+        if z.forced then forcedCount = forcedCount + 1 end
+        if not z.early then inRange = inRange + 1 end
+    end
+    local keep = math.max(Zones.SHORTLIST, forcedCount)
+    -- the zones in their range fill the list first; early ones get what is left, and EARLY_EXTRA more
+    local total = math.min(inRange, keep) + math.min(#out - inRange, math.max(0, keep - inRange) + Zones.EARLY_EXTRA)
+    for i = #out, 1, -1 do
+        local z = out[i]
+        if (not z.early and i > keep) or (z.early and i > total) then table.remove(out, i) end
+    end
     return out
 end
 

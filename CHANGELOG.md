@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **More zones compared**: up to nine zones are planned and ranked at a time (it was six).
+- **Zones one level early**: a zone is offered from one level before its suggested range (it was:
+  only from the bottom of the range). Leveling guides enter many zones a level early. Such a
+  zone is listed in addition to the usual ones, never in place of one. Dungeons are unchanged.
 - **Better routes where quests wait for your next level**: the route search tries taking a few quests out of
   the route and putting them back. When that made you reach a level later than a quest left in the route
   needs it, the try was thrown away, about one try in six. Such a quest now goes out with them and comes back
