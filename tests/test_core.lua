@@ -941,7 +941,7 @@ H.suite("Zones", function()
         eq(forced[1] and forced[1].map, nil, "nothing to do at level 3: no zone listed")
     end)
 
-    test("shortlist: a zone whose suggested range starts above the character is not offered", function()
+    test("shortlist: a zone is offered from one level before its suggested range, not sooner", function()
         local ns = load()
         local function listed2(extra, always)
             for _, z in ipairs(ns.Zones.Shortlist(ns.Zones.Context(state(extra)), always)) do
@@ -950,7 +950,10 @@ H.suite("Zones", function()
             return false
         end
         eq(listed2({ level = 6 }), true, "zone 2 is 6-12: offered at 6")
-        eq(listed2({ level = 5 }), false, "one level below its range: not offered")
+        eq(listed2({ level = 5 }), true, "one level below its range (Zones.EARLY): offered")
+        eq(listed2({ level = 4 }), false, "two levels below: not offered")
+        ns.Zones.EARLY = 0
+        eq(listed2({ level = 5 }), false, "Zones.EARLY = 0: only from the bottom of its range")
         eq(listed2({ level = 5 }, 2), true, "chosen by hand: still planned")
         eq(listed2({ level = 5, map = 2 }), true, "standing in it: still planned")
     end)

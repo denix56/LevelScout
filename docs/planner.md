@@ -14,7 +14,7 @@ was written. These are the changes that came out of it.
 | Order by cheapest insertion (shortest route) | The goal is XP per hour, not distance; a short route can still be full of poor quests | Quests are added in order of XP per added second, each stop at its cheapest place. Quests that pay less than half of what the rest of the route earns per second are dropped and listed as "left out as slow" |
 | Chain bonus: a share of the value of follow-ups | A guess where the real thing is available | Follow-up quests are planned for real: accepted after their prerequisite is turned in, with their own XP and time |
 | Re-plan on every quest progress event | A kill quest updates the log on every kill | Events are debounced (0.5 s), plans are at least 2 s apart, and a log update re-plans only when progress really changed. Other zones are re-ranked at most every 45 s |
-| Plan 5-8 zones on every change | Too much work for a change that only affects one zone | Only the shown zone is re-planned on progress. All shortlisted zones (6) are re-planned on login, level-up, zone change, and when the ranking is older than 45 s |
+| Plan 5-8 zones on every change | Too much work for a change that only affects one zone | Only the shown zone is re-planned on progress. All shortlisted zones (up to 9, see "Which zones are offered") are re-planned on login, level-up, zone change, and when the ranking is older than 45 s |
 | Kill time = kills x cycle time | A camp of 5 mobs cannot be killed 20 times in a row | Kills beyond the camp's size wait for respawns (about 300 s per mob) |
 | (not in the design) | Inserting stops one at a time can leave an accept for a later visit to the same NPC | After routing, every accept moves to the first visit of its place (within 40 yards), as far forward as its prerequisites allow. This never lengthens the route |
 | (not in the design) | The shortest order is not always the best: batching turn-ins saves walking but pays out later | After routing, runs of up to three consecutive stops are moved together to shorten the route (this is what lets a work-and-turn-in pair move to where the giver is passed anyway). Each such move is kept unless it would cost more than 5% of the route's peak XP per hour: working a camp while you are there beats coming back for it |
@@ -461,6 +461,14 @@ Limits and unknowns:
   cannot be missed: `/ls buffs` lists every buff with its id and description, to find out why.
 - The window's footer shows "Rested" and "+N% XP" when they apply; the XP-per-hour tooltip names
   the buffs.
+
+## Which zones are offered (`Zones.Shortlist`)
+
+A zone of the character's side is offered from `Zones.EARLY` (1) level before its suggested range starts until two levels past its end, when it has a quest that gives XP now; the zone the character stands in and the one chosen by hand always. Up to `Zones.SHORTLIST` (9; 6 until 2026-11-18, raised at the user's request) are planned, those with most such quests first. A zone offered early never takes a place from a zone in its range: early zones come last, fill the places left, and get `Zones.EARLY_EXTRA` (1) more.
+
+History: at first zones were offered one level early; on 2026-11-14 the user asked for none above their level (Swamp of Sorrows, 35-43, was offered at 34), and they were offered only from the bottom of their range. On 2026-11-18 two published Alliance guides (Sage, solo; MarkyMark, for a group) were compared with the planner section by section: Sage enters a zone before its range in 10 of 42 zone visits, 7 of them by one level; neither goes to Swamp of Sorrows or Arathi at 34. The user chose one level early again. Measured on that comparison (the guide's zone: our best start / in our top three / offered at all; the guide's turn-ins our route for the zone has), before and after: Sage 26% / 47% / 70%, 40% and 30% / 53% / 79%, 49%; MarkyMark 34% / 50% / 95%, 52% and 29% / 50% / 95%, 53%. Without the extra place (early zones taking a place in the six) a zone in its range was pushed off the list in several sections. Not benchmarked.
+
+Nine against six (with the early rule, same comparison): Sage 33% / 56% / 84%, 50%; MarkyMark 29% / 50% / 95%, 53%. The level window, not the cap, is what usually limits the list: four imagined characters (levels 12, 24, 34, 44, nothing done, dungeons included) had 6, 8, 10 and 8 zones planned with six, and 7, 8, 11 and 8 with nine, in the same time within the machine's noise. In-game cost not measured.
 
 ## Dungeons
 
