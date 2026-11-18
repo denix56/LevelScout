@@ -39,10 +39,62 @@ H.suite("Engine and window (real data)", function()
         contains(LevelScoutDebugFrame.top.text, "Final route")
         contains(LevelScoutDebugFrame.bottom.text, "XP/h")
         ok(st.drawn.dots > 3, "stops are drawn")
+        -- every stop carries a description of what is done there, made once and shared by the frames
+        local KIND = { P = "accept", T = "turnin", W = "work" }
+        local seen, distinct, total = {}, 0, 0
+        for _, f in ipairs(trace.frames) do
+            for k = 2, #f.points do
+                local s = f.points[k][5]
+                ok(s, "every stop has a description")
+                eq(s.kind, KIND[f.points[k][4]])
+                ok(#ns.Format.StepTitle(s) > 0)
+                total = total + 1
+                if not seen[s] then seen[s] = true; distinct = distinct + 1 end
+            end
+        end
+        ok(distinct < total / 2, "a stop's description is shared between frames, not copied")
+        -- the list of steps and the numbered markers of the final route
+        local function title(s) return (ns.Format.StepTitle(s):gsub("^Accept: ", ""):gsub("^Turn in: ", "")) end
+        local final, rows, nodes = trace.frames[#trace.frames], LevelScoutDebugFrame.rows, LevelScoutDebugFrame.nodes
+        eq(#st.steps, #final.points - 1)
+        eq(st.drawn.rows, math.min(#st.steps, st.geo.rows))
+        eq(rows[1].num.text, "1")
+        eq(rows[1].title.text, title(final.points[2][5]))
+        ok(#st.groups > 0, "the route has stops on the map")
+        for g, grp in ipairs(st.groups) do
+            eq(nodes[g].label.text, ns.Debug.Label(grp.steps))
+            near(nodes[g].points[1][4], st.geo.ox + grp.mx / 100 * st.geo.drawW, 1e-6)
+        end
+        -- hovering a row lights up its marker, hovering a marker lights up its rows
+        local r1
+        for _, r in ipairs(rows) do
+            if r:IsShown() and st.groupOf[r.step] then r1 = r break end
+        end
+        ok(r1, "a listed step is on the map")
+        local g = st.groupOf[r1.step]
+        r1.scripts.OnEnter(r1)
+        eq(st.hover, g)
+        ok(nodes[g].ring:IsShown(), "its marker lights up")
+        for gi, n in ipairs(nodes) do
+            if gi ~= g then ok(not n.ring:IsShown()) end
+        end
+        for _, r in ipairs(rows) do
+            if r:IsShown() then eq(r.hl:IsShown(), st.groupOf[r.step] == g or r == r1) end
+        end
+        r1.scripts.OnLeave(r1)
+        eq(st.hover, nil)
+        ok(not nodes[g].ring:IsShown())
+        nodes[g].scripts.OnEnter(nodes[g])
+        ok(r1.hl:IsShown(), "hovering the marker lights up its rows")
+        contains(table.concat(M.tooltip.lines, "\n"), ns.Format.StepTitle(st.steps[r1.step]))
+        nodes[g].scripts.OnLeave(nodes[g])
+        ok(not r1.hl:IsShown())
         -- the slider
         local slider = LevelScoutDebugFrame.slider
         slider.scripts.OnValueChanged(slider, 2)
         eq(st.index, 2)
+        ok(#trace.frames[2].points >= 2)
+        eq(rows[1].title.text, title(trace.frames[2].points[2][5]), "the list follows the slider")
         contains(LevelScoutDebugFrame.top.text, "Round 1 of")
         contains(LevelScoutDebugFrame.count.text, "2 / " .. #trace.frames)
         -- the wheel steps, and stops at the ends
@@ -78,6 +130,106 @@ H.suite("Engine and window (real data)", function()
         ok(not view.trace, "closing stops the recording")
         eq(again(), with, "recording does not change the plan")
         ns.Tracker.OnPlan = onPlan
+    end)
+
+    test("search view: steps at one place share a numbered marker", function()
+        local D = start().Debug
+        local pts = { { 1429, 40, 40, "S" }, { 1429, 50, 50, "P" }, { 1429, 70, 20, "W" }, { 1429, 50.3, 49.8, "T" },
+            { 1436, 50, 50, "P" }, { nil, nil, nil, "P" }, { 1429, 50, 50, "T" } }
+        local groups, of = D.Group(pts, 1429)
+        eq(#groups, 2)
+        eq(groups[1].steps, { 1, 3, 6 })
+        eq(groups[2].steps, { 2 })
+        eq(of[4], nil)
+        eq(of[5], nil)
+        eq(of[1], 1)
+        eq(of[2], 2)
+        eq(D.Label({ 4 }), "4")
+        eq(D.Label({ 3, 4 }), "3,4")
+        eq(D.Label({ 3, 4, 5 }), "3-5")
+        eq(D.Label({ 1, 2, 4 }), "1,2,4")
+        eq(D.Label({ 1, 3, 5, 7, 9 }), "1,3,5 +2")
+        eq(D.Label({ 1, 2, 3, 7, 9, 10, 11, 12 }), "1-3,7,9-12")
+    end)
+
+    test("search view: resizable from the corner; size and place are kept", function()
+        local ns = start()
+        local D = ns.Debug
+        -- a saved size and place are used when the view is first built
+        LevelScoutDB.debugWindow = { w = 900, h = 640, pos = { "TOPLEFT", "BOTTOMLEFT", 100, 700 } }
+        slash("debug")
+        ok(M.settle(), "re-planned with the search recorded")
+        local f, st = LevelScoutDebugFrame, D.state
+        eq(f.width, 900)
+        eq(f.height, 640)
+        local pt = f.points[1]
+        eq(pt[1], "TOPLEFT")
+        ok(pt[2] == UIParent)
+        eq(pt[3], "BOTTOMLEFT")
+        eq(pt[4], 100)
+        eq(pt[5], 700)
+        -- the map takes what is left of the list, in the zone map's 3 by 2
+        eq(f.canvas.width, 900 - 292)
+        near(st.geo.drawW / st.geo.drawH, 1.5, 1e-9)
+        ok(st.geo.drawW <= st.geo.areaW and st.geo.drawH <= st.geo.areaH, "the map fits its area")
+        ok(st.geo.ox >= 0 and st.geo.oy >= 0)
+        -- clamped to the limits, and saved
+        D.Resize(10, 10)
+        eq(LevelScoutDB.debugWindow.w, D.MIN_W)
+        eq(LevelScoutDB.debugWindow.h, D.MIN_H)
+        eq(f.width, D.MIN_W)
+        D.Resize(5000, 5000)
+        ok(LevelScoutDB.debugWindow.w <= 1900 and LevelScoutDB.debugWindow.h <= 1300, "and to a maximum")
+        -- the markers follow the map
+        D.Resize(1200, 800)
+        ok(#st.groups > 0)
+        near(f.nodes[1].points[1][4], st.geo.ox + st.groups[1].mx / 100 * st.geo.drawW, 1e-6)
+        -- dragging the grip: 60 right and 40 down from where the button went down
+        local grip = f.grip
+        D.Resize(800, 560)
+        local cx, cy = 500, 500
+        M.set("GetCursorPosition", function() return cx, cy end)
+        f.GetEffectiveScale = function() return 1 end
+        grip.scripts.OnMouseDown(grip)
+        cx, cy = 560, 460
+        grip.scripts.OnUpdate(grip, 0.02)
+        eq(LevelScoutDB.debugWindow.w, 860)
+        eq(LevelScoutDB.debugWindow.h, 600)
+        eq(f.width, 860)
+        grip.scripts.OnMouseUp(grip)
+        ok(LevelScoutDB.debugWindow.pos, "the place is saved when the grip is let go")
+        eq(LevelScoutDB.debugWindow.pos[3], 100)
+        cx, cy = 900, 100
+        grip.scripts.OnUpdate(grip, 0.02)
+        eq(LevelScoutDB.debugWindow.w, 860, "nothing moves after the button is released")
+        -- the list scrolls with the wheel, and a marker click scrolls it to the marker's first step
+        D.Resize(D.MIN_W, D.MIN_H)
+        ok(#st.steps >= 1)
+        if #st.steps >= st.geo.rows + 2 then
+            f.list.scripts.OnMouseWheel(f.list, -1)
+            eq(st.scroll, 2)
+            eq(f.rows[1].step, 3)
+            f.list.scripts.OnMouseWheel(f.list, 1)
+            eq(st.scroll, 0)
+        end
+        local g = #st.groups
+        local want = math.min(st.groups[g].steps[1] - 1, math.max(0, #st.steps - st.geo.rows))
+        f.nodes[g].scripts.OnClick(f.nodes[g])
+        eq(st.scroll, want)
+        eq(f.rows[1].step, want + 1)
+        slash("debug")
+        ok(not D.IsShown())
+
+        -- bad saved values: the default for what is not a number, the minimum for what is too small, the middle of the screen
+        local ns2 = start()
+        LevelScoutDB.debugWindow = { w = 5, h = "x", pos = { "TOPLEFT" } }
+        slash("debug")
+        ok(M.settle())
+        local f2 = LevelScoutDebugFrame
+        eq(f2.width, ns2.Debug.MIN_W)
+        eq(f2.height, ns2.Debug.DEFAULT_H)
+        eq(f2.points[1][1], "CENTER")
+        slash("debug")
     end)
 
     test("plan memory: forgotten on /ls learn reset and on entering the world; the search view writes none", function()

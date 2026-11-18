@@ -1736,14 +1736,53 @@ function Planner.Plan(zoneMap, ctx, opts)
 
     -- Debug view: with ctx.trace set to this zone, every round of the search is recorded as a
     -- frame (the route's stops as map points, what was taken out, what the route is worth).
+    -- Each point also carries a step-shaped description of its stop, for the debug view's list.
     -- (A dungeon plan is not searched: its frames are the route as built and the final one.)
     local trace = (ctx.trace ~= nil and (ctx.trace == zoneMap or ctx.dungeon ~= nil) and not opts.seed) and {} or nil
+    -- what the debug view lists for a stop: a step-shaped table for Format.StepTitle, made once
+    -- per stop and shared by every frame that has it (a camp's again when its reqs change)
+    local described = trace and {} or nil -- node -> { step = ..., n = #reqs, [k] = req }
+    local function traceStep(node)
+        local c = described[node]
+        if node.kind == "P" or node.kind == "T" then
+            if not c then
+                local m, accept = node.quest, node.kind == "P"
+                c = { step = { kind = accept and "accept" or "turnin", action = accept and "accept" or "turnin",
+                    target = accept and m.pickupName or m.turninName, fromBag = accept and m.fromBag or nil,
+                    quests = { { id = m.id, name = m.name, level = m.level } } } }
+                described[node] = c
+            end
+            return c.step
+        end
+        local reqs = node.reqs or {}
+        if c and c.n == #reqs then
+            local same = true
+            for k = 1, #reqs do if c[k] ~= reqs[k] then same = false break end end
+            if same then return c.step end
+        end
+        local first = reqs[1] and reqs[1].task or {}
+        local step = { kind = "work", action = ACTION[first.kind] or "do", target = first.label, from = first.from,
+            kills = type(first.kills) == "number" and first.kills > 0 and first.kills or nil, quests = {}, parts = {} }
+        local listed = {}
+        for _, req in ipairs(reqs) do
+            local q = req.quest
+            if not listed[q.id] then
+                listed[q.id] = true
+                step.quests[#step.quests + 1] = { id = q.id, name = q.name, level = q.level }
+            end
+            step.parts[#step.parts + 1] = { quest = q.id, index = req.task.index, label = req.task.label, need = req.task.need }
+        end
+        c = { step = step, n = #reqs }
+        for k = 1, #reqs do c[k] = reqs[k] end
+        described[node] = c
+        return step
+    end
     local function frame(kind, info)
         if not trace then return end
         local points, quests = {}, 0
         for i, node in ipairs(r.route) do
             local l = node.loc or {}
-            points[i] = { l.map, l.mx, l.my, node.kind }
+            points[i] = { l.map, l.mx, l.my, node.kind, node.kind ~= "S" and traceStep(node) or nil }
         end
         for _ in pairs(r.routed) do quests = quests + 1 end
         local f = info or {}
