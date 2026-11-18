@@ -8,11 +8,16 @@
 -- are worse than -0.5%, work and CPU. A second line gives the same for the best-ranked zone's route
 -- in its first 120 minutes. The zone-score columns (mean / worst / top zone % vs the unsearched plan)
 -- are secondary and come after.
--- VERDICT per config versus base (on the itinerary line; with ITIN=0 on the 120-minute line):
---   "better"              the paired mean is above 2 SE and no character is below -1%
---   "worse"               the paired mean is below -2 SE, or a character is below -2%
+-- VERDICT per config versus base (on the itinerary; with ITIN=0 on the 120-minute XP). The decisive block is
+-- "PAIRED BY CHARACTER": each character's mean difference over its salts, the mean of those, its standard error
+-- from the character means, and the bar t x SE (Student t, C - 1 degrees of freedom; tests/benchstats.lua):
+--   "identical"           every pair has the same XP (a pure speed-up)
+--   "better"              the mean is above the bar and no character is harmed by more than 1%
+--   "worse"               the mean is below minus the bar, or a character is harmed by more than 2%
 --   "no clear difference" otherwise
--- (docs/planner.md, "How a change is judged": a change is kept on a "better" with SALTS="0 1 2 3 4".)
+-- (a character is harmed by h% when its mean is below -h and below 0 beyond its own noise; the rule of the
+-- old headline, 2 SE on all pairs and a point rule per character, is printed as the last column and in the
+-- HEADLINE block.) docs/planner.md, "How a change is judged": a change is kept on a "better" with SALTS="0 1 2 3 4".
 -- Usage (from the repo root):
 --   .tools/bin/lua5.1 tests/bench.lua            compare the settings below
 --   REF=4000 .tools/bin/lua5.1 tests/bench.lua   also run a long search as the reference
@@ -35,10 +40,22 @@
 --   REPEAT=3      CPU ms = the minimum over repeats (scores are deterministic, time is noisy)
 --   CHARS=2       the held-out second set of eight characters
 --   ITIN=0        skip the itinerary (on by default; the headline then uses the 120-minute XP)
+--   CHARS=2       the held-out second set of eight characters; CHARS=all both sets (16)
+--   CRN=1         common random numbers: every config's search, base included, draws round t's numbers
+--                 from a sequence of its own (Search.STREAM = "rounds"); see the correlation line
+--   SEQ=1         sequential: salts in steps until every config is settled; LOOKS="3" (salt counts to
+--                 look at besides the last), SE_TARGET=0.2; SALTS defaults to "0 1 2 3 4 5" then
+--   ALPHA=0.05    two-sided level of the verdict (shared out over the looks with SEQ=1)
+--   POWER_DELTA=0.5   the difference in points the power line is worked out for (80% power)
+--   RAW=file      every run's figures as tab-separated text (config, character, salt, XP, work, CPU)
+--   RACE_DRY=1    what Zones.RACE would skip, from base's own runs (RACE_Q="0.2 0.3 0.5 0.75 1", RACE_KEEP)
+--   ARMS=1        per removal and regret strength (ranked zones' searches): rounds, outcomes, work, quests
+--                 taken out (Search.ARM_STATS), and a prior to paste into Search.BANDIT_PRIORS
 -- Columns: "work k" = thousand work units (plan.work, summed over zones, deterministic);
 -- "ms/kwork" = CPU ms per thousand work units, starred when it differs from base by over 20%.
 local root = (arg and arg[0] and arg[0]:match("^(.*)/tests/[^/]+$")) or "."
 package.path = root .. "/tests/?.lua;" .. package.path
+local BS = require("benchstats")
 local print = function(...) io.write(table.concat({ ... }, " "), "\n") end
 local H = require("harness")
 local M = require("mocks")
@@ -55,6 +72,19 @@ local CHARACTERS = {
     { 12, "Horde", "SHAMAN", 2, 1413, 52.0, 30.0, "Barrens, Crossroads" },
     { 25, "Horde", "WARLOCK", 5, 1424, 62.0, 20.0, "Hillsbrad, Tarren Mill" },
 }
+-- CHARS=2: a second, held-out set of characters (to check that a change found on the first set carries over)
+local SECOND = {
+    { 10, "Alliance", "HUNTER", 3, 1426, 46.8, 52.4, "Dun Morogh, Kharanos" },
+    { 18, "Alliance", "DRUID", 4, 1439, 37.0, 44.0, "Darkshore, Auberdine" },
+    { 26, "Alliance", "PRIEST", 1, 1437, 10.0, 59.0, "Wetlands, Menethil" },
+    { 38, "Alliance", "MAGE", 7, 1434, 27.0, 77.0, "Stranglethorn, Booty Bay" },
+    { 9, "Horde", "WARRIOR", 6, 1412, 48.0, 59.0, "Mulgore, Bloodhoof" },
+    { 17, "Horde", "ROGUE", 5, 1421, 45.0, 41.0, "Silverpine, Sepulcher" },
+    { 29, "Horde", "HUNTER", 8, 1440, 73.0, 61.0, "Ashenvale, Splintertree" },
+    { 40, "Horde", "SHAMAN", 2, 1434, 27.0, 77.0, "Stranglethorn, Booty Bay" },
+}
+if os.getenv("CHARS") == "2" then CHARACTERS = SECOND
+elseif os.getenv("CHARS") == "all" then for _, c in ipairs(SECOND) do CHARACTERS[#CHARACTERS + 1] = c end end
 
 -- CHARS=2: a second, held-out set of characters (to check that a change found on the first set carries over)
 if os.getenv("CHARS") == "2" then
@@ -134,11 +164,27 @@ local function numbers(name, default)
     return out
 end
 local only = os.getenv("ONLY") and tonumber(os.getenv("ONLY"))
-local SALTS = numbers("SALTS", "0")
+local function flag(name) local v = os.getenv(name); return v ~= nil and v ~= "" and v ~= "0" end
+local CRN, SEQ, RACE_DRY, ARMS = flag("CRN"), flag("SEQ"), flag("RACE_DRY"), flag("ARMS")
+local ALPHA = tonumber(os.getenv("ALPHA")) or 0.05
+local SE_TARGET = tonumber(os.getenv("SE_TARGET")) or 0.2
+local POWER_DELTA = tonumber(os.getenv("POWER_DELTA")) or 0.5
+local SALTS = numbers("SALTS", SEQ and "0 1 2 3 4 5" or "0")
+local LOOKS = {}
+if SEQ then
+    local seenLook = {}
+    for _, n in ipairs(numbers("LOOKS", "3")) do
+        n = math.floor(n)
+        if n >= 2 and n < #SALTS and not seenLook[n] then seenLook[n] = true; LOOKS[#LOOKS + 1] = n end
+    end
+    table.sort(LOOKS)
+    LOOKS[#LOOKS + 1] = #SALTS
+end
 local BUDGETS = os.getenv("BUDGET") and numbers("BUDGET", "") or {}
 local REPEAT = math.max(1, tonumber(os.getenv("REPEAT")) or 1)
 local ITIN = os.getenv("ITIN") ~= "0" and os.getenv("ITIN") ~= ""
 local DUMP = os.getenv("DUMP") and os.getenv("DUMP") ~= "" and os.getenv("DUMP") ~= "0"
+local JUDGED = ITIN and "itinXP" or "xp120"
 
 -- XP earned in the first `limit` seconds of a plan: its steps in order (the zone switch included in
 -- their times), the step under way when time runs out counting its share; nothing after the route's end.
@@ -155,6 +201,13 @@ local function xpWithin(plan, limit)
     return prevXP
 end
 
+local ARM_FIELDS = { "n", "best", "better", "kept", "rejected", "work", "picked" }
+local function addArms(into, name, e)
+    local t = into[name]
+    if not t then t = {}; for _, f in ipairs(ARM_FIELDS) do t[f] = 0 end; into[name] = t end
+    for _, f in ipairs(ARM_FIELDS) do t[f] = t[f] + (e[f] or 0) end
+end
+
 -- salt: Search.SEED_SALT; budget: { [map] = work units } for one search per zone (rounds uncapped)
 local function run(char, overrides, salt, budget)
     M.reset(); M.install()
@@ -162,8 +215,11 @@ local function run(char, overrides, salt, budget)
     local level, faction, class, race, map, x, y = unpack(char)
     ns.Data.Init({ faction = faction, class = class, clientBuild = ns.data.meta.build }, M.questieDB(faction, class))
     ns.Data.BuildIndex()
+    if CRN then ns.Search.STREAM = "rounds" end
+    if RACE_DRY then ns.Search.CURVE = true end
     for _, o in ipairs(overrides) do ns[o[1]][o[2]] = o[3] end
     ns.Search.SEED_SALT = salt or 0
+    if ARMS then ns.Search.ARM_STATS = true end
     local completed = {}
     for _, id in ipairs(ns.Data.QuestIds()) do
         local q = ns.Data.GetQuest(id)
@@ -213,6 +269,26 @@ local function run(char, overrides, salt, budget)
         out.order[#out.order + 1] = z.map
         out.work = out.work + (z.plan.work or 0)
         if z.plan.search then out.searchWork[z.map] = z.plan.search.work end
+    end
+    if ARMS then
+        out.arms = {}
+        for _, z in ipairs(ranked) do
+            local a = z.plan.search and z.plan.search.arms
+            if a then
+                for name, e in pairs(a.destroy) do addArms(out.arms, name, e) end
+                for i, e in pairs(a.regret) do addArms(out.arms, "regret #" .. i, e) end
+            end
+        end
+    end
+    if RACE_DRY then
+        out.race = { K = ns.Zones.RACE_KEEP or ns.Zones.ITINERARY_ZONES, rankWork = 0, zones = {} }
+        for _, z in ipairs(ranked) do
+            local p = z.plan
+            out.race.rankWork = out.race.rankWork + (p.work or 0)
+            out.race.zones[#out.race.zones + 1] = { map = z.map, score = p.score, plain = p.plainScore,
+                spent = p.searchSpent or 0, steps = #p.steps, keep = (z.map == state.map or z.forced) and true or false,
+                curve = p.search and p.search.curve or nil }
+        end
     end
     -- the neutral measure: XP earned following the best-ranked zone's route (stopping mid-step pro rata)
     local top = ranked[1] and ranked[1].plan
@@ -272,18 +348,68 @@ local function measured(char, overrides, salt, budget)
 end
 
 -- results[ci][i][si] = the plain run of config ci, character i, salt SALTS[si]
+-- Running order does not matter: every run reloads the addon.
 local results = {}
-for ci, config in ipairs(CONFIGS) do
+for ci in ipairs(CONFIGS) do
     results[ci] = {}
-    for i, char in ipairs(CHARACTERS) do
-        if not only or only == i then
-            results[ci][i] = {}
-            for si, salt in ipairs(SALTS) do
-                -- without a search (the first config) the salt changes nothing: run it once
-                results[ci][i][si] = (ci == 1 and si > 1) and results[ci][i][1] or measured(char, config[2], salt)
+    for i in ipairs(CHARACTERS) do if not only or only == i then results[ci][i] = {} end end
+end
+local function runSalts(from, to)
+    for si = from, to do
+        for ci, config in ipairs(CONFIGS) do
+            for i, char in ipairs(CHARACTERS) do
+                local runs = results[ci][i]
+                if runs then
+                    -- without a search (the first config) the salt changes nothing: run it once
+                    runs[si] = (ci == 1 and si > 1) and runs[1] or measured(char, config[2], SALTS[si])
+                end
             end
         end
     end
+end
+-- The paired differences to base of config ci on `field`, clustered by character, over the first nSalts
+-- salts (looks = how many looks the level is shared out over). See tests/benchstats.lua.
+local function clusteredFor(ci, field, nSalts, looks)
+    local chars = {}
+    for i, char in ipairs(CHARACTERS) do
+        local runs, base = results[ci][i], results[BASE][i]
+        if runs and base then
+            local ch = { label = char[1] .. " " .. char[8], n = nSalts, a = {}, b = {} }
+            for si = 1, nSalts do
+                if runs[si] and base[si] then ch.a[si], ch.b[si] = runs[si][field] or 0, base[si][field] or 0 end
+            end
+            chars[#chars + 1] = ch
+        end
+    end
+    return BS.clustered(chars, { alpha = ALPHA, looks = looks or 1 })
+end
+local SEQ_RESULT = {} -- [ci] = { verdict, salts, look, reason }
+if SEQ then
+    local K, done = #LOOKS, 0
+    for k, n in ipairs(LOOKS) do
+        runSalts(done + 1, n); done = n
+        print(string.format("SEQUENTIAL: look %d of %d after %d salts (each look at alpha %.4g: bar = t(%d df) x SE; settled: better, worse, identical or SE <= %.2f)",
+            k, K, n, ALPHA / K, math.max(1, #CHARACTERS - 1), SE_TARGET))
+        local open = 0
+        for ci, config in ipairs(CONFIGS) do
+            if ci ~= BASE and not SEQ_RESULT[ci] then
+                local st = clusteredFor(ci, JUDGED, n, K)
+                local v, reason = BS.verdict(st), nil
+                if v == "better" or v == "worse" or v == "identical" then reason = "settled: " .. v
+                elseif st.se and st.se <= SE_TARGET then v, reason = "no clear difference", string.format("settled: SE under %.2f", SE_TARGET)
+                elseif k == K then reason = "last look: " .. v end
+                print(string.format("  %-13s %+7.2f%% +-%5.2f bar %5.2f  %s", config[1], st.mean or 0, st.se or 0, st.bar or 0, reason or "open"))
+                if reason then SEQ_RESULT[ci] = { verdict = v, salts = n, look = k, reason = reason } else open = open + 1 end
+            end
+        end
+        if open == 0 then
+            for si = #SALTS, n + 1, -1 do SALTS[si] = nil end -- (every table below covers the salts run)
+            print(string.format("SEQUENTIAL: stopped after look %d of %d (%d salts)%s", k, K, n, k < K and ": every config settled" or ""))
+            break
+        end
+    end
+else
+    runSalts(1, #SALTS)
 end
 
 -- budgeted[ci][bi][i][si]: every config but "old", with a search budget of BUDGETS[bi] x what base spent
@@ -548,6 +674,47 @@ end
 print(string.format("(%d characters x %d salts = %d pairs per config; CPU is the minimum over REPEAT=%d runs on a possibly shared machine: indicative only; measure for the verdict: %s)",
     nChars, #SALTS, nChars * #SALTS, REPEAT, MEASURE))
 print("")
+print(string.format("PAIRED BY CHARACTER (decides): each character's mean %% difference to base over its salts; the mean of those, its SE from the character means, bar = t x SE (two-sided %.3g%s)",
+    ALPHA, SEQ and string.format(", shared over %d looks", #LOOKS) or ""))
+print(string.format("%-13s %-17s %8s %6s %6s %7s %7s %9s  %-26s %s", "settings", "measure", "mean", "+-SE", "bar", "worst", "harmed", "same", "verdict", "old rule"))
+local function row(name, measure, st, v, old)
+    return string.format("%-13s %-17s %+7.2f%% %6.2f %6.2f %+6.1f%% %3d/%-3d %4d/%-4d  %-26s %s", name, measure,
+        st.mean or 0, st.se or 0, st.bar or 0, st.worst or 0, st.harmed1, st.C, st.same, st.pairs, v, old)
+end
+local LABEL = ITIN and "itinerary" or "top zone 120 min"
+for ci, config in ipairs(CONFIGS) do
+    if totals[ci] and ci ~= BASE then
+        local st = clusteredFor(ci, JUDGED, #SALTS, SEQ and #LOOKS or 1)
+        local v = BS.verdict(st)
+        if SEQ and SEQ_RESULT[ci] then v = SEQ_RESULT[ci].verdict .. " @" .. SEQ_RESULT[ci].salts end
+        print(row(config[1], LABEL, st, v, verdict(paired(ci, JUDGED))))
+        local pad = string.rep(" ", 13)
+        if st.se then
+            local Snow = st.pairs / st.C
+            print(string.format("%s   variance of the mean: characters %.3f + salts %.3f (SE %.2f); x2 salts: SE %.2f, x2 characters: SE %.2f",
+                pad, st.partChar, st.partSalt, math.sqrt(st.partChar + st.partSalt), BS.project(st, st.C, 2 * Snow), BS.project(st, 2 * st.C, Snow)))
+            if st.sdA then
+                print(string.format("%s   salt noise within a character: base %.2f%%, this %.2f%%, difference %.2f%%, correlation %s",
+                    pad, st.sdB, st.sdA, st.sdD, st.rho and string.format("%+.2f", st.rho) or "-"))
+            end
+            if st.s2c > 0 or st.s2s > 0 then
+                local nd = BS.need(st, POWER_DELTA, 0.8, ALPHA)
+                local salts = nd.salts and string.format("%d salts (%d pairs)", nd.salts, nd.salts * st.C)
+                    or string.format("not reachable (the character part alone gives SE %.2f)", math.sqrt(st.partChar))
+                print(string.format("%s   to detect %.2f points at 80%% power: SE <= %.2f; with %d characters: %s; with %d salts: %s characters; salts unlimited: %s characters",
+                    pad, POWER_DELTA, nd.se, st.C, salts, math.floor(Snow + 0.5),
+                    nd.chars and tostring(nd.chars) or ">10000", nd.charsUnlimited and tostring(nd.charsUnlimited) or ">10000"))
+            end
+        elseif st.C < 2 then
+            print(pad .. "   (one character: no standard error)")
+        end
+        if ITIN then
+            local s2 = clusteredFor(ci, "xp120", #SALTS, SEQ and #LOOKS or 1)
+            print(row("", "top zone 120 min", s2, "-", "-"))
+        end
+    end
+end
+print("")
 print("SECONDARY: zone scores (best XP/h over at least an hour, per zone, against the unsearched plan)")
 print("")
 print(string.format("%-13s %12s %12s %12s %12s %10s %9s %9s%s", "settings", "mean zone", "worst zone", "top zone", "CPU ms/char", "stall ms", "work k/ch", "ms/kwork",
@@ -573,6 +740,54 @@ for ci, config in ipairs(CONFIGS) do
             if ci ~= 1 and r ~= b then line = line .. string.format("   %+.0f%%", (mz - b) / (r - b) * 100) end
         end
         print(line)
+    end
+end
+
+if ARMS then
+    print("")
+    print("ARMS: per removal and regret strength, over the ranked zones' searches of every character and salt (rounds; how they ended; work per round; quests taken out per round)")
+    for ci, config in ipairs(CONFIGS) do
+        local sum, any = {}, false
+        for i in ipairs(CHARACTERS) do
+            local runs = results[ci][i]
+            if runs then
+                for si = 1, #SALTS do
+                    local a = ci > 1 and runs[si].arms
+                    if a then
+                        for name, e in pairs(a) do addArms(sum, name, e); any = true end
+                    end
+                end
+            end
+        end
+        if any then
+            local names = {}
+            for name in pairs(sum) do names[#names + 1] = name end
+            table.sort(names)
+            print(string.format("%-13s %-26s %7s %6s %7s %6s %9s %8s %10s %8s", config[1], "arm", "rounds", "best%", "better%", "kept%", "rejected%", "success%", "work/round", "out/rnd"))
+            local function line(name)
+                local e = sum[name]
+                if e.n == 0 then return end
+                print(string.format("%-13s %-26s %7d %5.1f%% %6.1f%% %5.1f%% %8.1f%% %7.1f%% %10.0f %8.2f", "", name, e.n,
+                    100 * e.best / e.n, 100 * e.better / e.n, 100 * e.kept / e.n, 100 * e.rejected / e.n,
+                    100 * (e.best + e.better) / e.n, e.work / e.n, e.picked / e.n))
+            end
+            local priors, regrets = {}, {}
+            for _, name in ipairs(names) do
+                line(name)
+                local i = name:match("^regret #(%d+)$")
+                local e = sum[name]
+                if e.n > 0 then
+                    local p = (e.best + e.better) / e.n
+                    local text = string.format("{ s = %.2f, f = %.2f, w = %.0f, wn = 4 }", 4 * p, 4 * (1 - p), 4 * e.work / e.n)
+                    if i then regrets[#regrets + 1] = { tonumber(i), text }
+                    else priors[#priors + 1] = string.format("[%q] = %s", name, text) end
+                end
+            end
+            table.sort(regrets, function(a, b) return a[1] < b[1] end)
+            local rg = {}
+            for _, x in ipairs(regrets) do rg[#rg + 1] = string.format("[%d] = %s", x[1], x[2]) end
+            print(string.format("%-13s Search.BANDIT_PRIORS = { destroy = { %s }, regret = { %s } }", "", table.concat(priors, ", "), table.concat(rg, ", ")))
+        end
     end
 end
 
@@ -603,6 +818,138 @@ if #BUDGETS > 0 then
     end
 end
 
+if RACE_DRY then
+    -- Mirrors Zones.RaceSearch's rule: zones in base's ranked order; returns the skipped set, the work it
+    -- saved and the zones skipped although they ended in the top K.
+    local function raceSim(zones, q, K)
+        local lb, pending = {}, {}
+        for _, z in ipairs(zones) do
+            lb[z] = z.plain or z.score
+            if z.plain then pending[#pending + 1] = z end
+        end
+        table.sort(pending, function(a, b)
+            if a.keep ~= b.keep then return a.keep end
+            if a.plain ~= b.plain then return a.plain > b.plain end
+            return a.map < b.map
+        end)
+        local skipped, saved = {}, 0
+        for _, z in ipairs(pending) do
+            local others = {}
+            for _, o in ipairs(zones) do if o ~= z and o.steps > 0 then others[#others + 1] = lb[o] end end
+            table.sort(others, function(a, b) return a > b end)
+            local kth = others[K] or 0
+            if not z.keep and z.plain > 0 and z.plain * (1 + q) < kth then
+                skipped[z], saved, lb[z] = true, saved + z.spent, z.plain
+            else
+                lb[z] = z.score
+            end
+        end
+        local wrong, rank = {}, 0
+        for _, z in ipairs(zones) do
+            if z.steps > 0 then rank = rank + 1 end
+            if skipped[z] and z.steps > 0 and rank <= K then wrong[#wrong + 1] = z end
+        end
+        return skipped, saved, wrong
+    end
+    -- the runs of base: { label, salt, race }
+    local runsOfBase = {}
+    for i, char in ipairs(CHARACTERS) do
+        local runs = results[BASE][i]
+        if runs then
+            for si = 1, #SALTS do
+                if runs[si] and runs[si].race then
+                    runsOfBase[#runsOfBase + 1] = { label = char[1] .. " " .. char[8], salt = SALTS[si], race = runs[si].race }
+                end
+            end
+        end
+    end
+    local nRuns = #runsOfBase
+    local K = tonumber(os.getenv("RACE_KEEP")) or (nRuns > 0 and runsOfBase[1].race.K) or 5
+    local rankWork = 0
+    for _, run_ in ipairs(runsOfBase) do rankWork = rankWork + run_.race.rankWork end
+    print("")
+    print(string.format("RACING, DRY RUN (Zones.RACE, from base's runs, nothing planned again): a zone is not searched when its unsearched score x (1 + q) is below the %d-th best score known of the others; 'oracle' skips every searched zone outside base's top %d", K, K))
+    -- the gain of the search over the unsearched plan, and the best worth still to come after r rounds
+    local gains, worthGains, RS = {}, {}, { 0, 10, 20, 30, 60, 90 }
+    for _, r in ipairs(RS) do worthGains[r] = {} end
+    for _, run_ in ipairs(runsOfBase) do
+        for _, z in ipairs(run_.race.zones) do
+            if z.plain and z.plain > 0 then
+                gains[#gains + 1] = { (z.score / z.plain - 1) * 100, run_.label, run_.salt, z.map }
+            end
+            local c = z.curve
+            if c and #c >= 1 then
+                for _, r in ipairs(RS) do
+                    if r <= #c and c[r] and c[r] > 0 then worthGains[r][#worthGains[r] + 1] = (c[#c] / c[r] - 1) * 100 end
+                end
+            end
+        end
+    end
+    table.sort(gains, function(a, b) return a[1] < b[1] end)
+    if #gains > 0 then
+        local values = {}
+        for j, g in ipairs(gains) do values[j] = g[1] end
+        local top = gains[#gains]
+        print(string.format("gain of the search over the unsearched plan (final / unsearched - 1), %d searched zones: p50 %+.1f%%  p90 %+.1f%%  p95 %+.1f%%  p99 %+.1f%%  max %+.1f%% (%s, salt %s, map %d)",
+            #gains, BS.quantile(values, 0.5), BS.quantile(values, 0.9), BS.quantile(values, 0.95), BS.quantile(values, 0.99), top[1], top[2], tostring(top[3]), top[4]))
+    else
+        print("no searched zones (RACE_DRY needs plan.plainScore: a search of at least one round)")
+    end
+    print("the search's best worth still to come after r rounds (final best worth / best after r rounds - 1):")
+    for _, r in ipairs(RS) do
+        local list = worthGains[r]
+        if #list > 0 then
+            table.sort(list)
+            print(string.format("  r = %-3d %5d zones   p50 %+.1f%%  p90 %+.1f%%  p99 %+.1f%%  max %+.1f%%", r, #list,
+                BS.quantile(list, 0.5), BS.quantile(list, 0.9), BS.quantile(list, 0.99), list[#list]))
+        end
+    end
+    print(string.format("%-8s %13s %11s %14s %11s  %s", "q", "skipped", "per ranking", "saved k/rank", "of ranking", "wrongly skipped (in base's top K)"))
+    local function example(run_, z) return string.format("%s s%s map %d", run_.label, tostring(run_.salt), z.map) end
+    for _, q in ipairs(numbers("RACE_Q", "0.2 0.3 0.5 0.75 1")) do
+        local skipped, searched, saved, nWrong, examples = 0, 0, 0, 0, {}
+        for _, run_ in ipairs(runsOfBase) do
+            local set, got, wrong = raceSim(run_.race.zones, q, K)
+            for _, z in ipairs(run_.race.zones) do
+                if z.plain then searched = searched + 1 end
+                if set[z] then skipped = skipped + 1 end
+            end
+            saved, nWrong = saved + got, nWrong + #wrong
+            for _, z in ipairs(wrong) do if #examples < 3 then examples[#examples + 1] = example(run_, z) end end
+        end
+        print(string.format("%-8s %6d/%-6d %11.2f %14.0f %10.1f%%  %d%s", tostring(q), skipped, searched, nRuns > 0 and skipped / nRuns or 0,
+            nRuns > 0 and saved / nRuns / 1000 or 0, rankWork > 0 and 100 * saved / rankWork or 0, nWrong,
+            #examples > 0 and (": " .. table.concat(examples, "; ")) or ""))
+    end
+    do -- the oracle: every searched zone outside base's top K
+        local skipped, searched, saved = 0, 0, 0
+        for _, run_ in ipairs(runsOfBase) do
+            local rank = 0
+            for _, z in ipairs(run_.race.zones) do
+                if z.steps > 0 then rank = rank + 1 end
+                if z.plain then
+                    searched = searched + 1
+                    if not z.keep and rank > K then skipped, saved = skipped + 1, saved + z.spent end
+                end
+            end
+        end
+        print(string.format("%-8s %6d/%-6d %11.2f %14.0f %10.1f%%  %d", "oracle", skipped, searched, nRuns > 0 and skipped / nRuns or 0,
+            nRuns > 0 and saved / nRuns / 1000 or 0, rankWork > 0 and 100 * saved / rankWork or 0, 0))
+    end
+end
+
+local function perChar(ci, field)
+    local out = {}
+    for i in ipairs(CHARACTERS) do
+        local runs = results[ci][i]
+        if runs then
+            local s = 0
+            for si = 1, #SALTS do s = s + (runs[si][field] or 0) end
+            out[i] = s / #SALTS
+        end
+    end
+    return out
+end
 if os.getenv("VERBOSE") then
     print("per character, XP 60 / 120 / itinerary (mean over salts)")
     for i, char in ipairs(CHARACTERS) do
@@ -613,4 +960,24 @@ if os.getenv("VERBOSE") then
             end
         end
     end
+end
+
+local RAW = os.getenv("RAW")
+if RAW and RAW ~= "" then
+    local f = assert(io.open(RAW, "w"))
+    f:write("config\tchar\tlabel\tsalt\titinXP\txp120\txp60\twork\tms\n")
+    for ci, config in ipairs(CONFIGS) do
+        for i, char in ipairs(CHARACTERS) do
+            local runs = results[ci][i]
+            if runs then
+                for si = 1, #SALTS do
+                    local r = runs[si]
+                    f:write(string.format("%s\t%d\t%s\t%s\t%.3f\t%.3f\t%.3f\t%.0f\t%.1f\n", config[1], i, char[1] .. " " .. char[8],
+                        tostring(SALTS[si]), r.itinXP or 0, r.xp120 or 0, r.xp60 or 0, r.work or 0, r.ms or 0))
+                end
+            end
+        end
+    end
+    f:close()
+    print("per-run figures written to " .. RAW)
 end

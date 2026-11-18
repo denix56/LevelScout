@@ -31,6 +31,8 @@ Planner.TAIL_RATIO = 0.6       -- the route's end counts as a slow tail below th
 Planner.PRUNE_RATIO = 0.5      -- drop a quest paying less than this share of the route's rate
 Planner.SWITCH_OVERHEAD = 120  -- seconds lost when changing zone (bags, orientation)
 Planner.IMPROVE_PASSES = 3
+Planner.IMPROVE_GATES = true   -- `improve` without a guard takes back a move that leaves a quest before the level it
+                               -- needs (a stop paying XP moved past it); false = as before
 Planner.SCORE_GIVE = 0.05      -- a shorter route may cost up to this share of the peak XP per hour
 Planner.SEGMENT_MOVES = 3      -- longest run of consecutive stops moved together when improving
 Planner.SAME_PLACE_YARDS = 40  -- stops this close are one place: accept everything there at once
@@ -879,9 +881,13 @@ end
 -- like work-then-turn-in can only move as one.
 --- With `guard` = { overhead, floor = lowest score allowed }, a move that shortens the route
 --- but pushes what the route is worth per hour under the floor (XP paid out too much later)
---- is taken back, one move at a time.
+--- is taken back, one move at a time. Without one (and with IMPROVE_GATES), a move that leaves a
+--- quest before the level it needs is taken back: `bounds` checks only the moved stops' own levels,
+--- and a stop paying XP moved past a quest for a later level pushes the level-up past it. (A route
+--- that already has such a quest is left to whoever judges it.)
 function R:improve(passes, checkpoint, maxLen, guard)
     local route = self.route
+    local gates = Planner.IMPROVE_GATES and not guard and self.gated and not self:brokenGate()
     for _ = 1, passes do
         local improved = false
         for len = 1, maxLen or 1 do
@@ -919,6 +925,10 @@ function R:improve(passes, checkpoint, maxLen, guard)
                         target = i - 1
                         for k = 1, len do self:place(seg[k], target + k - 1) end
                     end
+                elseif gates and target ~= i - 1 and self:brokenGate() then
+                    for k = len, 1, -1 do self:unplace(seg[k]) end
+                    target = i - 1
+                    for k = 1, len do self:place(seg[k], target + k - 1) end
                 end
                 if target ~= i - 1 then improved = true else i = i + 1 end
                 if checkpoint then checkpoint() end
@@ -1902,7 +1912,10 @@ end
 ---                 seamSearch below. The result is then { zone, seam = (seamSearch's result or nil),
 ---                 work } instead of a plan }
 --- Returns { zone, steps, order, rate, score, peak, seconds, xp, lists, quests, fronted = the
---- keys of `front` that were brought forward (nil: none),
+--- keys of `front` that were brought forward (nil: none), plainScore = the score of the route
+--- tidied without the search (only when a search was possible; at most the score of a searched
+--- plan under the rate goal), searchSpent = work units of the warm start, the search and the
+--- tidy-up of its route (nil without a search),
 --- border = { [id] = { to, left = objectives left after this zone, gone = true when nothing of it
 --- is done here } }, borderIds = those ids, sorted (only with opts.border) }.
 function Planner.Plan(zoneMap, ctx, opts)
@@ -2433,6 +2446,7 @@ function Planner.Plan(zoneMap, ctx, opts)
         r.goalR = (ctx.altRate or r:score(opts.overhead)) * Planner.ALT_SHARE
     end
     local searched, unsearched, found, searchOrder = false, nil, nil, nil
+    local searchStartWork
     if not opts.seed then
         r:improve(Planner.IMPROVE_PASSES, checkpoint, 1)
         -- A dungeon plan is one run with its lead-up: there is little to search.
@@ -2440,6 +2454,7 @@ function Planner.Plan(zoneMap, ctx, opts)
         local searching = rounds > 0 and not ctx.dungeon and not ctx.chain
         -- the route as it would be without the search (see the end): always the cold greedy one
         if searching then unsearched = r:snapshot() end
+        searchStartWork = r.work
         -- Warm start: begin the search from the order an earlier plan of this zone ended on
         -- (opts.warm), when that is at least as good as the greedy route.
         local warmUsed = false
@@ -2641,6 +2656,7 @@ function Planner.Plan(zoneMap, ctx, opts)
         end
         table.sort(plan.borderIds)
     end
+    local spent = searched and (r.work - searchStartWork) or nil
     if fronted then -- (what the tidy-up kept of it)
         local kept, inPlan = {}, {}
         for _, key in ipairs(plan.order) do inPlan[key] = true end
@@ -2660,7 +2676,9 @@ function Planner.Plan(zoneMap, ctx, opts)
         elseif trace then
             trace[#trace] = nil
         end
+        plan.plainScore = plain.score -- the unsearched route's score: a lower bound of a searched plan's (rate goal)
     end
+    plan.searchSpent = spent -- work units of the warm start, the search and its tidy-up
     plan.trace = trace
     plan.search = found -- { rounds, work, weights, worth } or nil
     plan.work = r.work  -- all work units of this plan (build, search, finish of both routes)
