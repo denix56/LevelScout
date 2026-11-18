@@ -815,12 +815,14 @@ H.suite("Itinerary (real data)", function()
     end)
 
     test("three zones: the second and third are planned from where the one before is left", function()
-        local was = ns.Zones.HORIZON
-        ns.Zones.HORIZON = 5 * 3600
+        -- (how many zones fit is the plans' business: seven hours hold three, with the search's
+        -- fix for quests before their level and without it; five hours held three only without)
+        local was, HOURS = ns.Zones.HORIZON, 7
+        ns.Zones.HORIZON = HOURS * 3600
         local long = ns.Zones.Itinerary(state, ctx, ranked)
         local again = ns.Zones.Itinerary(state, ctx, ranked)
         ns.Zones.HORIZON = was
-        eq(#long.segments, 3, "five hours are enough for three zones")
+        eq(#long.segments, 3, HOURS .. " hours are enough for three zones")
         ok(long.xp > long.stay)
         local clock, xp, seen = 0, 0, {}
         for i, seg in ipairs(long.segments) do
@@ -834,7 +836,7 @@ H.suite("Itinerary (real data)", function()
             eq(again.segments[i].leaveKey, seg.leaveKey)
         end
         eq(long.segments[1].carried, 0, "nothing is brought along to the first zone")
-        ok(clock <= 5 * 3600 + 1, "inside the horizon: " .. clock)
+        ok(clock <= HOURS * 3600 + 1, "inside the horizon: " .. clock)
         ok(math.abs(xp - long.xp) <= 3, "the zones' XP adds up to the total")
         eq(again.xp, long.xp)
     end)
