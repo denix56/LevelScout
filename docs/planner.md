@@ -600,6 +600,55 @@ until it is done, then the zones take over again.
   higher level, repeatables and seasonal quests, quests that start from an item, quests with an
   objective no database can locate.
 
+## Snapshots and replay (`core/Snapshot.lua`, `tests/replay.lua`)
+
+`/ls snapshot [note]` saves what a plan was made from and what was shown for it, with the character
+(`LevelScoutCharDB.snapshots`, the last `Engine.SNAPSHOTS` = 5; written to disk at logout or `/reload`).
+It cannot just copy the screen: the zones, the shown route and the itinerary usually come from different
+runs (a quick re-plan changes the route only, the itinerary follows a full run), and the sets a state holds
+(`completed`, `knownNodes`, `ignored`) are live tables that change in place. So the command notes a light
+view of what is on screen (`before`), then asks for one full re-plan. That run's state is copied to plain
+data as it is gathered (only while a snapshot is pending); when its plan job and its itinerary job have
+both finished, what came out (`shown`) is recorded and saved. A run that is stopped is simply taken again,
+so while the player is questing a snapshot can take a while; the chat message advises standing still. A
+`/reload` before "saved" loses the pending snapshot.
+
+The format is described in the header of `core/Snapshot.lua`. It holds no reference to a live table, no
+function and no cycle (`Snapshot.Copy`); ids are written as differences ("12,3,1,40"), the account's drop
+counts as one string, and the functions of a state (`tagOf`, `partyOn`) as their answers for the quests in
+the log. `Snapshot.State` turns an input back into a planner state. Size: about 30-60 KB a snapshot.
+
+`tests/replay.lua <SavedVariables file> [id]` loads the planner offline (the real QuestieDB, as the game
+tests do), applies the settings that were saved, plans the input again as the Engine's full run does and
+lists what differs: the zones (score, rate, route), the shown route step by step, the itinerary and the
+banner. Exit code 0 when nothing differs, 1 when something does, 2 when it could not run. Options:
+`--list`, `--settings=code`, `--zone=MAP`, `--cold`, `--account=PATH`, `--drops=account`.
+
+What makes a replay exact: the search is seeded from its input (the zone, the level, the number of
+candidates), the planner sorts what it iterates, and what is not an input is recorded. The warm start
+each zone had is stamped on its plan (`warmSeed`, `warmWeights`) and replayed through a fresh memory; the
+shown route's recipe is stamped by `Zones.PlanZone` (`seedOrder`, `seedFront`, `seedFirst`) and read as
+`shown.made` (a ranked plan, a kept order with stops brought forward or the step in hand pinned, or a
+fresh plan); the previous itinerary's zones and the previous banner (`itineraryWas`, `moveOnWas`) are
+what `Zones.Itinerary` and `Zones.MoveOn` read of the past. So with the same code, data, QuestieDB and
+settings the figures agree to the last bit, and the tolerances (`R.TOL`) allow only for how numbers are
+saved and the C library's rounding.
+
+What is not replayed: the Engine's decisions (which zone is shown, whether its route was kept, pinned or
+fresh, `Engine.KEEP_GOAL`, `FOLLOW_PATH`) and class chain offers and flight stops are taken from the
+snapshot; the view before the command (`before`) is shown and never compared; the answers of `tagOf` and
+`partyOn` are frozen when the state is gathered (in the game they are asked a few frames later); zones
+handed out again from an earlier ranking (`Zones.REUSE`, off) are flagged as not comparable. The script
+prints both sets of versions: with other code, data or QuestieDB a difference may come from that alone
+(check out the tag in `version.addon` for an exact replay). Not checked: that the game's Lua and libm round
+as this one does (they can flip a near-tie), and that QuestieDB's race- or locale-dependent corrections do
+not reach planning (offline QuestieDB runs as a Human on an enUS client).
+
+Automatic snapshots are not built. They would call `Engine.Snapshot` from the end of the plan job in
+`Engine.run`, for example when the shown zone changes by itself or the banner turns on, or from
+`Tracker.OnPlan` when a finished step took far longer than planned. Such a trigger must be rate-limited
+and must not fire from a snapshot's own re-plan.
+
 ## Files
 
 | Path | Contents |
@@ -617,6 +666,7 @@ until it is done, then the zones take over again.
 | `LevelScout/core/Memory.lua` | Plan memory between re-rankings |
 | `LevelScout/core/Zones.lua` | Planning context, shortlist, ranking, move-on, order stability |
 | `LevelScout/core/Classes.lua` | Class quest chains: which are available, the plan for one |
+| `LevelScout/core/Snapshot.lua` | A snapshot of the planning input and what was shown, and back to a planner state |
 | `LevelScout/Engine.lua` | Reads game state, runs the planner in the background, publishes the view |
 | `LevelScout/Tracker.lua` | Turns quest-log progress, kills, positions and finished steps into samples for `Learn`; keeps the step log |
 | `LevelScout/Guide.lua` | The one waypoint (TomTom arrow, else the game's map pin) and the way to the current step from where the player stands |
@@ -624,6 +674,7 @@ until it is done, then the zones take over again.
 | `LevelScout/ui/Window.lua` | The window |
 | `LevelScout/ui/Debug.lua` | The search view: the route on the map, frame by frame |
 | `tests/sim.lua` | Plans for an imagined character on the real data and prints the result |
+| `tests/replay.lua` | Plans a snapshot from the game again and lists what differs |
 | `tests/bench.lua` | Compares planner settings on eight imagined characters: route worth and CPU time |
 
 ## The window
@@ -944,6 +995,9 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    should not stall the game. Enter, or a click, makes it the plan ("Quest: [level] name"). Check
    that Escape clears the box and leaves it, and that keys typed there do not also move the
    character (the box must take the keyboard while it has focus).
+14. Snapshots. `/ls snapshot test`: chat says "Taking a snapshot ...", then within a few seconds
+   "Snapshot N saved". `/reload`, then run `tests/replay.lua` on the character's
+   `SavedVariables/LevelScout.lua` and paste the RESULT line and any differences.
 
 ### QuestieDB as a runtime dependency
 
