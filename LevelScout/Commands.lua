@@ -192,13 +192,20 @@ SlashCmdList.LEVELSCOUT = function(msg)
         buildIndex(function() printZone(uiMapId) end)
     elseif cmd == "log" then
         printLog()
+    elseif cmd == "snapshot" then
+        local ok, why = ns.Engine.Snapshot(arg ~= "" and arg:sub(1, 200) or nil)
+        if ok then
+            ns.Print("Taking a snapshot: planning once more to record what the plan is made from (a few seconds; best while standing still). Chat says when it is saved.")
+        else
+            ns.Print("No snapshot: %s.", why)
+        end
     elseif cmd == "taxi" then
         for _, line in ipairs(ns.FlightMap and ns.FlightMap.Describe() or { "flight map highlight is not loaded" }) do ns.Print(line) end
     elseif cmd == "pos" then
         local uiMapId, x, y = Game.GetPosition()
         ns.Print("uiMapID %s  x %s  y %s", tostring(uiMapId), tostring(x), tostring(y))
     else
-        ns.Print("commands: (none) show or hide the window, status, plan, replan [fresh], learn [reset], buffs, debug (search view), quest <id>, zone [uiMapID], log, pos, taxi (flight map highlight), about")
+        ns.Print("commands: (none) show or hide the window, status, plan, replan [fresh], snapshot [note], learn [reset], buffs, debug (search view), quest <id>, zone [uiMapID], log, pos, taxi (flight map highlight), about")
     end
 end
 
