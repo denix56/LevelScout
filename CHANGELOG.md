@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Search view (debug)**: the window can be resized from its corner and keeps its size and place
+  across `/reload`. The map numbers the route's stops in order (steps at one place share a marker:
+  "3-5"), a list of the route's steps sits to the right of the map and follows the slider, and
+  hovering a step lights up its marker, and hovering a marker its steps.
 - **Play log (`/ls play`)**: LevelScout now keeps, with your character, what the plan promised
   for the next 15, 30 and 60 minutes and what you really earned, and where you did something
   else than the plan: a zone chosen by hand, a skipped quest, quests turned in out of the

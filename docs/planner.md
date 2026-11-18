@@ -684,7 +684,7 @@ and must not fire from a snapshot's own re-plan.
 | `LevelScout/Guide.lua` | The one waypoint (TomTom arrow, else the game's map pin) and the way to the current step from where the player stands |
 | `LevelScout/ui/Format.lua` | Step titles, durations, numbers, the way to the current step in words |
 | `LevelScout/ui/Window.lua` | The window |
-| `LevelScout/ui/Debug.lua` | The search view: the route on the map, frame by frame |
+| `LevelScout/ui/Debug.lua` | The search view: the route on the map, numbered, with its steps listed, frame by frame |
 | `tests/sim.lua` | Plans for an imagined character on the real data and prints the result |
 | `tests/replay.lua` | Plans a snapshot from the game again and lists what differs |
 | `tests/bench.lua` | Compares planner settings on eight imagined characters: route worth and CPU time |
@@ -933,14 +933,18 @@ that gets completed anyway has its turn-in planned, and it leaves the skipped li
 
 `/ls debug`, or "Search view (debug)" in the options menu, opens a second window that shows how the search arrived at the route (`ui/Debug.lua`).
 
-- **Map**: the route drawn over the zone's map, gold at the start to blue at the end. Stops are coloured by kind (accept, work, turn in). Stops on other maps are not drawn and break the line.
+- **Window**: drag the title area to move it, the bottom-right grip to resize it (from 592 x 382). The size and place are kept across `/reload` in `LevelScoutDB.debugWindow` (`w`, `h`, `pos`); a saved size is clamped to the limits. The map uses the space left of the steps list and keeps the zone map's 3 by 2 shape.
+- **Map**: the route drawn over the zone's map, gold at the start to blue at the end. Each place on the route is one marker, coloured by its first step's kind (accept, work, turn in) and labelled with the numbers of the steps done there, in route order: "4", "3,4", "3-5", at most three runs and then "+N". Stops within 0.6% of the map of each other count as one place. The start is the larger white square, unnumbered. Stops on other maps are not drawn and break the line.
+- **Steps list** (right of the map): the shown frame's route, step by step: number, kind (ACCEPT, KILL, COLLECT, TURN IN, ...), what to do (`Format.StepTitle`) and, below, the NPC or the quests. It follows the slider; the wheel over the list scrolls it.
+- **Hover**: hovering a row lights up its marker; hovering a marker lights up its rows and lists its steps in a tooltip; clicking a marker scrolls the list to its first step.
 - **Frames**: the route as first built, one frame per search round, then the final route. A round's frame says what was taken out (marked red on the map), and whether the result was a new best, better, slightly worse but kept, or undone.
-- **Slider, Play, mouse wheel**: step through the frames. The view opens on the final route.
+- **Slider, Play, mouse wheel over the map**: step through the frames. The view opens on the final route.
 - **Curve**: what each round's route was worth (grey) and the best so far (gold), with a marker at the shown frame.
 - While the view is open, the engine plans the shown zone once more from scratch on every re-plan to record the search. Closing it stops that. Recording does not change the plan.
+- Each recorded stop also carries a short description (kind, target, quests), made once per stop and shared by the frames: about 16 bytes per stop per frame.
 - Dungeon plans are not searched, so there is nothing to show for them.
 
-Not verified in the game: the map art (`C_Map.GetMapArtLayers` / `GetMapArtLayerTextures`; a plain dark background is used when they are missing), line drawing (`CreateLine`; without it only the stops are drawn), and the slider's look.
+Not verified in the game: the map art (`C_Map.GetMapArtLayers` / `GetMapArtLayerTextures`; a plain dark background is used when they are missing), line drawing (`CreateLine`; without it only the stops are drawn), the slider's look, the resize grip and its art, the wheel reaching the list rather than the window, the markers' outlined numbers and their tooltip, and `OnLeave` when a hovered marker is hidden during Play.
 
 ## In-game checks
 
@@ -1010,6 +1014,13 @@ calls, which proves the code paths run, not that the client behaves as mocked.
 14. Snapshots. `/ls snapshot test`: chat says "Taking a snapshot ...", then within a few seconds
    "Snapshot N saved". `/reload`, then run `tests/replay.lua` on the character's
    `SavedVariables/LevelScout.lua` and paste the RESULT line and any differences.
+15. Search view. `/ls debug`: drag the bottom-right corner; the map, the curve and the steps list
+   should follow, and the map should keep its shape. The numbers on the map should stay readable
+   where steps pile up (one marker for one place: "3-5"). Hovering a row of the list should light
+   up its marker, and hovering a marker its rows, with the marker's steps in a tooltip; a click on
+   a marker should scroll the list to it. The wheel should scroll the list when the mouse is over
+   it and step the frames elsewhere. After `/reload` the window should come back with the same
+   size, in the same place.
 
 ### QuestieDB as a runtime dependency
 
