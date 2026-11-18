@@ -533,7 +533,7 @@ saveSnapshot = function(moveOnWas)
     local list = chardb.snapshots
     list[#list + 1] = rec
     while #list > Engine.SNAPSHOTS do table.remove(list, 1) end
-    ns.Print("Snapshot %d saved%s. It is written to disk at logout or /reload.", id, s.note and (": " .. s.note) or "")
+    ns.Print("Snapshot %d saved%s. It is written to disk at logout or /reload.", id, s.note and (" (" .. s.note .. ")") or "")
 end
 
 -- The zones a plan's steps are in, in route order, each once (names).
