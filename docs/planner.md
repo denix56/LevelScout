@@ -292,6 +292,8 @@ A quest accepted in one zone and finished in another (a letter for the next zone
 
 ### The way across a zone border, planned together (`Zones.SEAM`)
 
+**Off by default** (`Zones.SEAM = false`, 2026-11-18): on the bench it made no clear difference (+0.02%, taken in 1 run of 80) and its own estimate of a stretch was a poor guide to the real plans (see "Measured" below). It is kept for further work; the tests turn it on.
+
 Each zone's route is planned for that zone alone, and the itinerary strings them together: the first zone is left after one of its steps, the trip is on the clock, and the next zone is planned from where the first is left. So the end of the first zone's route is in the order that suits that zone (it may end on its far side), and a quest near the border that pays too little in either zone alone stays out, even when the path passes it. Now the stretch around the crossing is planned as one route.
 
 - **The stretch**: the first zone's steps that end in its last `Zones.SEAM_SPAN` (20 minutes) before it is left, and the next zone's steps that end in its first 20 minutes, at least `SEAM_MIN_STOPS` (3) and at most `SEAM_MAX_STOPS` (12) on each side (never the shown route's first step: the step in hand stays), plus up to `Zones.SEAM_FREE` (6) quests either zone left out (as slow, or for after it is left) that start within `Zones.SEAM_REACH` (500 yards) of the stretch, the nearest first. The rest of both routes stays as it is.
@@ -1124,7 +1126,7 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    turned in when its zone is planned. Compare the itinerary job's time ("Planning the next hours")
    with and without a set to take along. `/ls snapshot` with a set on screen, then `tests/replay.lua`:
    no difference reported.
-17. The way across a zone border, planned together (`Zones.SEAM`). With an itinerary into a
+17. The way across a zone border, planned together (`Zones.SEAM`; off by default: turn it on first with `/run LevelScout.Zones.SEAM = true`). With an itinerary into a
    neighbouring zone (Elwynn and Dun Morogh or Westfall, Tanaris and its neighbours): the tooltip of
    the "Next 2 hours" row says the way was planned together; the last steps before "Then:" end nearer
    the border, and quests near the border may be added. Through quick re-plans the order stays and

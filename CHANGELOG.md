@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-- **The way into the next zone is planned together**: when the next hours go on to a neighbouring zone,
-  the last part of this zone's route, the trip and the first part of the next zone's are planned as one,
-  so the route ends nearer the border and quests near it that either zone left out are done on the way.
-  It is taken only when it earns more over the next hours.
 - **Quests that end in the next zone are taken along**: when the next hours go on to another
   zone, quests that are accepted on the way and finished there (a letter for that zone's town,
   "report to" someone there, work over the border) are accepted in the first zone's route and

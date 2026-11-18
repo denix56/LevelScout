@@ -1420,7 +1420,7 @@ H.suite("The way across a border, planned together", function()
     -- the world loaded with the flags the tests are about: the quests taken along are left out of it
     local function world(build, flags)
         local ns = load(build)
-        ns.Zones.BORDER = false
+        ns.Zones.BORDER, ns.Zones.SEAM = false, true -- (the way across is off by default: on for this suite)
         for k, v in pairs(flags or {}) do ns.Zones[k] = v end
         return ns
     end
@@ -1563,6 +1563,7 @@ H.suite("The way across a border, planned together", function()
     test("Zones.WithSeam lays a way across over a route; another route does not take it", function()
         local ns = load()
         local Z = ns.Zones
+        Z.SEAM = true -- (off by default)
         local ctx = Z.Context(state())
         local base = Z.PlanZone(1, ctx)
         local o = base.order
