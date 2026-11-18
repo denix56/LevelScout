@@ -1077,6 +1077,285 @@ H.suite("Zones", function()
     end)
 end)
 
+-- Quests that end beyond the first zone (zone 1's quests with a turn-in or work in zone 2).
+-- (A first guess at the XP: the tests check what they rely on, and say what is wrong.)
+local function borderWorld(data)
+    local q = data.quests
+    q[22] = quest({ name = "Letter to the Fort", xp = 120, starts = "n100", ends = "n110" })           -- deliver to zone 2
+    q[23] = quest({ name = "Bandit Report", xp = 300, starts = "n101", ends = "n110", objectives = "c210:4:C" }) -- work in zone 2
+    q[24] = quest({ name = "Boar Report", xp = 300, starts = "n100", ends = "n110", objectives = "c200:4:C" })   -- work here
+    q[25] = quest({ name = "After the Letter", zone = 2, xp = 300, starts = "n110", ends = "n110", preAll = "22" })
+    q[26] = quest({ name = "Back Home", xp = 300, starts = "n100", ends = "n100", objectives = "c210:3:C" })    -- work there, turn-in back here
+    q[27] = quest({ name = "Second Letter", xp = 300, starts = "n100", ends = "n100", preAll = "22" })         -- follows 22 here
+    q[28] = quest({ name = "Far Letter", xp = 300, starts = "n100", ends = "n120" })                          -- turn-in on the other continent
+    data.npcs[120] = "Far Clerk|10|10|0|2|A|" .. S(3, 50, 50)
+    -- zone 2 long enough to follow zone 1 in an itinerary (Zones.MIN_STAY)
+    q[20] = quest({ name = "Other Zone", zone = 2, xp = 700, starts = "n110", ends = "n110", objectives = "c210:20:C" })
+    q[21] = quest({ name = "Other Zone 2", zone = 2, xp = 900, starts = "n110", ends = "n110", objectives = "c210:30:C" })
+end
+
+H.suite("Quests across a border", function()
+    local TAKEN = { [22] = true, [23] = true, [24] = true }
+    -- is this order key one of the quests 22-24 (an accept, a turn-in, or a camp of its own)?
+    local function ofTaken(key)
+        local id = key:match("^[PT]:(%d+)$") or key:match("#(%d+)$")
+        return id ~= nil and TAKEN[tonumber(id)] == true
+    end
+    local function others(plan)
+        local out = {}
+        for _, k in ipairs(plan.order) do if not ofTaken(k) then out[#out + 1] = k end end
+        return out
+    end
+    local function turnins(plan, skipTaken)
+        local sum = 0
+        for _, st in ipairs(plan.steps) do
+            if st.kind == "turnin" and not (skipTaken and TAKEN[st.quests[1].id]) then sum = sum + st.xp end
+        end
+        return sum
+    end
+    local function setOf(list)
+        local out = {}
+        for _, id in ipairs(list or {}) do out[id] = true end
+        return out
+    end
+    -- zone 1's own plan, and the set 22-24 laid over it (before = its last stop of another quest)
+    local function laid(ns, ids)
+        local ctx = ns.Zones.Context(state())
+        local plain = ns.Zones.PlanZone(1, ctx)
+        local before
+        for _, k in ipairs(plain.order) do if not ofTaken(k) then before = k end end
+        local to = {}
+        for _, id in ipairs(ids or { 22, 23, 24 }) do to[id] = 2 end
+        local border = { zone = 1, ids = ids or { 22, 23, 24 }, to = to, before = before }
+        return plain, ns.Zones.PlanZone(1, ctx, plain.order, plain.from, { border = border }), border, ctx
+    end
+
+    test("a quest taken along: only its stops here are planned, nothing else moves", function()
+        local ns = load(borderWorld)
+        local plain, got, border = laid(ns)
+        eq(others(got), others(plain), "everything else stays as it was")
+        local before = indexOf(got, border.before)
+        ok(before, "the stop it is left after is still there")
+        for _, id in ipairs({ 22, 23, 24 }) do
+            local at = indexOf(got, "P:" .. id)
+            ok(at and at > 1 and at < before, "the accept of " .. id .. " is after the first stop and before leaving")
+            eq(indexOf(got, "T:" .. id), nil, "its turn-in is no step here")
+        end
+        for _, st in ipairs(got.steps) do
+            if st.kind == "accept" and TAKEN[st.quests[1].id] then eq(st.borderTo, 2, "the accept says where it is finished") end
+        end
+        local work24
+        for i, st in ipairs(got.steps) do
+            for _, part in ipairs(st.parts or {}) do if part.quest == 24 then work24 = i end end
+        end
+        ok(work24 and work24 < before, "the boars of quest 24 are killed here, before leaving")
+        eq(got.border[23].left, 1, "its bandits are left to do")
+        eq(got.border[22].left, 0)
+        eq(got.borderIds, { 22, 23, 24 })
+        local sum, want = turnins(got), turnins(plain, true)
+        ok(math.abs(sum - want) <= 0.05 * want + 1, "no turn-in XP of theirs here: " .. sum .. " against " .. want)
+        eq(keys(select(2, laid(ns))), keys(got), "planned twice: the same route")
+    end)
+
+    test("follow-ups of a quest taken along wait", function()
+        local ns = load(borderWorld)
+        local _, got = laid(ns, { 22 })
+        eq(indexOf(got, "P:27"), nil, "Second Letter needs a quest that is turned in elsewhere")
+        local found
+        for _, e in ipairs(got.lists.later) do if e.id == 27 then found = e end end
+        ok(found, "it is listed")
+        eq(found.reason, "follows a quest finished in the next zone")
+    end)
+
+    test("what is left of a quest taken along goes into the log, and the next zone turns it in", function()
+        local ns = load(borderWorld)
+        local _, got, border, ctx = laid(ns)
+        local leave = indexOf(got, border.before)
+        local after, carried = ns.Zones.Project(state(), ctx, got, leave)
+        local byId = {}
+        for _, e in ipairs(after.log) do byId[e.id] = e end
+        ok(byId[22] and byId[22].isComplete, "a delivery is finished: only the turn-in is left")
+        ok(byId[23] and not byId[23].isComplete, "its work in the next zone is not done")
+        ok(byId[24] and byId[24].isComplete, "the boars are done here")
+        ok(carried[22] and carried[23] and carried[24], "all three are brought along")
+        local there = ns.Zones.PlanZone(2, ns.Zones.Context(after))
+        local t22, t23, p25 = indexOf(there, "T:22"), indexOf(there, "T:23"), indexOf(there, "P:25")
+        ok(t22 and t23, "the next zone turns them in")
+        local work23
+        for _, st in ipairs(there.steps) do
+            for _, part in ipairs(st.parts or {}) do if part.quest == 23 then work23 = true end end
+        end
+        ok(work23, "and does the work of quest 23")
+        ok(p25 and p25 > t22, "the follow-up of 22 is accepted after its turn-in")
+    end)
+
+    test("which quests can be taken along", function()
+        local ns = load(borderWorld)
+        local ctx = ns.Zones.Context(state())
+        local plain = ns.Zones.PlanZone(1, ctx)
+        local leave = #plain.steps
+        local list = ns.Zones.BorderQuests(1, ctx, plain, leave, { 2 })
+        local found = {}
+        for _, q in ipairs(list) do found[q.id] = q.to end
+        eq(found[22], 2, "a delivery to the next zone")
+        ok(#list >= 2, "and the others that end there")
+        eq(found[8], nil, "given in the next zone")
+        eq(found[26], nil, "its turn-in is back here")
+        local sorted = true
+        for i = 2, #list do if list[i - 1].id >= list[i].id then sorted = false end end
+        ok(sorted, "by id")
+        -- the quest of the step the zone is left after stays
+        for i, st in ipairs(plain.steps) do
+            local id = st.kind == "turnin" and found[st.quests[1].id] and st.quests[1].id
+            if id then
+                for _, q in ipairs(ns.Zones.BorderQuests(1, ctx, plain, i, { 2 })) do ok(q.id ~= id, "not the quest of the leave step") end
+                break
+            end
+        end
+        local skipped = ns.Zones.Context(state({ ignored = { [22] = true } }))
+        local without = {}
+        for _, q in ipairs(ns.Zones.BorderQuests(1, skipped, plain, leave, { 2 })) do without[q.id] = true end
+        eq(without[22], nil, "one the player skipped")
+        eq(#ns.Zones.BorderQuests(1, ctx, setmetatable({ logFull = true }, { __index = plain }), leave, { 2 }), 0, "a full quest log")
+        ns.Zones.BORDER_MAX = 1
+        eq(#ns.Zones.BorderQuests(1, ctx, plain, leave, { 2 }), 1, "at most Zones.BORDER_MAX")
+    end)
+
+    -- the first zone's route on screen, the zones ranked, and the next hours with and without
+    local function hours(ns, extra)
+        local st = state()
+        local ctx = ns.Zones.Context(st)
+        local ranked = ns.Zones.Rank(ctx)
+        local shown = ns.Zones.PlanZone(1, ctx)
+        local opts = { shown = 1, plan = shown }
+        for k, v in pairs(extra or {}) do opts[k] = v end
+        return ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked, opts), shown, st, ranked
+    end
+
+    test("the itinerary takes them along only when it earns more, never less than without", function()
+        local ns = load(borderWorld)
+        ns.Zones.BORDER = false
+        local plainIt, shown = hours(ns)
+        ok(plainIt and #plainIt.segments >= 2 and plainIt.segments[1].map == 1 and plainIt.segments[2].map == 2,
+            "the fixture's itinerary goes from zone 1 to zone 2")
+        eq(plainIt.border, nil)
+        ns.Zones.BORDER = true
+        local it = hours(ns)
+        ok(it.xp >= plainIt.xp, "never less")
+        ok(it.border and setOf(it.border.ids)[22], "the delivery is taken along")
+        ok(it.xp > plainIt.xp * (1 + ns.Zones.BORDER_GAIN), "and earns more than it has to")
+        local first = it.segments[1]
+        eq(first.leaveKey, plainIt.segments[1].leaveKey, "the moment to leave stands")
+        ok(indexOf(first.plan, "P:22") < indexOf(first.plan, first.leaveKey), "accepted before leaving")
+        ok(indexOf(it.segments[2].plan, "T:22"), "turned in in the next zone")
+        eq(first.plan.base, shown, "the route without them is the base")
+        eq(it.here, it.xp)
+        ns.Zones.BORDER_GAIN = 1
+        local strict = hours(ns)
+        eq(strict.border, nil, "not worth a hundred percent more")
+        eq(strict.xp, plainIt.xp)
+    end)
+
+    test("a quest the next zone does not use is left out again", function()
+        local ns = load(borderWorld)
+        ns.Zones.BORDER_MAX = 8
+        local it = hours(ns)
+        ok(it and it.border, "something is taken along")
+        eq(setOf(it.border.ids)[28], nil, "the letter to the other continent is not used by the next zone")
+        eq(indexOf(it.segments[1].plan, "P:28"), nil)
+    end)
+
+    test("the set on screen is kept: the itinerary returns the route on screen", function()
+        local ns = load(borderWorld)
+        local it, shown, st, ranked = hours(ns)
+        ok(it and it.border)
+        local again = ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked,
+            { shown = 1, plan = shown, border = it.border, borderPlan = it.segments[1].plan })
+        eq(again.segments[1].plan, it.segments[1].plan, "the very route on screen")
+        eq(again.border.ids, it.border.ids)
+        ns.Zones.BORDER_GAIN = 1
+        local kept = ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked,
+            { shown = 1, plan = shown, border = it.border, borderPlan = it.segments[1].plan })
+        ok(kept.border, "a set on screen stays while it earns no less")
+    end)
+
+    test("Zones.WithBorder lays the set over a route and leaves other zones alone", function()
+        local ns = load(borderWorld)
+        local it, shown = hours(ns)
+        ok(it and it.border)
+        local ctx = ns.Zones.Context(state())
+        local with = ns.Zones.WithBorder(1, ctx, shown, it.border)
+        ok(indexOf(with, "P:22"), "the accept is in it")
+        eq(with.base, shown)
+        eq(ns.Zones.WithBorder(2, ctx, shown, it.border), shown, "a set for another zone")
+        eq(ns.Zones.WithBorder(1, ctx, shown, nil), shown, "no set")
+        ns.Zones.BORDER = false
+        eq(ns.Zones.WithBorder(1, ctx, shown, it.border), shown, "the flag off")
+        ns.Zones.BORDER = true
+        -- accepted meanwhile, with nothing left to do here: taken out of the route, not planned again
+        local log = { { id = 22, isComplete = true, objectives = {} } }
+        local ctx2 = ns.Zones.Context(state({ log = log }))
+        local base = ns.Zones.PlanZone(1, ctx2)
+        local gone = ns.Zones.WithBorder(1, ctx2, base, { zone = 1, ids = { 22 }, to = { [22] = 2 } })
+        eq(indexOf(gone, "P:22"), nil)
+        eq(indexOf(gone, "T:22"), nil)
+        local listedGone
+        for _, e in ipairs((gone.lists or base.lists).skipped) do
+            if e.id == 22 and e.reason == "finished in the next zone" then listedGone = true end
+        end
+        ok(gone == base or listedGone, "listed as finished in the next zone")
+    end)
+
+    test("with nothing to take along, the flag changes nothing", function()
+        local function run(flag)
+            local ns = load()
+            ns.Zones.BORDER = flag
+            local it = hours(ns)
+            local out = { xp = it.xp, border = it.border }
+            for i, seg in ipairs(it.segments) do
+                out[i] = { seg.map, seg.leave, seg.leaveKey, seg.xp, seg.seconds, table.concat(seg.plan.order, " ") }
+            end
+            return out
+        end
+        local on, off = run(true), run(false)
+        eq(H.serialize(on), H.serialize(off))
+        eq(on.border, nil)
+    end)
+
+    test("the accept says where the quest is finished", function()
+        local ns = load()
+        local step = { kind = "accept", target = "Marshal", borderTo = 2, travel = 0, seconds = 8 }
+        ns.Format.MapName = nil -- (the window sets it to the map names it knows)
+        H.contains(ns.Format.StepDetail(step), "finished in the next zone")
+        ns.Format.MapName = function() return "Fort Zone" end
+        H.contains(ns.Format.StepDetail(step), "finished in Fort Zone")
+    end)
+
+    test("the border search yields to the game", function()
+        local ns = load(borderWorld)
+        local st = state()
+        local calls, yields = 0, 0
+        st.checkpoint = function()
+            calls = calls + 1
+            if calls % 7 == 0 then yields = yields + 1; coroutine.yield() end
+        end
+        local co = coroutine.create(function()
+            local ctx = ns.Zones.Context(st)
+            local ranked = ns.Zones.Rank(ctx)
+            local shown = ns.Zones.PlanZone(1, ctx)
+            return ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked, { shown = 1, plan = shown })
+        end)
+        local result
+        for _ = 1, 1000000 do
+            local good, value = coroutine.resume(co)
+            if not good then error(value) end
+            if coroutine.status(co) == "dead" then result = value; break end
+        end
+        ok(result, "it finishes")
+        ok(yields > 0, "and yields on the way")
+    end)
+end)
+
 H.suite("Learning", function()
     test("pace: starts at players' typical, moves towards our own, fades old samples", function()
         local L = load().Learn

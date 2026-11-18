@@ -667,4 +667,45 @@ H.suite("Engine and window (real data)", function()
             ok(not (r:IsShown() and r.model and (r.model.detail or ""):find("flight paths not known", 1, true)), "no row says it")
         end
     end)
+    test("quests taken along: a malformed saved set is dropped, a set is laid over the route and forgotten with the zone", function()
+        local ns = E.installGame()
+        M.set("LevelScoutDB", nil)
+        M.set("LevelScoutCharDB", { border = { zone = "x", ids = { 1 }, to = {} } })
+        E.noSearch(ns)
+        ns.Engine.AUTO_SNAPSHOT = false
+        M.login()
+        ok(M.settle(), "planning finishes")
+        eq(LevelScoutCharDB.border, nil, "a malformed set is dropped at login")
+        ns = E.start()
+        local view = ns.Engine.view
+        local id
+        for _, e in ipairs(view.plan.lists.skipped) do
+            if e.loc and e.loc.map == view.zone then id = e.id; break end
+        end
+        ok(id, "the shown route leaves a quest of its zone out")
+        local function has(plan, key)
+            for _, k in ipairs(plan.order) do if k == key then return true end end
+            return false
+        end
+        ns.Zones.BORDER = false
+        ns.Engine.chardb.border = { zone = view.zone, ids = { id }, to = { [id] = 1453 } }
+        ns.Engine.Replan()
+        ok(M.settle())
+        eq(view.plan.base, nil, "the flag off: nothing is laid over the route")
+        ns.Zones.BORDER = true
+        ns.Engine.chardb.border = { zone = view.zone, ids = { id }, to = { [id] = 1453 } }
+        ns.Engine.Replan()
+        ok(M.settle())
+        ok(has(view.plan, "P:" .. id), "the accept is in the shown route")
+        ok(view.plan.base, "made over the route without it")
+        ok(has({ order = ns.Engine.chardb.route.order }, "P:" .. id), "and in the route saved with the character")
+        local other
+        for _, z in ipairs(view.ranked) do
+            if z.map > 0 and z.map ~= view.zone then other = z.map; break end
+        end
+        ok(other, "another zone is ranked")
+        ns.Engine.SetZone(other)
+        ok(M.settle())
+        eq(ns.Engine.chardb.border, nil, "choosing a zone forgets the set")
+    end)
 end)

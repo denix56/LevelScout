@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Quests that end in the next zone are taken along**: when the next hours go on to another
+  zone, quests that are accepted on the way and finished there (a letter for that zone's town,
+  "report to" someone there, work over the border) are accepted in the first zone's route and
+  turned in in the next, instead of being left out as slow. The accept says where the quest is
+  finished, and the turn-in shows under "Then:". The tooltip of the "Next 2 hours" row says how
+  many are taken along and what they add.
 - **More zones compared**: up to nine zones are planned and ranked at a time (it was six).
 - **Zones one level early**: a zone is offered from one level before its suggested range (it was:
   only from the bottom of the range). Leveling guides enter many zones a level early. Such a
