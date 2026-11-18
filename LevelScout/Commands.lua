@@ -192,6 +192,13 @@ SlashCmdList.LEVELSCOUT = function(msg)
         buildIndex(function() printZone(uiMapId) end)
     elseif cmd == "log" then
         printLog()
+    elseif cmd == "play" then
+        if arg == "reset" then
+            ns.Play.Reset()
+            ns.Print("Play log emptied.")
+        else
+            for _, line in ipairs(ns.Play.Describe()) do ns.Print(line) end
+        end
     elseif cmd == "snapshot" then
         local ok, why = ns.Engine.Snapshot(arg ~= "" and arg:sub(1, 200) or nil)
         if ok then
@@ -205,7 +212,7 @@ SlashCmdList.LEVELSCOUT = function(msg)
         local uiMapId, x, y = Game.GetPosition()
         ns.Print("uiMapID %s  x %s  y %s", tostring(uiMapId), tostring(x), tostring(y))
     else
-        ns.Print("commands: (none) show or hide the window, status, plan, replan [fresh], snapshot [note], learn [reset], buffs, debug (search view), quest <id>, zone [uiMapID], log, pos, taxi (flight map highlight), about")
+        ns.Print("commands: (none) show or hide the window, status, plan, replan [fresh], snapshot [note], play [reset], learn [reset], buffs, debug (search view), quest <id>, zone [uiMapID], log, pos, taxi (flight map highlight), about")
     end
 end
 
