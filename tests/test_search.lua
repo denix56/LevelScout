@@ -1,5 +1,5 @@
 -- tests/test_search.lua: ns.Search (acceptance, early stop, restarts, operators, saved weights, per-round
--- streams, plan fields, bandit, per-quest credit, contested outsiders).
+-- streams, plan fields, bandit, per-quest credit, contested outsiders, quests before their level).
 local H, M = ...
 local test, eq, ok, near = H.test, H.eq, H.ok, H.near
 
@@ -17,14 +17,24 @@ local function data()
     return loaded
 end
 
--- Plan the Redridge zone for the level 22 paladin with some settings changed. `wrap(sc, result)`
--- (optional) runs right after the search, before the route is tidied. Returns the plan, the
--- trace frames, and whatever the wrapper saw.
+-- Who the tests plan for: by default a level 22 paladin in Redridge (no quest there waits for a
+-- later level); opts.who another character, opts.zone the zone to plan (default: where they stand).
+-- opts.after(sc, result, seen) runs right after the search, before the route is tidied; opts.trace
+-- records the search's frames; opts.warm marks the search as warm. Returns the plan and what the
+-- wrapper saw.
+local PALADIN = { level = 22, faction = "Alliance", class = "PALADIN", race = 1, map = 1433, x = 0.30, y = 0.44 }
+-- A level 15 mage in Westfall. Redridge (1433) has quests for the next levels, and the search's
+-- removals often leave one before its level; in Loch Modan (1432) the greedy route's `improve` did
+-- (before Planner.IMPROVE_GATES).
+local MAGE = { level = 15, faction = "Alliance", class = "MAGE", race = 1, map = 1436, x = 0.563, y = 0.475 }
+
 local function plan(settings, rounds, opts)
     opts = opts or {}
+    local who = opts.who or PALADIN
+    local zone = opts.zone or who.map
     local ns = data()
     local Data = ns.Data
-    Data.Init({ faction = "Alliance", class = "PALADIN", clientBuild = ns.data.meta.build }, M.questieDB("Alliance", "PALADIN"))
+    Data.Init({ faction = who.faction, class = who.class, clientBuild = ns.data.meta.build }, M.questieDB(who.faction, who.class))
     Data.BuildIndex()
     local undo = {}
     for k, v in pairs(settings or {}) do
@@ -45,11 +55,11 @@ local function plan(settings, rounds, opts)
     local completed = {}
     for _, id in ipairs(ns.Data.QuestIds()) do
         local q = Data.GetQuest(id)
-        if q and q.level > 0 and q.level <= 18 then completed[id] = true end
+        if q and q.level > 0 and q.level <= who.level - 4 then completed[id] = true end
     end
-    local ctx = ns.Zones.Context({ level = 22, faction = "Alliance", class = "PALADIN", raceId = 1, map = 1433,
-        x = 0.30, y = 0.44, log = {}, completed = completed, capacity = 40, trace = opts.trace and 1433 or nil })
-    local p = ns.Zones.PlanZone(1433, ctx)
+    local ctx = ns.Zones.Context({ level = who.level, faction = who.faction, class = who.class, raceId = who.race, map = who.map,
+        x = who.x, y = who.y, log = {}, completed = completed, capacity = 40, trace = opts.trace and zone or nil })
+    local p = ns.Zones.PlanZone(zone, ctx)
     ns.Search.Run = run
     for i = #undo, 1, -1 do undo[i][1][undo[i][2]] = undo[i][3] end
     return p, seen
@@ -569,5 +579,120 @@ H.suite("Search", function()
         local a, b = plan(s, 40), plan(s, 40)
         eq(table.concat(a.order, " "), table.concat(b.order, " "))
         ok(#a.steps > 0)
+    end)
+
+    test("gates: the fixes for quests before their level are on by default", function()
+        local ns = data()
+        eq(ns.Search.MEND_GATES, true)
+        eq(ns.Planner.IMPROVE_GATES, true)
+    end)
+
+    test("gates: MendGates takes a quest before its level out with its follow-ups; the repair puts it back after it", function()
+        local ns = data()
+        local S, ran = ns.Search, false
+        plan({}, 10, { who = MAGE, zone = 1433, after = function(sc)
+            local r = sc.r
+            ok(r.gated, "the zone has quests for a later level")
+            local v = r.version
+            eq(S.MendGates(r, sc.takeOut), 0, "the search's route has nothing before its level")
+            eq(r.version, v, "and is left as it was")
+            -- put a routed quest's accept as early as the order rules allow: before its level
+            local snap = r:snapshot()
+            local g
+            for _, m in ipairs(sc.candidates) do
+                if not g and m.gate and r.routed[m] and m.P then
+                    r:unplace(m.P)
+                    r:place(m.P, (r:bounds(m.P, true)))
+                    if r:brokenGate() == m then g = m else sc.restore(snap) end
+                end
+            end
+            ok(g, "a quest for a later level can be put before its level")
+            local follow = {}
+            for _, d in ipairs(g.dependents or {}) do follow[#follow + 1] = d end
+            ok(S.MendGates(r, sc.takeOut) >= 1, "taken out")
+            ok(not r.routed[g], "the quest is out")
+            for _, d in ipairs(follow) do ok(not r.routed[d], "its follow-up " .. tostring(d.id) .. " went with it") end
+            ok(r:valid() and not r:brokenGate(), "nothing is left before its level")
+            sc.fill(0, nil)
+            ok(r:valid() and not r:brokenGate(), "the repair keeps every quest after its level")
+            ok(r.routed[g], "and puts the quest back")
+            sc.restore(snap)
+            ran = true
+        end })
+        ok(ran, "searched")
+    end)
+
+    test("gates: with MEND_GATES no round ends before a quest's level; off, the zone has such rounds", function()
+        local on = plan({}, 30, { who = MAGE, zone = 1433, trace = true })
+        local off = plan({ ["Search.MEND_GATES"] = false }, 30, { who = MAGE, zone = 1433, trace = true })
+        local zeroOn, zeroOff, mended = 0, 0, 0
+        for _, f in ipairs(on.trace) do
+            if f.round then
+                if f.score == 0 then zeroOn = zeroOn + 1 end
+                if f.mended then
+                    mended = mended + 1
+                    ok(f.mended >= 1 and f.mended <= #f.names, "among the quests the round took out")
+                end
+            end
+        end
+        for _, f in ipairs(off.trace) do
+            if f.round then
+                if f.score == 0 then zeroOff = zeroOff + 1 end
+                eq(f.mended, nil, "off: nothing taken out for a level")
+            end
+        end
+        eq(zeroOn, 0, "every round's route has its quests after their levels")
+        ok(zeroOff > 0, "the zone tests the case (rounds at 0 without the fix: " .. zeroOff .. ")")
+        ok(mended > 0, "some rounds took a quest out for its level")
+        ok(on.plainScore and on.score >= on.plainScore - 1e-9, "never below the unsearched plan")
+        local again = plan({}, 30, { who = MAGE, zone = 1433 })
+        eq(table.concat(again.order, " "), table.concat(on.order, " "), "the same plan every time")
+    end)
+
+    test("gates: quests taken out for a level are not credited to the removal", function()
+        local ns = data()
+        local S = ns.Search
+        local chose, credited, originals = {}, {}, {}
+        for i, op in ipairs(S.DESTROY) do
+            originals[i] = op.fn
+            op.fn = function(St, list, k)
+                originals[i](St, list, k)
+                chose[#chose + 1] = St.npicked
+            end
+        end
+        local update = S.QuestUpdate
+        S.QuestUpdate = function(Q, picked, n, y)
+            credited[#credited + 1] = n
+            return update(Q, picked, n, y)
+        end
+        local fine, p = pcall(plan, { ["Search.EXTRA_OPS"] = "credit" }, 30, { who = MAGE, zone = 1433, trace = true })
+        for i, op in ipairs(S.DESTROY) do op.fn = originals[i] end
+        S.QuestUpdate = update
+        ok(fine, tostring(p))
+        eq(#credited, #chose, "one update per round")
+        for t = 1, #chose do eq(credited[t], chose[t], "round " .. t .. ": the removal's own choices only") end
+        local mended = 0
+        for _, f in ipairs(p.trace) do if f.mended then mended = mended + 1 end end
+        ok(mended > 0, "some rounds took a quest out for its level")
+    end)
+
+    test("gates: with IMPROVE_GATES the search starts from a route with every quest after its level", function()
+        local on = plan({}, 1, { who = MAGE, zone = 1432, trace = true })
+        local off = plan({ ["Planner.IMPROVE_GATES"] = false }, 1, { who = MAGE, zone = 1432, trace = true })
+        eq(on.trace[1].kind, "start")
+        ok(on.trace[1].score > 0, "on: the start route scores")
+        eq(off.trace[1].score, 0, "off: the greedy route's improve left a quest before its level (the zone tests the case)")
+        local plainOn = plan({}, 0, { who = MAGE, zone = 1432 })
+        local plainOff = plan({ ["Planner.IMPROVE_GATES"] = false }, 0, { who = MAGE, zone = 1432 })
+        ok(#plainOn.lists.later < #plainOff.lists.later, "unsearched: the quest stays in the route instead of waiting")
+    end)
+
+    test("gates: a zone without quests for a later level is planned exactly as without the fixes", function()
+        local a = plan({}, 30)
+        local b = plan({ ["Search.MEND_GATES"] = false, ["Planner.IMPROVE_GATES"] = false }, 30)
+        eq(table.concat(a.order, " "), table.concat(b.order, " "))
+        eq(stepsText(a), stepsText(b))
+        eq(a.work, b.work, "not even a level profile more")
+        eq(a.search.work, b.search.work)
     end)
 end)

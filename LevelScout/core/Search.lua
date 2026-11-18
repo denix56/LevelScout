@@ -45,6 +45,9 @@ Search.BANDIT_PRIORS = nil    -- "beta": optional fitted counts in the format of
 Search.QUEST_PRIOR = 0.5      -- the "credit" removal: prior worth this many successes at the rate of all quests
 Search.QUEST_DISCOUNT = 0.99  -- the "credit" removal: per-quest evidence fades by this every round
 Search.ARM_STATS = false      -- bench/debug: per removal and strength, rounds, outcomes, work (result.arms)
+Search.MEND_GATES = true      -- after a round's removal, a quest left before the level it needs goes out too (with
+                              -- its follow-ups), so the repair can put it back only where its level is reached;
+                              -- false = as before (the round's route scored 0 and was undone). A fix, not a bench pick.
 
 local function stopsOf(m)
     local nodes = {}
@@ -570,6 +573,20 @@ function Search.Accept(policy, obj, curObj, bestObj, round, rounds, ev)
     return obj >= curObj - T * ev:scale(curObj)
 end
 
+--- Take every quest the route has before the level it needs out with `takeOut(m, onOut)` (the
+--- planner's: its follow-ups go with it), until none is left. Taking XP out of a route can push a
+--- level-up back past such a quest; once out, the repair puts it back only where its level is
+--- reached. Returns how many were taken out (their follow-ups not counted).
+function Search.MendGates(r, takeOut, onOut)
+    local n = 0
+    while true do
+        local m = r:brokenGate()
+        if not m or not r.routed[m] then return n end -- (always routed; the check only rules out a loop)
+        takeOut(m, onOut)
+        n = n + 1
+    end
+end
+
 --- Run the search on sc.r (already filled): sc = { r, candidates, overhead, rounds, work, seed,
 --- weights, warm, checkpoint, progress, fill, takeOut, restore, frame } (see Planner.Plan).
 --- Leaves the route at the best one found. Returns { rounds, work, worth, weights, stopped, curve, arms }
@@ -670,6 +687,14 @@ function Search.Run(sc)
         removed = { names = {}, points = {} }
         r.touched = {}
         Search.DESTROY[di].fn(S, list, k)
+        -- a quest the removal left before its level goes out too: not the removal's choice (so not
+        -- in S.picked), but it was in `list`, so below it counts as taken out by this round
+        local mended
+        if Search.MEND_GATES then
+            local before = #removed.names
+            Search.MendGates(r, sc.takeOut, sc.frame and record or nil)
+            if #removed.names > before then mended = #removed.names - before end -- (debug trace only)
+        end
         local fresh
         if Search.OUTSIDERS then -- the quests this round took out (everything else out was out before)
             fresh = {}
@@ -698,7 +723,7 @@ function Search.Run(sc)
         local restart = Search.RESTART_AFTER and sinceBest > 0 and sinceBest % Search.RESTART_AFTER == 0
         if sc.frame then
             sc.frame(kind, { round = round, rounds = sc.rounds, took = Search.DESTROY[di].name,
-                regret = Search.REGRET[ri], out = removed.points, names = removed.names,
+                regret = Search.REGRET[ri], out = removed.points, names = removed.names, mended = mended,
                 best = max(best.worth, worth) * 3600, restart = restart or nil })
         end
         local reward = 0.05

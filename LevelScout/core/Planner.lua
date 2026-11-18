@@ -31,6 +31,8 @@ Planner.TAIL_RATIO = 0.6       -- the route's end counts as a slow tail below th
 Planner.PRUNE_RATIO = 0.5      -- drop a quest paying less than this share of the route's rate
 Planner.SWITCH_OVERHEAD = 120  -- seconds lost when changing zone (bags, orientation)
 Planner.IMPROVE_PASSES = 3
+Planner.IMPROVE_GATES = true   -- `improve` without a guard takes back a move that leaves a quest before the level it
+                               -- needs (a stop paying XP moved past it); false = as before
 Planner.SCORE_GIVE = 0.05      -- a shorter route may cost up to this share of the peak XP per hour
 Planner.SEGMENT_MOVES = 3      -- longest run of consecutive stops moved together when improving
 Planner.SAME_PLACE_YARDS = 40  -- stops this close are one place: accept everything there at once
@@ -826,9 +828,13 @@ end
 -- like work-then-turn-in can only move as one.
 --- With `guard` = { overhead, floor = lowest score allowed }, a move that shortens the route
 --- but pushes what the route is worth per hour under the floor (XP paid out too much later)
---- is taken back, one move at a time.
+--- is taken back, one move at a time. Without one (and with IMPROVE_GATES), a move that leaves a
+--- quest before the level it needs is taken back: `bounds` checks only the moved stops' own levels,
+--- and a stop paying XP moved past a quest for a later level pushes the level-up past it. (A route
+--- that already has such a quest is left to whoever judges it.)
 function R:improve(passes, checkpoint, maxLen, guard)
     local route = self.route
+    local gates = Planner.IMPROVE_GATES and not guard and self.gated and not self:brokenGate()
     for _ = 1, passes do
         local improved = false
         for len = 1, maxLen or 1 do
@@ -866,6 +872,10 @@ function R:improve(passes, checkpoint, maxLen, guard)
                         target = i - 1
                         for k = 1, len do self:place(seg[k], target + k - 1) end
                     end
+                elseif gates and target ~= i - 1 and self:brokenGate() then
+                    for k = len, 1, -1 do self:unplace(seg[k]) end
+                    target = i - 1
+                    for k = 1, len do self:place(seg[k], target + k - 1) end
                 end
                 if target ~= i - 1 then improved = true else i = i + 1 end
                 if checkpoint then checkpoint() end

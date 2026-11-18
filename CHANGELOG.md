@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Better routes where quests wait for your next level**: the route search tries taking a few quests out of
+  the route and putting them back. When that made you reach a level later than a quest left in the route
+  needs it, the try was thrown away, about one try in six. Such a quest now goes out with them and comes back
+  after the level-up, and the route the search starts from no longer has one before its level either. Zones
+  with such quests get better routes more often; zones without them are planned exactly as before. In the
+  search view, a round says how many quests went out for a level.
 - **For developers**: a sharper bench (`tests/bench.lua`): the verdict is now made per character.
   The standard error comes from the characters' means with a Student t bar, and a character counts
   as harmed only beyond its own noise. It prints the variance split, the salt-to-salt correlation,
