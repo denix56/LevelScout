@@ -1132,6 +1132,7 @@ H.suite("Quests across a border", function()
 
     test("a quest taken along: only its stops here are planned, nothing else moves", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local plain, got, border = laid(ns)
         eq(others(got), others(plain), "everything else stays as it was")
         local before = indexOf(got, border.before)
@@ -1159,6 +1160,7 @@ H.suite("Quests across a border", function()
 
     test("follow-ups of a quest taken along wait", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local _, got = laid(ns, { 22 })
         eq(indexOf(got, "P:27"), nil, "Second Letter needs a quest that is turned in elsewhere")
         local found
@@ -1169,6 +1171,7 @@ H.suite("Quests across a border", function()
 
     test("what is left of a quest taken along goes into the log, and the next zone turns it in", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local _, got, border, ctx = laid(ns)
         local leave = indexOf(got, border.before)
         local after, carried = ns.Zones.Project(state(), ctx, got, leave)
@@ -1191,6 +1194,7 @@ H.suite("Quests across a border", function()
 
     test("which quests can be taken along", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local ctx = ns.Zones.Context(state())
         local plain = ns.Zones.PlanZone(1, ctx)
         local leave = #plain.steps
@@ -1234,6 +1238,7 @@ H.suite("Quests across a border", function()
 
     test("the itinerary takes them along only when it earns more, never less than without", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         ns.Zones.BORDER = false
         local plainIt, shown = hours(ns)
         ok(plainIt and #plainIt.segments >= 2 and plainIt.segments[1].map == 1 and plainIt.segments[2].map == 2,
@@ -1258,6 +1263,7 @@ H.suite("Quests across a border", function()
 
     test("a quest the next zone does not use is left out again", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         ns.Zones.BORDER_MAX = 8
         local it = hours(ns)
         ok(it and it.border, "something is taken along")
@@ -1267,6 +1273,7 @@ H.suite("Quests across a border", function()
 
     test("the set on screen is kept: the itinerary returns the route on screen", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local it, shown, st, ranked = hours(ns)
         ok(it and it.border)
         local again = ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked,
@@ -1281,6 +1288,7 @@ H.suite("Quests across a border", function()
 
     test("Zones.WithBorder lays the set over a route and leaves other zones alone", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local it, shown = hours(ns)
         ok(it and it.border)
         local ctx = ns.Zones.Context(state())
@@ -1309,6 +1317,7 @@ H.suite("Quests across a border", function()
     test("with nothing to take along, the flag changes nothing", function()
         local function run(flag)
             local ns = load()
+            ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
             ns.Zones.BORDER = flag
             local it = hours(ns)
             local out = { xp = it.xp, border = it.border }
@@ -1324,6 +1333,7 @@ H.suite("Quests across a border", function()
 
     test("the accept says where the quest is finished", function()
         local ns = load()
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local step = { kind = "accept", target = "Marshal", borderTo = 2, travel = 0, seconds = 8 }
         ns.Format.MapName = nil -- (the window sets it to the map names it knows)
         H.contains(ns.Format.StepDetail(step), "finished in the next zone")
@@ -1333,6 +1343,368 @@ H.suite("Quests across a border", function()
 
     test("the border search yields to the game", function()
         local ns = load(borderWorld)
+        ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
+        local st = state()
+        local calls, yields = 0, 0
+        st.checkpoint = function()
+            calls = calls + 1
+            if calls % 7 == 0 then yields = yields + 1; coroutine.yield() end
+        end
+        local co = coroutine.create(function()
+            local ctx = ns.Zones.Context(st)
+            local ranked = ns.Zones.Rank(ctx)
+            local shown = ns.Zones.PlanZone(1, ctx)
+            return ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked, { shown = 1, plan = shown })
+        end)
+        local result
+        for _ = 1, 1000000 do
+            local good, value = coroutine.resume(co)
+            if not good then error(value) end
+            if coroutine.status(co) == "dead" then result = value; break end
+        end
+        ok(result, "it finishes")
+        ok(yields > 0, "and yields on the way")
+    end)
+end)
+
+-- Two zones whose routes meet at the border: a camp near zone 1's east edge (x 100 of map 1 is x 0 of
+-- map 2) and one near zone 2's west edge, and zone 2 long enough to follow zone 1 (Zones.MIN_STAY).
+-- (A first guess at the XP: the tests check what they rely on, and say what is wrong.)
+local function seamWorld(data)
+    local q = data.quests
+    data.npcs[130] = "Border Scout|10|10|0|2|A|" .. S(1, 92, 50)
+    data.npcs[131] = "Fort Lookout|10|10|0|2|A|" .. S(2, 6, 50)
+    data.npcs[220] = "Border Wolf|8|8|0|0||" .. camp(1, 95, 45)
+    data.npcs[221] = "Ridge Boar|8|8|0|0||" .. camp(2, 8, 55)
+    q[40] = quest({ name = "Border Watch", xp = 450, starts = "n130", ends = "n130", objectives = "c220:6:C" })
+    q[41] = quest({ name = "Lookout Duty", zone = 2, xp = 450, starts = "n131", ends = "n131", objectives = "c221:6:C" })
+    q[20] = quest({ name = "Other Zone", zone = 2, xp = 700, starts = "n110", ends = "n110", objectives = "c210:20:C" })
+    q[21] = quest({ name = "Other Zone 2", zone = 2, xp = 900, starts = "n110", ends = "n110", objectives = "c210:30:C" })
+end
+
+H.suite("The way across a border, planned together", function()
+    -- the first zone's route on screen, the zones ranked, and the next hours (as the border suite's `hours`)
+    local function hours(ns, extra)
+        local st = state()
+        local ctx = ns.Zones.Context(st)
+        local ranked = ns.Zones.Rank(ctx)
+        local shown = ns.Zones.PlanZone(1, ctx)
+        local opts = { shown = 1, plan = shown }
+        for k, v in pairs(extra or {}) do opts[k] = v end
+        return ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked, opts), shown, st, ranked
+    end
+    -- what an itinerary decided, to compare two runs
+    local function summary(it)
+        local out = { xp = it.xp }
+        for i, seg in ipairs(it.segments) do
+            out[i] = { seg.map, seg.leave, seg.leaveKey, seg.xp, seg.seconds, table.concat(seg.plan.order, " ") }
+        end
+        return out
+    end
+    -- the world loaded with the flags the tests are about: the quests taken along are left out of it
+    local function world(build, flags)
+        local ns = load(build)
+        ns.Zones.BORDER = false
+        for k, v in pairs(flags or {}) do ns.Zones[k] = v end
+        return ns
+    end
+    local function copyOf(list)
+        local out = {}
+        for i, k in ipairs(list) do out[i] = k end
+        return out
+    end
+
+    test("exact seeded plans keep the seed: nothing is added, nothing dropped", function()
+        local ns = load()
+        local ctx = ns.Zones.Context(state())
+        local plain = ns.Zones.PlanZone(1, ctx)
+        local again = ns.Zones.PlanZone(1, ctx, plain.order, nil, { exact = true })
+        eq(keys(again), keys(plain), "the seed is the route")
+        ok(indexOf(plain, "T:4"), "precondition: Statues is in zone 1's own route")
+        local without = {}
+        for _, k in ipairs(plain.order) do
+            if k ~= "P:4" and k ~= "T:4" and not k:find("^W:o400") then without[#without + 1] = k end
+        end
+        local gap = ns.Zones.PlanZone(1, ctx, without, nil, { exact = true })
+        eq(indexOf(gap, "P:4"), nil, "what the seed does not have is not added")
+        eq(indexOf(gap, "T:4"), nil)
+        local found
+        for _, id in ipairs(listed(gap.lists.skipped)) do if id == 4 then found = true end end
+        ok(found, "and is listed as left out")
+        local slow = copyOf(plain.order)
+        slow[#slow + 1], slow[#slow + 2] = "P:10", "T:10"
+        local exact = ns.Zones.PlanZone(1, ctx, slow, nil, { exact = true })
+        ok(indexOf(exact, "T:10"), "a slow quest in the seed stays")
+        local loose = ns.Zones.PlanZone(1, ctx, slow)
+        eq(indexOf(loose, "T:10"), nil, "precondition: without exact it is dropped as slow")
+    end)
+
+    test("the stretch rebuilt as one route gives back what it was given", function()
+        -- (Far Giver is planned by both zones: left out, so that every quest is on one side)
+        local ns = load(function(data) data.quests[8] = nil end)
+        local Z = ns.Zones
+        local ctx = Z.Context(state())
+        local a, b = Z.PlanZone(1, ctx), Z.PlanZone(2, ctx)
+        local side = {}
+        local function sidesOf(plan, mark)
+            for _, st in ipairs(plan.steps) do
+                for _, q in ipairs(st.quests or {}) do
+                    side[q.id] = (side[q.id] and side[q.id] ~= mark) and "X" or mark
+                end
+            end
+        end
+        sidesOf(a, "A")
+        sidesOf(b, "B")
+        local shared = 0
+        for _, s in pairs(side) do if s == "X" then shared = shared + 1 end end
+        eq(shared, 0, "precondition: no quest is in both routes")
+        local function spec(extra)
+            local s = { also = { 2 }, keysA = a.order, keysB = b.order, side = side, ghost = {}, after = {}, free = {},
+                horizon = 9000, switch = 120, rounds = 0, work = 1e9, seed = 12345 }
+            for k, v in pairs(extra or {}) do s[k] = v end
+            return s
+        end
+        local function plan(extra) return Z.PlanSeam(1, Z.Context(state()), spec(extra), a.overhead) end
+        local res = plan()
+        ok(res, "the stretch can be rebuilt")
+        eq(res.keysA, a.order, "the first side as it was given")
+        eq(res.keysB, b.order, "the next zone's side as it was given")
+        eq(res.value, res.start, "nothing searched: nothing changed")
+        -- searched: every stop on its side, nothing twice, accepts before turn-ins, never worse
+        local found = plan({ rounds = 30 })
+        local seen = {}
+        local function check(list, mark)
+            for _, key in ipairs(list) do
+                ok(not seen[key], "no key twice: " .. key)
+                seen[key] = true
+                local id = key:match("^[PT]:(%d+)$")
+                if id then eq(side[tonumber(id)], mark, key .. " is on its own side") end
+            end
+        end
+        check(found.keysA, "A")
+        check(found.keysB, "B")
+        local order = {}
+        for _, k in ipairs(found.keysA) do order[#order + 1] = k end
+        for _, k in ipairs(found.keysB) do order[#order + 1] = k end
+        local index = {}
+        for i, k in ipairs(order) do index[k] = i end
+        for i, k in ipairs(order) do
+            local id = k:match("^P:(%d+)$")
+            if id and index["T:" .. id] then ok(index["T:" .. id] > i, "quest " .. id .. ": accepted before it is turned in") end
+        end
+        ok(found.value >= found.start - 1e-9, "never worse than it started")
+        local twice = plan({ rounds = 30 })
+        eq(twice.keysA, found.keysA, "planned twice: the same")
+        eq(twice.keysB, found.keysB)
+        -- a quest done on both sides stays where it is (Statues: nothing follows it)
+        ok(indexOf(a, "T:4"), "precondition: Statues is in zone 1's route")
+        local keysA, keysB = {}, { "T:4" }
+        for _, k in ipairs(a.order) do if k ~= "T:4" then keysA[#keysA + 1] = k end end
+        for _, k in ipairs(b.order) do keysB[#keysB + 1] = k end
+        local side2 = {}
+        for id, s in pairs(side) do side2[id] = s end
+        side2[4] = "X"
+        local fixed = plan({ keysA = keysA, keysB = keysB, side = side2, rounds = 30 })
+        local function has(list, key) for _, k in ipairs(list) do if k == key then return true end end return false end
+        ok(has(fixed.keysA, "P:4"), "its accept stays on the first side")
+        ok(has(fixed.keysB, "T:4"), "its turn-in on the next zone's")
+        local all = {}
+        for _, k in ipairs(fixed.keysA) do all[#all + 1] = k end
+        for _, k in ipairs(fixed.keysB) do all[#all + 1] = k end
+        local pos = {}
+        for i, k in ipairs(all) do
+            if k == "P:4" or k == "T:4" or k:find("^W:o400") then pos[#pos + 1] = i end
+        end
+        local sorted = #pos >= 3
+        for i = 2, #pos do if pos[i - 1] >= pos[i] then sorted = false end end
+        ok(sorted, "its keys keep their order")
+        -- a quest that goes on after the stretch: its stops are kept where they are, as stops of no quest
+        local keysB3 = {}
+        for _, k in ipairs(keysB) do
+            if k ~= "T:21" and not k:find("#21$") then keysB3[#keysB3 + 1] = k end
+        end
+        local side3, ghost = {}, { [21] = true }
+        for id, s in pairs(side2) do side3[id] = s end
+        side3[21] = nil
+        local kept = plan({ keysA = keysA, keysB = keysB3, side = side3, ghost = ghost, rounds = 30 })
+        ok(has(kept.keysB, "P:21"), "its accept is in the stretch")
+        local function relative(list)
+            local out = {}
+            for _, k in ipairs(list) do
+                if k == "P:4" or k == "T:4" or k == "P:21" or k:find("^W:o400") then out[#out + 1] = k end
+            end
+            return out
+        end
+        local given = {}
+        for _, k in ipairs(keysA) do given[#given + 1] = k end
+        for _, k in ipairs(keysB3) do given[#given + 1] = k end
+        local now = {}
+        for _, k in ipairs(kept.keysA) do now[#now + 1] = k end
+        for _, k in ipairs(kept.keysB) do now[#now + 1] = k end
+        eq(relative(now), relative(given), "the stops that stay come in the order they were given")
+    end)
+
+    test("Zones.WithSeam lays a way across over a route; another route does not take it", function()
+        local ns = load()
+        local Z = ns.Zones
+        local ctx = Z.Context(state())
+        local base = Z.PlanZone(1, ctx)
+        local o = base.order
+        local i
+        for k = #o - 1, 2, -1 do
+            if o[k]:find("^P:") and o[k + 1]:find("^P:") then i = k; break end
+        end
+        ok(i, "precondition: two accepts in a row after the first stop")
+        local recipe = { zone = 1, to = 2, window = { o[i], o[i + 1] }, keys = { o[i + 1], o[i] }, leave = o[i],
+            windowB = {}, head = {} }
+        local laid = Z.WithSeam(1, ctx, base, recipe)
+        ok(laid ~= base, "laid over the route")
+        eq(#laid.order, #base.order)
+        eq(laid.order[i], o[i + 1], "the two accepts swapped")
+        eq(laid.order[i + 1], o[i])
+        for k = 1, #o do
+            if k ~= i and k ~= i + 1 then eq(laid.order[k], o[k], "every other key where it was") end
+        end
+        ok(laid.seamBase == base, "the route under it")
+        ok(laid.seamRecipe == recipe)
+        ok(Z.Plain(laid) == base, "the route without it")
+        ok(Z.SeamLayer(laid) == laid)
+        eq(Z.SeamLayer(base), nil)
+        -- another route: the stretch is not in it in that order
+        local swapped = copyOf(o)
+        swapped[i], swapped[i + 1] = o[i + 1], o[i]
+        eq(Z.SeamOrder(swapped, recipe), nil, "the keys the other way round: not this route")
+        local other = Z.PlanZone(1, ctx, swapped)
+        ok(indexOf(other, o[i + 1]) < indexOf(other, o[i]), "precondition: the seeded route keeps its order")
+        ok(Z.WithSeam(1, ctx, other, recipe) == other, "another route takes nothing")
+        -- a route that has moved on (its first accept is done): still laid over
+        if o[1]:find("^P:") then
+            local id = tonumber(o[1]:match("^P:(%d+)"))
+            local ctx2 = Z.Context(state({ log = { { id = id, isComplete = false, objectives = {} } } }))
+            local moved = Z.PlanZone(1, ctx2, o)
+            eq(indexOf(moved, o[1]), nil, "precondition: its first accept is gone")
+            local got = Z.WithSeam(1, ctx2, moved, recipe)
+            ok(got ~= moved, "still laid over")
+            ok(indexOf(got, o[i + 1]) < indexOf(got, o[i]), "the two keys swapped")
+        end
+        local gone = { zone = 1, to = 2, window = recipe.window, keys = recipe.keys, leave = "P:99999", windowB = {}, head = {} }
+        ok(Z.WithSeam(1, ctx, base, gone) == base, "a step it leaves after that is not in the route")
+        ok(Z.WithSeam(2, ctx, base, recipe) == base, "a way across for another zone")
+        ok(Z.WithSeam(1, ctx, base, nil) == base, "none")
+        Z.SEAM = false
+        ok(Z.WithSeam(1, ctx, base, recipe) == base, "the flag off")
+    end)
+
+    test("the itinerary plans the way across together only when it earns more, never less", function()
+        local ns = world(seamWorld, { SEAM = false })
+        local plainIt, shown = hours(ns)
+        ok(plainIt and #plainIt.segments >= 2 and plainIt.segments[1].map == 1 and plainIt.segments[2].map == 2,
+            "the fixture's itinerary goes from zone 1 to zone 2")
+        eq(plainIt.seam, nil)
+        eq(plainIt.seamInfo, nil, "the flag off: nothing looked at")
+        ns.Zones.SEAM = true
+        local it = hours(ns)
+        ok(it.xp >= plainIt.xp, "never less")
+        local info = it.seamInfo
+        ok(info and info.ran, "the gate is on and the search ran (gated: " .. tostring(info and info.gated) .. ")")
+        ok(it.seam, "a way across is taken (tune quests 40/41 of the fixture)")
+        ok(it.xp > plainIt.xp * (1 + ns.Zones.SEAM_GAIN), "and earns more than it has to")
+        local first = it.segments[1]
+        eq(first.leaveKey, it.seam.leave, "the first zone is left after the step the way across ends with")
+        ok(first.plan.seamBase == shown, "the route without it is the base")
+        ok(ns.Zones.Plain(first.plan) == shown)
+        eq(it.here, it.xp)
+        -- the accept of the border quest: before the step the zone is left after (and later than in the plain route, if it was there)
+        local at, leave, was = indexOf(first.plan, "P:40"), indexOf(first.plan, first.leaveKey), indexOf(shown, "P:40")
+        if was then
+            ok(at and at > was, "Border Watch was in the zone's own route and is done later, nearer the border")
+        else
+            ok(at and at < leave, "Border Watch was left out and is done before leaving")
+        end
+        ns.Zones.SEAM_GAIN = 1
+        local strict = hours(ns)
+        eq(strict.seam, nil, "not worth a hundred percent more")
+        eq(strict.xp, plainIt.xp)
+    end)
+
+    test("the way across on screen is kept", function()
+        local ns = world(seamWorld)
+        local it, shown, st, ranked = hours(ns)
+        ok(it and it.seam, "precondition: a way across is taken")
+        -- (the Engine lays the recipe it keeps over the route, so that plan's recipe is the one passed back)
+        local on = it.segments[1].plan
+        local again = ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked,
+            { shown = 1, plan = shown, seam = on.seamRecipe, seamPlan = on })
+        ok(again.segments[1].plan == on, "the very route on screen")
+        eq(again.seamInfo.won, "kept")
+        ns.Zones.SEAM_GAIN = 1
+        local kept = ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked,
+            { shown = 1, plan = shown, seam = on.seamRecipe, seamPlan = on })
+        ok(kept.seam, "one on screen stays while it earns no less")
+    end)
+
+    test("nothing runs where it cannot matter", function()
+        local function run(build, flags)
+            local ns = world(build, flags)
+            local calls = 0
+            local planSeam = ns.Zones.PlanSeam
+            ns.Zones.PlanSeam = function(...) calls = calls + 1; return planSeam(...) end
+            return hours(ns), calls
+        end
+        local off = run(seamWorld, { SEAM = false })
+        local far, calls = run(seamWorld, { SEAM_TRIP = -1 })
+        ok(far.seamInfo, "precondition: the itinerary goes on to a second zone")
+        eq(far.seamInfo.gated, "far", "a trip longer than allowed")
+        eq(calls, 0, "nothing is planned together")
+        eq(far.seam, nil)
+        eq(H.serialize(summary(far)), H.serialize(summary(off)), "the same itinerary as with the flag off")
+        -- the base fixture: whatever the gate says, a way across that is not taken changes nothing
+        local plain = run(nil, { SEAM = false })
+        local on = run(nil, { SEAM = true })
+        if on.seam == nil then
+            eq(H.serialize(summary(on)), H.serialize(summary(plain)), "none taken: the same itinerary")
+        else
+            print("note: the base fixture takes a way across: nothing to compare")
+        end
+    end)
+
+    test("the stretch: its size, and nothing found without rounds", function()
+        local ns = world(seamWorld, { SEAM = false })
+        local plainIt = hours(ns)
+        ns.Zones.SEAM, ns.Zones.SEAM_ROUNDS = true, 0
+        local it = hours(ns)
+        local info = it.seamInfo
+        ok(info and info.ran, "precondition: the gate is on (gated: " .. tostring(info and info.gated) .. ")")
+        eq(info.keysA[#info.keysA], plainIt.segments[1].leaveKey, "the stretch ends with the step the zone is left after")
+        eq(info.keysB[1], plainIt.segments[2].plan.order[1], "and begins with the next zone's first step")
+        local Z = ns.Zones
+        ok(info.windowA >= 1 and info.windowA <= Z.SEAM_MAX_STOPS, "the first zone's side is not larger than allowed")
+        ok(info.windowB >= 1 and info.windowB <= Z.SEAM_MAX_STOPS, "nor the next zone's")
+        eq(info.proxyBest, info.proxyStart, "nothing searched: nothing found")
+        eq(it.seam, nil)
+        eq(it.xp, plainIt.xp)
+    end)
+
+    test("the way across and quests taken along together", function()
+        local ns = load(function(data) borderWorld(data); seamWorld(data) end)
+        ns.Zones.SEAM, ns.Zones.BORDER = false, false
+        local off, shown = hours(ns)
+        ns.Zones.SEAM, ns.Zones.BORDER = true, true
+        local it = hours(ns)
+        ok(it.xp >= off.xp, "never less than with both off")
+        if it.seam and it.border then
+            eq(it.border.before, it.seam.leave, "the quests are taken along before the step the way across ends with")
+            local plan = it.segments[1].plan
+            ok(plan.base and plan.base.seamBase == shown, "the way across is under the quests taken along")
+            ok(ns.Zones.Plain(plan) == shown, "and the route without both is the base")
+        else
+            print("note: the fixture does not make both (seam " .. tostring(it.seam ~= nil) .. ", border "
+                .. tostring(it.border ~= nil) .. "): only the figure was compared")
+        end
+    end)
+
+    test("the way across yields to the game", function()
+        local ns = world(seamWorld)
         local st = state()
         local calls, yields = 0, 0
         st.checkpoint = function()

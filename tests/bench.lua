@@ -33,6 +33,7 @@
 --   SALTS="0 1 2 3 4"       run every config once per Search.SEED_SALT; shows the mean over salts
 --        and the standard error of the mean-zone figure
 --   REPEAT=3      CPU ms = the minimum over repeats (scores are deterministic, time is noisy)
+--   CHARS=2       the held-out second set of eight characters
 --   ITIN=0        skip the itinerary (on by default; the headline then uses the 120-minute XP)
 -- Columns: "work k" = thousand work units (plan.work, summed over zones, deterministic);
 -- "ms/kwork" = CPU ms per thousand work units, starred when it differs from base by over 20%.
@@ -54,6 +55,20 @@ local CHARACTERS = {
     { 12, "Horde", "SHAMAN", 2, 1413, 52.0, 30.0, "Barrens, Crossroads" },
     { 25, "Horde", "WARLOCK", 5, 1424, 62.0, 20.0, "Hillsbrad, Tarren Mill" },
 }
+
+-- CHARS=2: a second, held-out set of characters (to check that a change found on the first set carries over)
+if os.getenv("CHARS") == "2" then
+    CHARACTERS = {
+        { 10, "Alliance", "HUNTER", 3, 1426, 46.8, 52.4, "Dun Morogh, Kharanos" },
+        { 18, "Alliance", "DRUID", 4, 1439, 37.0, 44.0, "Darkshore, Auberdine" },
+        { 26, "Alliance", "PRIEST", 1, 1437, 10.0, 59.0, "Wetlands, Menethil" },
+        { 38, "Alliance", "MAGE", 7, 1434, 27.0, 77.0, "Stranglethorn, Booty Bay" },
+        { 9, "Horde", "WARRIOR", 6, 1412, 48.0, 59.0, "Mulgore, Bloodhoof" },
+        { 17, "Horde", "ROGUE", 5, 1421, 45.0, 41.0, "Silverpine, Sepulcher" },
+        { 29, "Horde", "HUNTER", 8, 1440, 73.0, 61.0, "Ashenvale, Splintertree" },
+        { 40, "Horde", "SHAMAN", 2, 1434, 27.0, 77.0, "Stranglethorn, Booty Bay" },
+    }
+end
 
 -- A config is { name, overrides } with overrides = list of { Module, KEY, value } applied to the
 -- freshly loaded addon: { "Planner", "EXACT_WINDOW", 0 } sets ns.Planner.EXACT_WINDOW = 0.
@@ -211,18 +226,28 @@ local function run(char, overrides, salt, budget)
             itinWork = itinWork + (p.work or 0)
             return p
         end
+        local planSeam = ns.Zones.PlanSeam -- (the way across planned together: its search is itinerary work too)
+        ns.Zones.PlanSeam = function(...)
+            local a, w = planSeam(...)
+            itinWork = itinWork + (w or 0)
+            return a, w
+        end
         local t1 = os.clock()
         local it = ns.Zones.Itinerary(state, ctx, ranked)
         out.itinMs = (os.clock() - t1) * 1000
-        ns.Zones.PlanZone = plan
+        ns.Zones.PlanZone, ns.Zones.PlanSeam = plan, planSeam
         out.itinXP = it and it.xp or 0
         out.itinWork = itinWork
         out.border = it and it.border
+        out.seam, out.seamInfo = it and it.seam, it and it.seamInfo
         if DUMP and it then
             local maps, keys = {}, {}
             for i, seg in ipairs(it.segments) do maps[i], keys[i] = seg.map, seg.leaveKey or "-" end
             out.dumpItin = string.format("itinerary %s  leave %s  xp %.2f%s", table.concat(maps, ">"), table.concat(keys, " "), it.xp,
                 it.border and ("  border " .. table.concat(it.border.ids, ",")) or "")
+            if it.seam then
+                out.dumpItin = out.dumpItin .. "  seam " .. table.concat(it.seam.keys, ",") .. " | " .. table.concat(it.seam.head, ",")
+            end
         end
     end
     if DUMP then
@@ -451,6 +476,72 @@ if ITIN then
                 config[1], took, runsN, took > 0 and quests / took or 0, took > 0 and gainXP / took or 0,
                 gainBase > 0 and gainXP / gainBase * 100 or 0, runsN > 0 and workMine / runsN / 1000 or 0,
                 workBase > 0 and (workMine / workBase - 1) * 100 or 0))
+        end
+    end
+end
+-- The way across a zone border planned together (Zones.SEAM): where the gate was on, where it ran, where it was
+-- taken, which sides moved, and what it cost.
+if ITIN then
+    for ci, config in ipairs(CONFIGS) do
+        local t = totals[ci]
+        if t and ci ~= 1 then
+            local runsN, on, ran, taken, new, kept = 0, 0, 0, 0, 0, 0
+            local off = { one = 0, dungeon = 0, empty = 0, far = 0, short = 0, apart = 0 }
+            local sideA, sideB, both, outA, outB, added = 0, 0, 0, 0, 0, 0
+            local legN, leg1, leg2, leaveN, leave1, leave2 = 0, 0, 0, 0, 0, 0
+            local gainXP, gainBase = 0, 0
+            local proxyN, proxyXP, planXP = 0, 0, 0
+            local searchN, searchWork, workMine, workBase = 0, 0, 0, 0
+            for i in ipairs(CHARACTERS) do
+                for si = 1, #SALTS do
+                    local r, b = results[ci][i] and results[ci][i][si], results[BASE][i] and results[BASE][i][si]
+                    if r then
+                        runsN = runsN + 1
+                        workMine, workBase = workMine + (r.itinWork or 0), workBase + ((b and b.itinWork) or 0)
+                        local info = r.seamInfo
+                        if not info then
+                            off.one = off.one + 1
+                        elseif info.gated then
+                            off[info.gated] = (off[info.gated] or 0) + 1
+                        else
+                            on = on + 1
+                        end
+                        if info and info.ran then
+                            ran = ran + 1
+                            searchN, searchWork = searchN + 1, searchWork + (info.work or 0)
+                        end
+                        if info and info.newXP and info.proxyBest and info.proxyStart then
+                            proxyN = proxyN + 1
+                            proxyXP, planXP = proxyXP + (info.proxyBest - info.proxyStart), planXP + (info.newXP - info.stitchedXP)
+                        end
+                        if r.seam and info then
+                            taken = taken + 1
+                            if info.won == "kept" then kept = kept + 1 else new = new + 1 end
+                            if info.changedA then sideA = sideA + 1 end
+                            if info.changedB then sideB = sideB + 1 end
+                            if info.changedA and info.changedB then both = both + 1 end
+                            outA, outB, added = outA + (info.deferredA or 0), outB + (info.deferredB or 0), added + (info.added or 0)
+                            if info.legBefore and info.legAfter then legN, leg1, leg2 = legN + 1, leg1 + info.legBefore, leg2 + info.legAfter end
+                            if info.leaveBefore and info.leaveAfter then
+                                leaveN, leave1, leave2 = leaveN + 1, leave1 + info.leaveBefore, leave2 + info.leaveAfter
+                            end
+                            gainXP, gainBase = gainXP + (r.seam.gain or 0), gainBase + ((b and b.itinXP) or 0)
+                        end
+                    end
+                end
+            end
+            print(string.format("SEAM %s: gate on in %d of %d runs (off: one zone %d, dungeon %d, empty %d, far %d, short %d, apart %d); searched in %d,",
+                config[1], on, runsN, off.one, off.dungeon, off.empty, off.far, off.short, off.apart, ran))
+            print(string.format("  taken in %d (new %d, kept %d); per taken run: first side changed %d, next side changed %d, both %d;",
+                taken, new, kept, sideA, sideB, both))
+            print(string.format("  quests left out A %d / B %d, added %d; leg across %.0f -> %.0f s; first zone left after %.0f -> %.0f s;",
+                outA, outB, added, legN > 0 and leg1 / legN or 0, legN > 0 and leg2 / legN or 0,
+                leaveN > 0 and leave1 / leaveN or 0, leaveN > 0 and leave2 / leaveN or 0))
+            print(string.format("  +%.0f XP = +%.1f%% when taken; the stretch's own figure said %+.0f XP where a new way was judged, the plans gave %+.0f;",
+                taken > 0 and gainXP / taken or 0, gainBase > 0 and gainXP / gainBase * 100 or 0,
+                proxyN > 0 and proxyXP / proxyN or 0, proxyN > 0 and planXP / proxyN or 0))
+            print(string.format("  search work %.0f k per run where it ran; itinerary work %+.0f%% vs base",
+                searchN > 0 and searchWork / searchN / 1000 or 0, workBase > 0 and (workMine / workBase - 1) * 100 or 0))
         end
     end
 end
