@@ -741,11 +741,15 @@ H.suite("Engine and window (real data)", function()
         ns.Engine.Replan()
         ok(M.settle())
         ok(view.plan.seamBase, "made over the route without it")
-        eq(view.plan.order[i], o[i + 1], "the two accepts swapped")
-        eq(view.plan.order[i + 1], o[i])
+        -- (by their places relative to each other: a re-plan may have moved the rest of the route)
+        local function at(order, key)
+            for n, k in ipairs(order) do if k == key then return n end end
+        end
+        local a, b = at(view.plan.order, o[i]), at(view.plan.order, o[i + 1])
+        ok(a and b and b < a, "the two accepts swapped")
         local saved = ns.Engine.chardb.route.order
-        eq(saved[i], o[i], "the route saved with the character is the one without it (the way across is laid over it again)")
-        eq(saved[i + 1], o[i + 1])
+        local sa, sb = at(saved, o[i]), at(saved, o[i + 1])
+        ok(sa and sb and sa < sb, "the route saved with the character is the one without it (the way across is laid over it again)")
         local other
         for _, z in ipairs(view.ranked) do
             if z.map > 0 and z.map ~= view.zone then other = z.map; break end

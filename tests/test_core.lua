@@ -1081,17 +1081,28 @@ end)
 -- (A first guess at the XP: the tests check what they rely on, and say what is wrong.)
 local function borderWorld(data)
     local q = data.quests
-    q[22] = quest({ name = "Letter to the Fort", xp = 120, starts = "n100", ends = "n110" })           -- deliver to zone 2
-    q[23] = quest({ name = "Bandit Report", xp = 300, starts = "n101", ends = "n110", objectives = "c210:4:C" }) -- work in zone 2
-    q[24] = quest({ name = "Boar Report", xp = 300, starts = "n100", ends = "n110", objectives = "c200:4:C" })   -- work here
+    q[22] = quest({ name = "Letter to the Fort", xp = 60, starts = "n100", ends = "n110" })           -- deliver to zone 2
+    q[23] = quest({ name = "Bandit Report", xp = 120, starts = "n101", ends = "n112", objectives = "o401:2:C" }) -- work in zone 2
+    q[24] = quest({ name = "Boar Report", xp = 120, starts = "n100", ends = "n112", objectives = "c200:4:C" })   -- work here
     q[25] = quest({ name = "After the Letter", zone = 2, xp = 300, starts = "n110", ends = "n110", preAll = "22" })
-    q[26] = quest({ name = "Back Home", xp = 300, starts = "n100", ends = "n100", objectives = "c210:3:C" })    -- work there, turn-in back here
-    q[27] = quest({ name = "Second Letter", xp = 300, starts = "n100", ends = "n100", preAll = "22" })         -- follows 22 here
+    q[26] = quest({ name = "Back Home", xp = 150, starts = "n100", ends = "n100", objectives = "o401:1:C" })    -- work there, turn-in back here
+    -- (no follow-up of 22 here: a quest with a follow-up is never dropped as slow, so zone 1 would
+    -- deliver the letter itself; the follow-up test adds one)
     q[28] = quest({ name = "Far Letter", xp = 300, starts = "n100", ends = "n120" })                          -- turn-in on the other continent
     data.npcs[120] = "Far Clerk|10|10|0|2|A|" .. S(3, 50, 50)
-    -- zone 2 long enough to follow zone 1 in an itinerary (Zones.MIN_STAY)
-    q[20] = quest({ name = "Other Zone", zone = 2, xp = 700, starts = "n110", ends = "n110", objectives = "c210:20:C" })
-    q[21] = quest({ name = "Other Zone 2", zone = 2, xp = 900, starts = "n110", ends = "n110", objectives = "c210:30:C" })
+    -- the captain far to the east by the bandits, so zone 1 leaves the letter out as slow while zone 2
+    -- turns it in on its way; and no dungeon, so the itinerary goes from zone 1 straight to zone 2
+    data.npcs[110] = "Captain|10|10|0|2|A|" .. S(2, 92, 60) -- (by the bandits, where zone 2 goes anyway)
+    data.npcs[112] = "Scout|10|10|0|2|A|" .. S(2, 10, 20) -- (where 23 and 24 are turned in)
+    data.npcs[210] = "Bandit|8|8|0|0||" .. camp(2, 92, 55)
+    data.objects[401] = "Bandit Crate|" .. camp(2, 12, 22, 3) -- (no kill XP: a trip there pays only the quest)
+    data.npcs[102] = "Far Giver|10|10|0|2|A|" .. S(2, 5, 50) -- (just over the border: quest 8 is still given in the next zone)
+    data.world.dungeons = {}
+    -- zone 2 long enough to follow zone 1 in an itinerary (Zones.MIN_STAY), given by a sergeant away
+    -- from the captain (so a delivery to the captain does not bring them into zone 1's route)
+    data.npcs[111] = "Sergeant|10|10|0|2|A|" .. S(2, 30, 20)
+    q[20] = quest({ name = "Other Zone", zone = 2, xp = 700, starts = "n111", ends = "n111", objectives = "c210:20:C" })
+    q[21] = quest({ name = "Other Zone 2", zone = 2, xp = 900, starts = "n111", ends = "n111", objectives = "c210:30:C" })
 end
 
 H.suite("Quests across a border", function()
@@ -1159,7 +1170,10 @@ H.suite("Quests across a border", function()
     end)
 
     test("follow-ups of a quest taken along wait", function()
-        local ns = load(borderWorld)
+        local ns = load(function(data)
+            borderWorld(data)
+            data.quests[27] = quest({ name = "Second Letter", xp = 300, starts = "n100", ends = "n100", preAll = "22" }) -- follows 22 here
+        end)
         ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         local _, got = laid(ns, { 22 })
         eq(indexOf(got, "P:27"), nil, "Second Letter needs a quest that is turned in elsewhere")
@@ -1240,12 +1254,12 @@ H.suite("Quests across a border", function()
         local ns = load(borderWorld)
         ns.Zones.SEAM = false -- (this suite is about the quests taken along alone)
         ns.Zones.BORDER = false
-        local plainIt, shown = hours(ns)
+        local plainIt = hours(ns)
         ok(plainIt and #plainIt.segments >= 2 and plainIt.segments[1].map == 1 and plainIt.segments[2].map == 2,
             "the fixture's itinerary goes from zone 1 to zone 2")
         eq(plainIt.border, nil)
         ns.Zones.BORDER = true
-        local it = hours(ns)
+        local it, shownOn = hours(ns)
         ok(it.xp >= plainIt.xp, "never less")
         ok(it.border and setOf(it.border.ids)[22], "the delivery is taken along")
         ok(it.xp > plainIt.xp * (1 + ns.Zones.BORDER_GAIN), "and earns more than it has to")
@@ -1253,7 +1267,7 @@ H.suite("Quests across a border", function()
         eq(first.leaveKey, plainIt.segments[1].leaveKey, "the moment to leave stands")
         ok(indexOf(first.plan, "P:22") < indexOf(first.plan, first.leaveKey), "accepted before leaving")
         ok(indexOf(it.segments[2].plan, "T:22"), "turned in in the next zone")
-        eq(first.plan.base, shown, "the route without them is the base")
+        ok(first.plan.base == shownOn, "the route without them (the one on screen) is the base")
         eq(it.here, it.xp)
         ns.Zones.BORDER_GAIN = 1
         local strict = hours(ns)
@@ -1378,8 +1392,10 @@ local function seamWorld(data)
     data.npcs[221] = "Ridge Boar|8|8|0|0||" .. camp(2, 8, 55)
     q[40] = quest({ name = "Border Watch", xp = 450, starts = "n130", ends = "n130", objectives = "c220:6:C" })
     q[41] = quest({ name = "Lookout Duty", zone = 2, xp = 450, starts = "n131", ends = "n131", objectives = "c221:6:C" })
-    q[20] = quest({ name = "Other Zone", zone = 2, xp = 700, starts = "n110", ends = "n110", objectives = "c210:20:C" })
-    q[21] = quest({ name = "Other Zone 2", zone = 2, xp = 900, starts = "n110", ends = "n110", objectives = "c210:30:C" })
+    q[20] = quest({ name = "Other Zone", zone = 2, xp = 700, starts = "n110", ends = "n110", objectives = "c210:150:C" }) -- (long: the next hours are full, so time saved is XP gained)
+    q[21] = quest({ name = "Other Zone 2", zone = 2, xp = 900, starts = "n110", ends = "n110", objectives = "c210:200:C" })
+    data.world.dungeons = {} -- (so the itinerary goes from zone 1 straight to zone 2)
+    q[8] = nil -- (its giver stands in zone 2: zone 1 would cross the border for it anyway, which leaves nothing to plan together)
 end
 
 H.suite("The way across a border, planned together", function()
@@ -1597,13 +1613,13 @@ H.suite("The way across a border, planned together", function()
 
     test("the itinerary plans the way across together only when it earns more, never less", function()
         local ns = world(seamWorld, { SEAM = false })
-        local plainIt, shown = hours(ns)
+        local plainIt = hours(ns)
         ok(plainIt and #plainIt.segments >= 2 and plainIt.segments[1].map == 1 and plainIt.segments[2].map == 2,
             "the fixture's itinerary goes from zone 1 to zone 2")
         eq(plainIt.seam, nil)
         eq(plainIt.seamInfo, nil, "the flag off: nothing looked at")
         ns.Zones.SEAM = true
-        local it = hours(ns)
+        local it, shown = hours(ns) -- (the route on screen for this run: the base of the way across)
         ok(it.xp >= plainIt.xp, "never less")
         local info = it.seamInfo
         ok(info and info.ran, "the gate is on and the search ran (gated: " .. tostring(info and info.gated) .. ")")
