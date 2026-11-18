@@ -176,8 +176,10 @@ local function caption(f, i, n)
     local top
     if f.round then
         local took = #(f.names or {})
+        local how = f.took or "?"
+        if f.mended then how = how .. string.format("; %d for a level", f.mended) end -- (left before their level: out too)
         top = string.format("Round %d of %d  |cff808080·|r  took out %d quest%s (%s)  |cff808080·|r  %s%s|r", f.round, f.rounds or 0,
-            took, took == 1 and "" or "s", f.took or "?", KIND_HEX[f.kind] or "", KIND_WORD[f.kind] or f.kind)
+            took, took == 1 and "" or "s", how, KIND_HEX[f.kind] or "", KIND_WORD[f.kind] or f.kind)
         if f.restart then top = top .. "|cff808080, then back to the best route|r" end
     else
         top = "|cffffd100" .. (KIND_WORD[f.kind] or f.kind) .. "|r"

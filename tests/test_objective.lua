@@ -179,6 +179,20 @@ H.suite("Objective", function()
                 r:unshift(i, len, p, v)
             end
         end
+        -- (few random moves break a gate: the route has one quest for a later level, a few in a
+        -- thousand moves; so break one on purpose too: its accept as early as the order rules allow)
+        local snap = r:snapshot()
+        for _, m in ipairs(sc.candidates) do
+            if m.gate and r.routed[m] and m.P and not r:brokenGate() then
+                r:unplace(m.P)
+                r:place(m.P, (r:bounds(m.P, true)))
+                if r:brokenGate() then
+                    broke = broke + 1
+                    eq((ev:eval()), r:worth(sc.overhead))
+                end
+                sc.restore(snap)
+            end
+        end
         ok(broke > 0, "some moves broke a gate")
     end)
 
