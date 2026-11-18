@@ -1716,7 +1716,10 @@ end
 ---          first = with a seed: the key of the stop to put first (the step in hand), when the
 ---                  order rules and levels allow }
 --- Returns { zone, steps, order, rate, score, peak, seconds, xp, lists, quests, fronted = the
---- keys of `front` that were brought forward (nil: none) }.
+--- keys of `front` that were brought forward (nil: none), plainScore = the score of the route
+--- tidied without the search (only when a search was possible; at most the score of a searched
+--- plan under the rate goal), searchSpent = work units of the warm start, the search and the
+--- tidy-up of its route (nil without a search) }.
 function Planner.Plan(zoneMap, ctx, opts)
     opts = opts or {}
     local checkpoint = ctx.checkpoint
@@ -2006,6 +2009,7 @@ function Planner.Plan(zoneMap, ctx, opts)
         r.goalR = (ctx.altRate or r:score(opts.overhead)) * Planner.ALT_SHARE
     end
     local searched, unsearched, found, searchOrder = false, nil, nil, nil
+    local searchStartWork
     if not opts.seed then
         r:improve(Planner.IMPROVE_PASSES, checkpoint, 1)
         -- A dungeon plan is one run with its lead-up: there is little to search.
@@ -2013,6 +2017,7 @@ function Planner.Plan(zoneMap, ctx, opts)
         local searching = rounds > 0 and not ctx.dungeon and not ctx.chain
         -- the route as it would be without the search (see the end): always the cold greedy one
         if searching then unsearched = r:snapshot() end
+        searchStartWork = r.work
         -- Warm start: begin the search from the order an earlier plan of this zone ended on
         -- (opts.warm), when that is at least as good as the greedy route.
         local warmUsed = false
@@ -2188,6 +2193,7 @@ function Planner.Plan(zoneMap, ctx, opts)
     end
 
     local plan = finish(searched)
+    local spent = searched and (r.work - searchStartWork) or nil
     if fronted then -- (what the tidy-up kept of it)
         local kept, inPlan = {}, {}
         for _, key in ipairs(plan.order) do inPlan[key] = true end
@@ -2207,7 +2213,9 @@ function Planner.Plan(zoneMap, ctx, opts)
         elseif trace then
             trace[#trace] = nil
         end
+        plan.plainScore = plain.score -- the unsearched route's score: a lower bound of a searched plan's (rate goal)
     end
+    plan.searchSpent = spent -- work units of the warm start, the search and its tidy-up
     plan.trace = trace
     plan.search = found -- { rounds, work, weights, worth } or nil
     plan.work = r.work  -- all work units of this plan (build, search, finish of both routes)

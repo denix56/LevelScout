@@ -918,6 +918,7 @@ H.suite("Planning yields (real data)", function()
             { ["Objective.MODE"] = "dinkelbach", ["Objective.POLISH"] = true },
             { ["Search.ACCEPT"] = "rrt", ["Search.RESTART_AFTER"] = 10, ["Search.STALL_ROUNDS"] = 30, ["Search.EXTRA_OPS"] = "all" },
             { ["Zones.REUSE"] = true },
+            { ["Search.STREAM"] = "rounds" },
             { ["Planner.GOAL"] = "surplus" },
             { ["Planner.GOAL"] = "surplus", ["Planner.NEAR_K"] = 6, ["Search.ACCEPT"] = "rrt", ["Zones.REUSE"] = true },
         }) do

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **For developers**: a sharper bench (`tests/bench.lua`): the verdict is now made per character.
+  The standard error comes from the characters' means with a Student t bar, and a character counts
+  as harmed only beyond its own noise. It prints the variance split, the salt-to-salt correlation,
+  and the salts or characters needed to detect a difference. New options: `CRN=1` (common random
+  numbers, `Search.STREAM = "rounds"`; the game keeps its stream and its plans), `SEQ=1` (salts
+  added until settled), `CHARS=2` / `CHARS=all`, `RAW=file`, and `RACE_DRY=1` (what skipping
+  hopeless zones' searches would save).
+- **For developers**: three experimental ways for the route search to learn as it goes, all off by
+  default: a removal that prefers quests whose removal has paid before
+  (`Search.EXTRA_OPS=credit`), quests the search keeps taking in getting a full chance to come back
+  (`Search.OUTSIDERS=contested`), and a Bayesian choice of removal and regret strength
+  (`Search.BANDIT=beta`, with `uniform` as a control). `tests/bench.lua` switches them with `SET=`
+  and prints what each removal and strength achieved with `ARMS=1`. Plans are unchanged.
 - **Search view (debug)**: the window can be resized from its corner and keeps its size and place
   across `/reload`. The map numbers the route's stops in order (steps at one place share a marker:
   "3-5"), a list of the route's steps sits to the right of the map and follows the slider, and
