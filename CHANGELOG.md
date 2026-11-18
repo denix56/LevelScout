@@ -1,6 +1,6 @@
 # LevelScout
 
-## Unreleased
+## 0.2.0
 
 - **Quests that end in the next zone are taken along**: when the next hours go on to another
   zone, quests that are accepted on the way and finished there (a letter for that zone's town,
