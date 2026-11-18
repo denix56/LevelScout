@@ -4,7 +4,7 @@
 
 local _, ns = ...
 local Data, Game, Async, Zones, Geo, Guide, Tracker = ns.Data, ns.Game, ns.Async, ns.Zones, ns.Geo, ns.Guide, ns.Tracker
-local Classes, Snapshot = ns.Classes, ns.Snapshot
+local Classes, Snapshot, Play = ns.Classes, ns.Snapshot, ns.Play
 
 local Engine = {}
 ns.Engine = Engine
@@ -22,6 +22,10 @@ Engine.SHARE_RANK, Engine.SHARE_CHECK = 0.75, 0.8
 Engine.MOVE_EVERY = 1        -- seconds between two looks at where the player is (travel speed, see ns.Tracker.OnMove)
 Engine.NEAR_YARDS = 40       -- an accept or turn-in further down the route this close comes to its front
 Engine.SNAPSHOTS = 5         -- snapshots kept with the character, the oldest dropped first (see Engine.Snapshot)
+Engine.AUTO_SNAPSHOT = true  -- a snapshot is taken by itself when the player overrules the plan (a zone by hand, a skipped quest)
+Engine.AUTO_SNAPSHOTS = 3    -- of those, this many are kept (next to the ones asked for)
+Engine.AUTO_SNAPSHOT_EVERY = 900 -- seconds between two of them at least
+Engine.BACK_WITHIN = 900     -- seconds of play: a zone chosen by hand this soon after the path left it is "back" (see ns.Play)
 
 local memory = ns.Memory.New()   -- plans kept between rankings (reused) and as warm starts (ns.Memory); never saved
 
@@ -52,6 +56,8 @@ local quickNow                   -- the next plan is the shown route only, howev
 local freshWay                   -- the next plan's way to the current step is taken at once (Guide.Follow)
 local frontAsked = {}            -- [key] = the quest log and level it was last asked for with (asked once each)
 local snap, saveSnapshot         -- the snapshot being taken (Engine.Snapshot), and what saves it (defined below)
+local playEvent, autoSnapshot    -- the play log (ns.Play): an event; a snapshot for one (defined below)
+local lastMoved                  -- { from = zone, a = active clock }: when the path last moved on by itself
 
 Engine.REMIND_SLEEPING_BAG = 600 -- seconds before the sleeping-bag buff ends
 Engine.REMIND_OTHER = 180        -- seconds before any other XP buff (food) ends
@@ -342,9 +348,15 @@ end
 
 local function moveOn(plan, ranked, itinerary)
     local view = Engine.view
+    local was = view.moveOn
     view.moveOn = Zones.MoveOn(plan, ranked, view.moveOn, itinerary)
     if view.moveOn.map then
         view.moveOn.name = Zones.Name(view.moveOn.map) or Game.MapName(view.moveOn.map) or ("Map " .. view.moveOn.map)
+    end
+    -- the play log: the banner came up, or names another zone
+    local now = view.moveOn
+    if now.suggest and now.map and not (was and was.suggest and was.map == now.map) then
+        playEvent("banner", { to = now.map, gain = now.gain })
     end
 end
 
@@ -393,10 +405,14 @@ startItinerary = function(result)
             local was = view.moveOn
             moveOn(view.plan, view.ranked, out.itinerary)
             if mine then saveSnapshot(was) end
+            -- the play log: what the path promises from here (at most every Play.FORECAST_EVERY of play)
+            if view.plan and view.zone and not view.chain then
+                Play.Forecast(Tracker.Active(Game.Now()), { level = view.level, zone = view.zone, plan = view.plan, itinerary = out.itinerary })
+            end
         else
             ns.Print("|cffff5555Planning the next hours failed: %s|r", tostring(out))
             if mine then
-                ns.Print("Snapshot not taken: planning the next hours failed.")
+                if not snap.auto then ns.Print("Snapshot not taken: planning the next hours failed.") end
                 snap = nil
             end
         end
@@ -478,14 +494,14 @@ end
 -- The input of the run the snapshot waits for, as gathered (`state` is nil: it could not be).
 local function takeInput(state, why)
     if not state then
-        ns.Print("Snapshot not taken: %s.", tostring(why))
+        if not snap.auto then ns.Print("Snapshot not taken: %s.", tostring(why)) end
         snap = nil
         return
     end
     snap.state, snap.ranked, snap.itineraryWas, snap.zone = state, nil, nil, nil
     local ok, input = pcall(Snapshot.Capture, state)
     if not ok then
-        ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(input))
+        if not snap.auto then ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(input)) end
         snap = nil
         return
     end
@@ -507,7 +523,7 @@ local function record(s, moveOnWas)
     if shown.itinerary and shown.itinerary.alt then name(shown.itinerary.alt.map) end
     local clock = rawget(_G, "date")
     return {
-        format = Snapshot.FORMAT, note = s.note,
+        format = Snapshot.FORMAT, note = s.note, auto = s.auto and true or nil,
         date = type(clock) == "function" and clock("%Y-%m-%d %H:%M:%S") or nil,
         asked = s.asked, saved = Game.Now(), rankedAt = lastRank,
         version = { addon = ns.version, client = pctx.clientBuild, data = Data.status.build,
@@ -525,15 +541,44 @@ saveSnapshot = function(moveOnWas)
     if not s then return end
     local ok, rec = pcall(record, s, moveOnWas)
     if not ok then
-        ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(rec))
+        if not s.auto then ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(rec)) end
         return
     end
     local id = (tonumber(chardb.snapshotCount) or 0) + 1
     chardb.snapshotCount, rec.id = id, id
     local list = chardb.snapshots
     list[#list + 1] = rec
-    while #list > Engine.SNAPSHOTS do table.remove(list, 1) end
-    ns.Print("Snapshot %d saved%s. It is written to disk at logout or /reload.", id, s.note and (" (" .. s.note .. ")") or "")
+    -- the ones asked for and the ones taken by themselves are kept apart: neither pushes the other out
+    local function cap(auto, keep)
+        local n = 0
+        for i = #list, 1, -1 do
+            if (list[i].auto == true) == auto then
+                n = n + 1
+                if n > keep then table.remove(list, i) end
+            end
+        end
+    end
+    cap(false, Engine.SNAPSHOTS)
+    cap(true, Engine.AUTO_SNAPSHOTS)
+    if s.event then s.event.snap = id end -- (the play log's event it was taken for)
+    if not s.auto then
+        ns.Print("Snapshot %d saved%s. It is written to disk at logout or /reload.", id, s.note and (" (" .. s.note .. ")") or "")
+    end
+end
+
+-- The play log (ns.Play). An event, on the active clock:
+playEvent = function(kind, data)
+    return Play.Event(Tracker.Active(Game.Now()), kind, data)
+end
+-- and a snapshot for an event where the player overruled the plan: what was on screen and what
+-- it was made from, to be planned again later (tests/replay.lua). Quiet, and not more often
+-- than every AUTO_SNAPSHOT_EVERY seconds.
+local lastAuto
+autoSnapshot = function(note, event)
+    if not Engine.AUTO_SNAPSHOT or snap then return end
+    local now = Game.Now()
+    if lastAuto and now - lastAuto < Engine.AUTO_SNAPSHOT_EVERY then return end
+    if Engine.Snapshot(note, true, event) then lastAuto = now end
 end
 
 -- The zones a plan's steps are in, in route order, each once (names).
@@ -869,7 +914,7 @@ local function run()
         if not ok then
             setStatus("error", "Planning failed: " .. tostring(result))
             if snap then
-                ns.Print("Snapshot not taken: planning failed.")
+                if not snap.auto then ns.Print("Snapshot not taken: planning failed.") end
                 snap = nil
             end
             return publish()
@@ -921,6 +966,8 @@ local function run()
                 view.itinerary = (segs[1] and segs[1].map == result.zone)
                     and { horizon = was.horizon, xp = xp, rate = xp / was.horizon * 3600, shown = result.zone, here = xp, segments = segs } or nil
                 ns.Print("On to %s. What is left in %s stays for later.", mapName(result.movedOn.to), mapName(result.movedOn.from))
+                playEvent("moved", { from = result.movedOn.from, to = result.movedOn.to })
+                lastMoved = { from = result.movedOn.from, a = Tracker.Active(Game.Now()) }
             end
             -- until the new itinerary is in, the move-on rule uses the one worked out before
             moveOn(result.plan, result.ranked, view.itinerary)
@@ -1002,6 +1049,16 @@ end
 
 --- Show a zone (nil: let LevelScout choose). A class quest chain being followed is left.
 function Engine.SetZone(map)
+    -- the play log: the player chose the zone (and, unless the banner had suggested it, a
+    -- snapshot of what was shown instead, taken before anything changes)
+    if map ~= chardb.zone then
+        local mo = Engine.view.moveOn
+        local banner = (mo and mo.suggest and mo.map == map) or nil
+        local back = (lastMoved and lastMoved.from == map
+            and Tracker.Active(Game.Now()) - lastMoved.a <= Engine.BACK_WITHIN) or nil
+        local e = playEvent("zone", { from = chardb.zone, to = map, banner = banner, back = back })
+        if not banner then autoSnapshot(string.format("auto: zone %s -> %s by hand", tostring(chardb.zone), tostring(map)), e) end
+    end
     if chardb.chain then leaveChain() end
     chardb.zone = map
     chardb.route = nil
@@ -1137,18 +1194,22 @@ end
 --- noted first (snap.before); then the zones are ranked and the route and the next hours worked
 --- out once more, and the record is saved when that has finished (see takeInput). Returns true,
 --- or false and the reason; the outcome is told in chat.
-function Engine.Snapshot(note)
+function Engine.Snapshot(note, auto, event)
     if not (started and chardb) then return false, "LevelScout has not started yet" end
     if not Data.usable then return false, Data.status.message or "the data is not usable" end
     if snap then return false, "a snapshot is being taken already" end
     local viewed, before = pcall(Snapshot.View, Engine.view, true)
-    snap = { note = note, asked = Game.Now(), before = viewed and before or nil }
+    snap = { note = note, asked = Game.Now(), before = viewed and before or nil, auto = auto and true or nil, event = event }
     Engine.Replan(true)
     return true
 end
 
 --- Leave a quest out of all plans, or bring it back.
 function Engine.Ignore(questId, ignore)
+    if (chardb.ignored[questId] == true) ~= (ignore and true or false) then -- the play log
+        local e = playEvent(ignore and "skip" or "unskip", { q = questId })
+        if ignore then autoSnapshot("auto: quest " .. tostring(questId) .. " skipped", e) end
+    end
     chardb.ignored[questId] = ignore and true or nil
     Engine.Replan(true)
 end
@@ -1208,6 +1269,19 @@ function handlers.QUEST_REMOVED(questId)
     Engine.Replan()
 end
 function handlers.QUEST_TURNED_IN(questId)
+    -- the play log: a turn-in the route did not have, or had much further down
+    local shown = Engine.view.plan
+    if type(questId) == "number" and shown and shown.order and not shown.chain then
+        local at
+        for i, key in ipairs(shown.order) do
+            if key == "T:" .. questId then at = i break end
+        end
+        if not at then
+            playEvent("extra", { q = questId })
+        elseif at > Play.ORDER_FRONT then
+            playEvent("order", { q = questId, i = at })
+        end
+    end
     if type(questId) == "number" and completed then completed[questId] = true end
     if type(questId) == "number" and chardb then chardb.ignored[questId] = nil end -- done: no longer "skipped"
     Engine.Replan()
@@ -1293,7 +1367,15 @@ function Engine.TrackMove()
         if map then info.loc = Geo.Loc(map, x * 100, y * 100) end
     end
     if info.loc then nearbyLater(info.loc, info.level) end
-    return Tracker.OnMove(info)
+    local sample = Tracker.OnMove(info)
+    Play.Tick(Tracker.Active(info.now)) -- the play log: forecasts whose time has passed
+    return sample
+end
+-- XP came in: the play log counts what the session earns.
+function handlers.PLAYER_XP_UPDATE(unit)
+    if unit ~= nil and unit ~= "player" then return end
+    local p = Game.GetPlayer()
+    Play.XP(p.level, p.xp, p.xpMax)
 end
 -- A new level: everything is planned again (zones, dungeons, the route), at the new level.
 function handlers.PLAYER_LEVEL_UP(level)
@@ -1453,6 +1535,12 @@ function Engine.Start()
     chardb.steps = type(chardb.steps) == "table" and chardb.steps or {} -- planned against real time per step
     chardb.stepModel = type(chardb.stepModel) == "table" and chardb.stepModel or {} -- fitted on the step log
     Tracker.Start(chardb.pace, db.drops, chardb.steps, chardb.stepModel)
+    -- the play log: forecasts against what play brought, and where the player overruled the plan
+    chardb.play = Play.Start(chardb.play)
+    do
+        local p = Game.GetPlayer()
+        Play.XP(p.level, p.xp, p.xpMax)
+    end
     Engine.db, Engine.chardb = db, chardb
     completed = Game.GetCompletedQuests()
     if not Data.usable then
