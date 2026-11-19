@@ -20,6 +20,8 @@
 --   warm      { [map] = { order = "P:1,W:m2,...", weights } } the warm start each ranked zone got
 --   itineraryWas, moveOnWas  what the itinerary and the banner were made after (the order of
 --             zones shown before, and { suggest, map } of the banner before)
+--   itineraryWasKeys  the step each zone shown before was left after (Snapshot.LeaveKeys), by
+--             position in itineraryWas
 --   borderWas the set of quests taken along to the next zone that was on screen before the run
 --             ({ zone, ids, to, before }, see Zones.Itinerary)
 --   seamWas   the way across planned together that was on screen before the run (see Zones.Itinerary)
@@ -315,6 +317,17 @@ function Snapshot.Maps(itinerary)
     return out
 end
 
+--- The step each zone of an itinerary is left after, by position (Zones.Itinerary reads the first
+--- of the one before), or nil when it has none.
+function Snapshot.LeaveKeys(it)
+    if not (it and it.segments) then return nil end
+    local out, any = {}, false
+    for i, s in ipairs(it.segments) do
+        if type(s.leaveKey) == "string" then out[i] = s.leaveKey; any = true end
+    end
+    return any and out or nil
+end
+
 local function stepOf(plan, i)
     local s = plan.steps[i]
     local loc = s.loc or {}
@@ -333,16 +346,19 @@ local function planOf(plan, light)
 end
 
 local function itineraryOf(it, light)
-    local out = { horizon = num(it.horizon), xp = num(it.xp), rate = num(it.rate), stay = num(it.stay), here = num(it.here),
-        shown = num(it.shown), segments = {} }
-    if it.alt then out.alt = { map = num(it.alt.map), xp = num(it.alt.xp), next = num(it.alt.next) } end
+    local out = { horizon = num(it.horizon), xp = num(it.xp), rate = num(it.rate), pathRate = num(it.pathRate),
+        stay = num(it.stay), here = num(it.here), shown = num(it.shown), segments = {} }
+    if it.alt then
+        out.alt = { map = num(it.alt.map), xp = num(it.alt.xp), rate = num(it.alt.rate), gain = num(it.alt.gain),
+            next = num(it.alt.next) }
+    end
     for i, seg in ipairs(it.segments or {}) do
         out.segments[i] = { map = num(seg.map), travel = num(seg.travel), seconds = num(seg.seconds), xp = num(seg.xp),
             leave = num(seg.leave), leaveKey = str(seg.leaveKey), carried = num(seg.carried), carriedXP = num(seg.carriedXP) }
     end
     if it.starts and not light then
         out.starts = {}
-        for map, s in pairs(it.starts) do out.starts[map] = { xp = num(s.xp), rate = num(s.rate), next = num(s.next) } end
+        for map, s in pairs(it.starts) do out.starts[map] = { xp = num(s.xp), rate = num(s.rate), next = num(s.next), path = s.path or nil } end
     end
     return out
 end
@@ -366,7 +382,7 @@ function Snapshot.View(view, light)
     end
     if view.itinerary then out.itinerary = itineraryOf(view.itinerary, light) end
     local m = view.moveOn
-    if m then out.moveOn = { suggest = m.suggest and true or false, map = num(m.map), gain = num(m.gain), horizon = num(m.horizon) } end
+    if m then out.moveOn = { suggest = m.suggest and true or false, map = num(m.map), gain = num(m.gain), horizon = num(m.horizon), rate = m.rate and true or nil } end
     local c = view.chain
     if c then out.chain = { id = num(c.id), kind = str(c.kind), name = str(c.name) } end
     return out

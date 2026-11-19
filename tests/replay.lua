@@ -256,7 +256,9 @@ function R.Replay(ns, snap, opts)
         local was
         if snap.itineraryWas then
             was = { segments = {} }
-            for i, map in ipairs(snap.itineraryWas) do was.segments[i] = { map = map } end
+            for i, map in ipairs(snap.itineraryWas) do
+                was.segments[i] = { map = map, leaveKey = snap.itineraryWasKeys and snap.itineraryWasKeys[i] or nil }
+            end
         end
         itinerary = Z.Itinerary(state, ictx, ranked, { shown = zone, plan = base or plan, was = was,
             border = snap.borderWas, borderPlan = (base and plan ~= base and plan.base) and plan or nil,
@@ -437,6 +439,7 @@ function R.Compare(want, got, opts)
                     eq("itinerary", who .. " xp", s.xp, g.xp, "xp")
                     eq("itinerary", who .. " rate", s.rate, g.rate, "rate")
                     eq("itinerary", who .. " next", s.next, g.next)
+                    eq("itinerary", who .. " path", s.path or false, g.path or false)
                 end
             end
         end
@@ -446,6 +449,7 @@ function R.Compare(want, got, opts)
         eq("banner", "suggested", wb.suggest or false, gb.suggest or false)
         eq("banner", "zone", wb.map, gb.map)
         eq("banner", "gain", wb.gain, gb.gain, "gain")
+        eq("banner", "rate", wb.rate or false, gb.rate or false)
         eq("banner", "horizon", wb.horizon, gb.horizon)
     end
     return diffs, count, notes

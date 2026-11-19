@@ -743,10 +743,33 @@ function Zones.Gain(active, other)
     return go / stay - 1
 end
 
+--- The ranked zones with something to do, in the Zones tab's order when an itinerary was made for
+--- `shown`: by itinerary.starts rate, best first, ties in the ranking's order. nil when the
+--- itinerary is for another zone or has no figure for one of them (the tab then lists the
+--- one-hour scores).
+function Zones.StartOrder(itinerary, ranked, shown)
+    local starts = itinerary and itinerary.starts
+    if not starts or shown == nil or itinerary.shown ~= shown then return nil end
+    local list, at = {}, {}
+    for i, z in ipairs(ranked or {}) do
+        if z.plan and #z.plan.steps > 0 then
+            if not starts[z.map] then return nil end
+            list[#list + 1] = z; at[z] = i
+        end
+    end
+    table.sort(list, function(a, b)
+        local ra, rb = starts[a.map].rate, starts[b.map].rate
+        if ra ~= rb then return ra > rb end
+        return at[a] < at[b]
+    end)
+    return list
+end
+
 --- Move-on rule with hysteresis. `active` is the shown zone's plan, `ranked` from Zones.Rank,
 --- `was` the previous answer, `itinerary` from Zones.Itinerary (optional).
---- Returns { suggest, map, gain, horizon }: gain 0.25 = 25% more XP by leaving now, over
---- `horizon` seconds (nil: the next hour).
+--- Returns { suggest, map, gain, rate }: gain 0.25 = 25% more XP by leaving now. `rate` is true
+--- when the gain is in XP per hour over the itinerary's horizon (the Zones tab's figures), else
+--- it is over the next hour (nil gain: nothing left here).
 ---
 --- With an itinerary made for the shown zone, see the first lines of the function. Without:
 --- Both choices are valued over the same hour, so the answer does not swing when little is
@@ -756,21 +779,24 @@ end
 --- A short remainder therefore never triggers the suggestion by itself; a long stretch of
 --- poor quests does.
 function Zones.MoveOn(active, ranked, was, itinerary)
-    -- With an itinerary for the shown zone, the banner says what the itinerary says: its first
-    -- zone, when that is not the shown one. The gain is the itinerary's XP against the best
-    -- itinerary that starts by staying here, over the itinerary's horizon.
+    -- With an itinerary made for the shown zone, the banner says what the Zones tab says: the zone
+    -- it lists first (Zones.StartOrder), when that is not the shown one. The gain is that zone's
+    -- start rate against the shown zone's.
     -- (Nothing left here, or an itinerary made while another zone was shown: the rule below.)
     if itinerary and itinerary.segments and itinerary.segments[1] and active and #active.steps > 0
         and itinerary.shown ~= nil and itinerary.shown == active.zone then
-        -- (an itinerary pinned to the shown zone names the better start as its `alt`)
-        local first = itinerary.alt and itinerary.alt.map or itinerary.segments[1].map
-        if first == active.zone then return { suggest = false } end
-        if not itinerary.here or itinerary.here <= 0 then
-            return { suggest = true, map = first, gain = nil, horizon = itinerary.horizon }
+        local order = Zones.StartOrder(itinerary, ranked, active.zone)
+        local mine = order and order[1] and itinerary.starts[active.zone]
+        if mine and mine.rate > 0 then
+            local top = order[1]
+            if top.map == active.zone then return { suggest = false } end
+            local lead = itinerary.starts[top.map].rate / mine.rate
+            local threshold = (was and was.suggest and was.map == top.map) and Zones.MOVE_ON_EXIT or Zones.MOVE_ON_ENTER
+            return { suggest = lead > threshold, map = top.map, gain = lead - 1, rate = true }
         end
-        local lead = (itinerary.alt and itinerary.alt.xp or itinerary.xp) / itinerary.here
-        local threshold = (was and was.suggest and was.map == first) and Zones.MOVE_ON_EXIT or Zones.MOVE_ON_ENTER
-        return { suggest = lead > threshold, map = first, gain = lead - 1, horizon = itinerary.horizon }
+        -- (carried over after the path moved on, without figures: it starts here, no banner)
+        if not itinerary.starts and itinerary.segments[1].map == active.zone then return { suggest = false } end
+        -- (figures missing for a zone of a newer ranking: the one-hour rule, as the tab then lists)
     end
     local best
     for _, z in ipairs(ranked or {}) do
@@ -790,10 +816,11 @@ end
 -- Each zone's plan is a curve of XP against time. An itinerary strings up to three of them
 -- together: follow the first zone's route up to some turn-in, travel, follow the next, and
 -- so on until the horizon. Every order of the best few zones and every sensible moment to
--- leave is tried, and the one that earns most XP inside the horizon wins. The second zone
--- and third zone of the winner are then planned again as they will really be found: from
--- where the zone before is left, at the level reached by then, with its quests done and the
--- quests still in the log carried along.
+-- leave is tried. The best few (Zones.REFINE_TOP, each with another next zone) have their second
+-- and third zone planned again as they will really be found: from where the zone before is left,
+-- at the level reached by then, with its quests done and the quests still in the log carried
+-- along. The one that earns most then wins, unless the order on screen is within
+-- Zones.KEEP_ITINERARY of it.
 
 Zones.HORIZON = 9000           -- seconds an itinerary covers (two and a half hours)
 Zones.ITINERARY_ZONES = 5      -- best-ranked zones that may appear in it
@@ -804,8 +831,9 @@ Zones.MIN_STAY = 600           -- a zone is not visited for less than this (the 
 -- six characters: 40, 60 or 80 rounds cut the time to a quarter or a third but gave two of them
 -- a worse itinerary (5% and 11% less XP), so the full search is kept.
 Zones.ITINERARY_ROUNDS = 40 -- with ITINERARY_WARM: the later zones start from their ranked plans
-Zones.KEEP_ITINERARY = 1.05    -- a different order of zones replaces the shown one only when 5% better
-Zones.PIN_SHOWN = true        -- the itinerary starts in the shown zone while that has something left; a better start elsewhere is its `alt`
+Zones.KEEP_ITINERARY = 1.05    -- the order of zones on screen (and the step its first zone is left after) stays unless another earns 5% more, all planned again
+Zones.REFINE_TOP = 3           -- itineraries planned again before one is chosen: the best by today's plans, each with another next zone
+Zones.PIN_SHOWN = true        -- the itinerary starts in the shown zone while that has something left; the zone the Zones tab lists first, if another, is its `alt`
 Zones.SHORT_IN_HAND = true     -- the zone on screen may be left after less than MIN_STAY: we are in it already
 Zones.BORDER = true            -- the itinerary takes along quests that end beyond its first zone: accepted there, finished in a zone it goes on to
 Zones.BORDER_MAX = 4           -- such quests at most (most XP first)
@@ -1117,11 +1145,28 @@ local function project(state, ctx, plan, leave, carried)
 end
 Zones.Project = project -- (for the tests)
 
+--- Of itineraries found on today's plans (`cands`, best first), the one to follow: the first
+--- Zones.REFINE_TOP of them planned again (`refine`: as each will really be found), the best of
+--- those if it earns more than `alone` (the first zone alone, or the best single zone), else
+--- `alone`; then the order on screen (`kept`, optional, planned again too) unless that one earns
+--- Zones.KEEP_ITINERARY times more.
+function Zones.Choose(cands, alone, kept, refine)
+    local best = alone
+    for i = 1, math.min(Zones.REFINE_TOP, #cands) do
+        local got = refine(cands[i])
+        if got and #got.segments >= 2 and (not best or got.xp > best.xp) then best = got end
+    end
+    kept = kept and refine(kept)
+    if kept and (not best or best.xp <= kept.xp * Zones.KEEP_ITINERARY) then best = kept end
+    return best
+end
+
 --- The best way through the next hours. `state` and `ctx` as for Zones.Context / Zones.Rank,
 --- `ranked` from Zones.Rank.
 --- opts = { shown = map of the zone on screen, plan = its plan (used instead of the ranked one),
----          was = the previous itinerary (its order of zones is kept unless clearly beaten; zones
----                at its front that have nothing left by now are passed over),
+---          was = the previous itinerary (its order of zones, and the step its first zone was left
+---                after, are kept unless clearly beaten; zones at its front that have nothing left by
+---                now are passed over; only `segments[i].map` and `.leaveKey` are read),
 ---          border = the set of quests taken along that is on screen (chardb.border; optional),
 ---          borderPlan = the shown zone's route with them (Zones.WithBorder; `plan` is then the
 ---                       route without them),
@@ -1132,13 +1177,18 @@ Zones.Project = project -- (for the tests)
 --- little is left in it (Zones.MIN_STAY is for zones that take a trip to reach).
 --- Returns nil when nothing can be planned, else
 ---   { horizon, xp, rate (XP per hour over the horizon), stay = XP of the best single zone,
----     shown = opts.shown, here = XP of the best itinerary that starts in the shown zone
+---     pathRate = XP per hour of the path over the time used (the figure of `starts`),
+---     shown = opts.shown, here = XP of the path when it starts in the shown zone
 ---             (nil when nothing is left there, or no zone is shown),
----     alt = { map, name, xp, next } when starting in another zone would earn more: the
----           itinerary itself then starts in the shown zone all the same (Zones.PIN_SHOWN),
+---     alt = { map, name, xp, rate, gain, next } when the Zones tab lists another zone first (by
+---           start rate, see Zones.StartOrder): `gain` is that zone's rate against the shown zone's,
+---           minus one. The itinerary itself then starts in the shown zone all the same
+---           (Zones.PIN_SHOWN),
 ---     starts = { [map] = { xp = XP inside the horizon when that zone is done first and the best
 ---                way on is taken from where it is left, rate = that in XP per hour (over the time
----                used, see below), next = the zone gone to after it (or nil) } }
+---                used, see below), next = the zone gone to after it (or nil),
+---                path = true for the shown zone when the entry is the path itself (else it is
+---                the zone alone) } }
 ---                for every ranked zone with something to do,
 ---     border = { zone, ids, to = { [id] = map }, before = the leave step's key, gain = XP more
 ---              than without them } when quests are taken along across the border (Zones.BORDER):
@@ -1173,10 +1223,11 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     local rankedPlan = {} -- the plans the zones above were ranked with: the warm starts of their later plans
     for _, z in ipairs(zones) do rankedPlan[z.map] = z.plan end
     local checkpoint = ctx.checkpoint
-    -- progress: the first search, then one part for each zone planned again (four at most)
+    -- progress: the first search, then one part for each zone planned again
     local parts = 0
+    local PARTS = 3 + (Zones.REFINE_TOP + 2) * (Zones.ITINERARY_STOPS - 1)
     local function part()
-        if ctx.progress then ctx.progress("itinerary", parts, 5) end
+        if ctx.progress then ctx.progress("itinerary", math.min(parts, PARTS - 1), PARTS) end
         parts = parts + 1
     end
     part()
@@ -1199,7 +1250,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         return row[plan]
     end
     -- (a step a zone is left after that its own rules would not make a leave point stands: the way
-    -- across, the quests taken along)
+    -- across, the quests taken along, the step the order on screen left its first zone after)
     local function pinLeave(plan, at)
         local points = leavesOf(plan)
         for _, p in ipairs(points) do if p == at then return end end
@@ -1211,7 +1262,9 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     -- every leave point (or only `fixed[n]` for the n-th zone), with `swap[map]` in place of
     -- that zone's plan when it is not the first zone, and `leadPlans[map]` in place of that zone's
     -- plan when it is the first zone.
-    local function search(order, fixed, swap, depthMax, first, leadPlans)
+    -- With `top` ({ by = {}, list = {} }) the best itinerary for each pair of first two zones is
+    -- collected in `top.list`, in first-seen order.
+    local function search(order, fixed, swap, depthMax, first, leadPlans, top)
         local best
         local segs, used = {}, {}
         local function go(depth, time, xp, loc)
@@ -1227,6 +1280,23 @@ function Zones.Itinerary(state, ctx, ranked, opts)
                         if not best or xp + gain > best.xp then
                             best = { xp = xp + gain, segments = {} }
                             for i = 1, depth do best.segments[i] = segs[i] end
+                        end
+                        if top and depth >= 2 then
+                            local row = top.by[segs[1].map]
+                            if not row then row = {}; top.by[segs[1].map] = row end
+                            local c = row[segs[2].map]
+                            if not c or xp + gain > c.xp then
+                                local new = { xp = xp + gain, segments = {} }
+                                for i = 1, depth do new.segments[i] = segs[i] end
+                                if c then
+                                    new.at = c.at
+                                    top.list[c.at] = new
+                                else
+                                    top.list[#top.list + 1] = new
+                                    new.at = #top.list
+                                end
+                                row[segs[2].map] = new
+                            end
                         end
                         if depth < (depthMax or Zones.ITINERARY_STOPS) and (not order or order[depth + 1]) then
                             used[z.map] = true
@@ -1253,18 +1323,20 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     end
 
     local single = search(nil, nil, nil, 1)
-    local best = search()
-    if not best then return nil end
-    -- keep the shown order of zones unless another is clearly better
-    -- (zones at its front with nothing left by now are finished: the rest of the order stands)
+    if not single then return nil end
+    -- the order of zones on screen (zones at its front with nothing left by now are finished: the
+    -- rest stands) and the step its first zone was left after
+    local keptOrder, keptLeave
     if opts.was and opts.was.segments then
         local open, order = {}, {}
         for _, z in ipairs(zones) do open[z.map] = true end
         for _, seg in ipairs(opts.was.segments) do
-            if #order > 0 or open[seg.map] then order[#order + 1] = seg.map end
+            if #order > 0 or open[seg.map] then
+                order[#order + 1] = seg.map
+                if #order == 1 then keptLeave = seg.leaveKey end
+            end
         end
-        local kept = #order > 0 and search(order) or nil
-        if kept and #kept.segments == #order and best.xp <= kept.xp * Zones.KEEP_ITINERARY then best = kept end
+        if #order > 0 then keptOrder = order end
     end
     -- The zones after the first as they will really be found: each is planned again from where
     -- the one before is left, at the level reached by then, with that zone's turned-in quests
@@ -1310,37 +1382,48 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         end
         return got
     end
-    -- an itinerary must beat simply staying in one zone
-    local function settle(cand)
-        local refined = refine(cand)
-        if refined and #refined.segments >= 2 and single and refined.xp > single.xp then return refined end
-        return single
+    -- (planned again once: the same order left after the same step gives the same itinerary)
+    local refinedOf = {}
+    local function refined(cand)
+        if not cand or #cand.segments < 2 or not cand.segments[1].leave then return cand end
+        local maps = {}
+        for i, seg in ipairs(cand.segments) do maps[i] = seg.map end
+        local key = table.concat(maps, ">") .. "@" .. cand.segments[1].leave
+        local got = refinedOf[key]
+        if got == nil then got = refine(cand) or false; refinedOf[key] = got end
+        return got or nil
     end
-    if #best.segments >= 2 then best = settle(best) end
-    if not best then return nil end
-    -- Against staying: the best itinerary that starts in the shown zone, worked out the same
-    -- way. (When that turns out better than the one found, it is the answer.)
-    local here, alt
-    if opts.shown then
-        if best.segments[1].map == opts.shown then
-            here = best.xp
-        else
-            local stay = search(nil, nil, nil, 1, opts.shown)
-            local onward = search(nil, nil, nil, nil, opts.shown)
-            if onward and #onward.segments >= 2 then onward = refine(onward) end
-            if stay and (not onward or onward.xp < stay.xp) then onward = stay end
-            if onward then
-                here = onward.xp
-                if onward.xp >= best.xp then
-                    best = onward
-                elseif Zones.PIN_SHOWN then
-                    -- the path is the shown zone's: the player chose it. What starting elsewhere
-                    -- would earn is kept for the banner (Zones.MoveOn) and the Zones tab.
-                    alt, best = best, onward
-                end
-            end
+    local planOf = {}
+    for _, z in ipairs(zones) do planOf[z.map] = z.plan end
+    -- the itinerary to follow from `first` (nil: from any zone); it must beat staying in one zone
+    local function pick(first)
+        local top = { by = {}, list = {} }
+        search(nil, nil, nil, nil, first, nil, top)
+        local cands = top.list
+        table.sort(cands, function(a, b) if a.xp ~= b.xp then return a.xp > b.xp end return a.at < b.at end)
+        local alone = single
+        if first then alone = search(nil, nil, nil, 1, first) end
+        local kept
+        if keptOrder and (not first or keptOrder[1] == first) then
+            local raw
+            local at = #keptOrder > 1 and keptLeave and keyIndex(planOf[keptOrder[1]].order, keptLeave)
+            if at then pinLeave(planOf[keptOrder[1]], at); raw = search(keptOrder, { at }) end
+            if not (raw and #raw.segments == #keptOrder) then raw = search(keptOrder) end
+            if raw and #raw.segments == #keptOrder then kept = raw end
         end
+        return Zones.Choose(cands, alone, kept, refined)
     end
+    -- The path: from the shown zone while that has something left, else (or with PIN_SHOWN off, when
+    -- another start earns more) from the best zone.
+    local here
+    local mine = opts.shown and pick(opts.shown) or nil
+    local best = mine
+    if not (mine and Zones.PIN_SHOWN) then
+        local any = pick(nil)
+        if any and not (mine and mine.xp >= any.xp) then best = any end
+    end
+    if not best then return nil end
+    if mine then here = mine.xp end
 
     -- The way across the border planned together (Zones.SEAM). The stretch around the crossing (the
     -- winner's first zone's last steps before it is left, the trip, the next zone's first steps, and
@@ -1719,13 +1802,16 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     -- before the horizon and no other zone fits into what is left (a trip and Zones.MIN_STAY),
     -- that rest is not counted as earning nothing. Staying in the zone alone is tried too, and
     -- the better rate of the two is the zone's.
+    -- The shown zone's entry is the path itself (its later zones planned again, the order on screen
+    -- kept) when going on earns more per hour than the zone alone; else the zone alone. That way the
+    -- list's shown row is the "Next" row's figure, with the same zone after it.
     local starts = {}
+    local function rate(got)
+        local used = 0
+        for _, seg in ipairs(got.segments) do used = used + seg.travel + seg.seconds end
+        return got.xp / math.max(math.min(used, H), Planner.MIN_HORIZON) * 3600
+    end
     do
-        local function rate(got)
-            local used = 0
-            for _, seg in ipairs(got.segments) do used = used + seg.travel + seg.seconds end
-            return got.xp / math.max(math.min(used, H), Planner.MIN_HORIZON) * 3600
-        end
         local listed = {}
         for _, z in ipairs(zones) do listed[z.map] = true end
         for _, z in ipairs(ranked or {}) do
@@ -1742,13 +1828,25 @@ function Zones.Itinerary(state, ctx, ranked, opts)
             end
         end
     end
+    if opts.shown and best.segments[1].map == opts.shown then
+        local alone = search(nil, nil, nil, 1, opts.shown)
+        local own = (alone and rate(alone) > rate(best)) and alone or best
+        starts[opts.shown] = { xp = math.floor(own.xp), rate = rate(own),
+            next = own.segments[2] and own.segments[2].map or nil, path = (own == best) or nil }
+    end
 
     local out = { horizon = H, xp = math.floor(best.xp), rate = best.xp / H * 3600, stay = single and math.floor(single.xp) or nil,
-        shown = opts.shown, here = here and math.floor(here) or nil, starts = starts, segments = {}, border = border,
-        seam = seam, seamInfo = seamInfo }
-    if alt then
-        out.alt = { map = alt.segments[1].map, name = Zones.Name(alt.segments[1].map), xp = math.floor(alt.xp),
-            next = alt.segments[2] and alt.segments[2].map or nil }
+        pathRate = rate(best), shown = opts.shown, here = here and math.floor(here) or nil, starts = starts,
+        segments = {}, border = border, seam = seam, seamInfo = seamInfo }
+    -- the zone the Zones tab lists first, when that is not the shown one
+    if opts.shown and starts[opts.shown] then
+        local order = Zones.StartOrder({ shown = opts.shown, starts = starts }, ranked, opts.shown)
+        local top = order and order[1]
+        if top and top.map ~= opts.shown and starts[opts.shown].rate > 0 and starts[top.map].rate > starts[opts.shown].rate then
+            local st = starts[top.map]
+            out.alt = { map = top.map, name = Zones.Name(top.map), xp = st.xp, rate = st.rate,
+                gain = st.rate / starts[opts.shown].rate - 1, next = st.next }
+        end
     end
     for i, seg in ipairs(best.segments) do
         -- quests brought along from the zones before and turned in here

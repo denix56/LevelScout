@@ -1006,34 +1006,66 @@ H.suite("Zones", function()
         eq(Z.MoveOn({ xp = 3000, seconds = 7200, rate = 1000, score = 1000, zone = 1, steps = { {} } }, ranked, nil).suggest, true)
     end)
 
-    test("move-on with an itinerary: its first zone, valued against starting here", function()
+    test("Zones.Choose: the best of the first few planned again, the order on screen kept within 5%", function()
+        local Z = load().Zones
+        local function it(xp, maps)
+            local segs = {}
+            for i, m in ipairs(maps) do segs[i] = { map = m, leave = i < #maps and 1 or nil } end
+            return { xp = xp, segments = segs }
+        end
+        local A, B, C = it(100, { 1, 2 }), it(95, { 1, 3 }), it(90, { 1, 4 })
+        local real = { [A] = it(90, { 1, 2 }), [B] = it(110, { 1, 3 }), [C] = it(80, { 1, 4 }) }
+        local calls = 0
+        local function refine(c) calls = calls + 1; return real[c] end
+        local alone = it(85, { 1 })
+        eq(Z.Choose({ A, B, C }, alone, nil, refine), real[B])
+        eq(calls, 3, "the first REFINE_TOP are planned again")
+        local top = Z.REFINE_TOP
+        Z.REFINE_TOP = 1
+        eq(Z.Choose({ A, B, C }, alone, nil, refine), real[A], "the first one only: 90 beats the zone alone")
+        Z.REFINE_TOP = top
+        local kept = it(0, { 1, 5 })
+        real[kept] = it(105, { 1, 5 })
+        eq(Z.Choose({ A, B, C }, alone, kept, refine), real[kept], "110 does not earn 5% more than 105")
+        real[kept] = it(104, { 1, 5 })
+        eq(Z.Choose({ A, B, C }, alone, kept, refine), real[B], "110 earns 5% more than 104")
+        eq(Z.Choose({ A }, it(95, { 1 }), nil, function(c) return c end).xp, 95, "an itinerary must beat the zone alone")
+    end)
+
+    test("move-on with an itinerary: the zone the Zones tab lists first, by start rate", function()
         local Z = load().Zones
         local function plan(score, zone) return { score = score, zone = zone, steps = { {} } } end
         local ranked = { { map = 2, plan = plan(3000, 2) }, { map = 3, plan = plan(2000, 3) }, { map = 1, plan = plan(1000, 1) } }
         local active = plan(1000, 1)
-        local function itinerary(xp, here, first, shown)
-            return { horizon = 7200, xp = xp, here = here, shown = shown or 1, segments = { { map = first or 3 }, { map = 2 } } }
+        local function itinerary(r1, r2, r3, shown)
+            local starts = { [1] = { rate = r1 }, [2] = { rate = r2 } }
+            if r3 then starts[3] = { rate = r3 } end
+            return { horizon = 9000, shown = shown or 1, starts = starts, segments = { { map = 1 }, { map = 2 } } }
         end
-        -- the old rule would name zone 2 (three times the score); the itinerary starts in zone 3
-        local first = Z.MoveOn(active, ranked, nil, itinerary(1150, 1000))
-        eq({ first.suggest, first.map }, { false, 3 }, "15% is not enough to start suggesting")
-        local on = Z.MoveOn(active, ranked, first, itinerary(1300, 1000))
-        eq({ on.suggest, on.map, on.horizon }, { true, 3, 7200 })
+        -- the one-hour scores would name zone 2; the start rates put zone 3 first
+        local first = Z.MoveOn(active, ranked, nil, itinerary(1000, 1100, 1150))
+        eq({ first.suggest, first.map, first.rate }, { false, 3, true }, "15% is not enough to start suggesting")
+        near(first.gain, 0.15, 1e-9)
+        local on = Z.MoveOn(active, ranked, first, itinerary(1000, 1100, 1300))
+        eq({ on.suggest, on.map, on.rate }, { true, 3, true })
         near(on.gain, 0.3, 1e-9)
-        eq(Z.MoveOn(active, ranked, on, itinerary(1100, 1000)).suggest, true, "10% keeps an existing suggestion")
-        eq(Z.MoveOn(active, ranked, on, itinerary(1040, 1000)).suggest, false)
-        local other = Z.MoveOn(active, ranked, on, itinerary(1100, 1000, 2))
+        eq(Z.MoveOn(active, ranked, on, itinerary(1000, 1050, 1100)).suggest, true, "10% keeps an existing suggestion")
+        eq(Z.MoveOn(active, ranked, on, itinerary(1000, 1020, 1040)).suggest, false)
+        local other = Z.MoveOn(active, ranked, on, itinerary(1000, 1100, 1050))
         eq({ other.suggest, other.map }, { false, 2 }, "another first zone has to earn its 20% again")
-        -- the itinerary starts in the shown zone: stay, whatever the other zones score
-        eq(Z.MoveOn(active, ranked, nil, itinerary(1300, 1300, 1)), { suggest = false })
-        -- nothing can be started here
-        local done = Z.MoveOn(active, ranked, nil, itinerary(1300, nil))
-        eq({ done.suggest, done.map, done.gain }, { true, 3, nil })
-        -- an itinerary made while another zone was shown, or nothing left here: the one-hour rule
-        local old = Z.MoveOn(active, ranked, nil, itinerary(1300, 1000, 3, 2))
-        eq({ old.suggest, old.map, old.horizon }, { true, 2, nil })
-        near(old.gain, 2, 1e-9)
-        local empty = Z.MoveOn({ score = 0, zone = 1, steps = {} }, ranked, nil, itinerary(1300, 1300, 1))
+        -- the shown zone is first, or ties for it (the ranking's order decides, and the lead is nothing)
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300, 1100, 1150)), { suggest = false })
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1000, 1000, 900)).suggest, false)
+        -- no figure for a zone of the ranking: the one-hour rule, as the tab then lists
+        local missing = Z.MoveOn(active, ranked, nil, itinerary(1000, 1100, nil))
+        eq({ missing.suggest, missing.map, missing.rate }, { true, 2, nil })
+        near(missing.gain, 2, 1e-9)
+        -- no figures, the path starts here: no banner
+        eq(Z.MoveOn(active, ranked, nil, { horizon = 9000, shown = 1, segments = { { map = 1 }, { map = 2 } } }), { suggest = false })
+        -- made while another zone was shown, or nothing left here: the one-hour rule
+        local old = Z.MoveOn(active, ranked, nil, itinerary(1000, 1100, 1300, 2))
+        eq({ old.suggest, old.map, old.rate }, { true, 2, nil })
+        local empty = Z.MoveOn({ score = 0, zone = 1, steps = {} }, ranked, nil, itinerary(1000, 1100, 1300))
         eq({ empty.suggest, empty.map }, { true, 2 }, "nothing left here")
     end)
 

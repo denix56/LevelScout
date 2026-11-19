@@ -7,7 +7,7 @@ local E = require("game_env")(H, M)
 local SECRET, installGame, slash, output, start = E.SECRET, E.installGame, E.slash, E.output, E.start
 
 H.suite("Engine and window (real data)", function()
-    test("the move-on banner follows the itinerary and says over which time", function()
+    test("the move-on banner follows the Zones tab and says over which time", function()
         local ns = start()
         local view = ns.Engine.view
         -- the engine hands the itinerary to the move-on rule: they never name different zones
@@ -22,14 +22,14 @@ H.suite("Engine and window (real data)", function()
             eq(view.moveOn.map, it.segments[1].map)
         end
         local banner = LevelScoutFrame.banner
-        view.moveOn = { suggest = true, map = -1, name = "Elsewhere", gain = 0.25, horizon = 7200 }
+        view.moveOn = { suggest = true, map = -1, name = "Elsewhere", gain = 0.25, rate = true }
         ns.UI.Refresh()
         ok(banner:IsShown())
-        eq(banner.label.text, "Elsewhere: 25% more XP over the next 2 hours")
+        eq(banner.label.text, "Elsewhere: 25% more XP per hour")
         view.moveOn = { suggest = true, map = -1, name = "Elsewhere", gain = 0.25 }
         ns.UI.Refresh()
-        eq(banner.label.text, "Elsewhere: 25% more XP over the next hour", "without an itinerary: the one-hour rule")
-        view.moveOn = { suggest = true, map = -1, name = "Elsewhere", horizon = 7200 }
+        eq(banner.label.text, "Elsewhere: 25% more XP over the next hour", "the one-hour rule")
+        view.moveOn = { suggest = true, map = -1, name = "Elsewhere" }
         ns.UI.Refresh()
         eq(banner.label.text, "Done here. Next: Elsewhere")
         view.moveOn = { suggest = false }
