@@ -1092,7 +1092,7 @@ local MENU
 local function menuItems()
     local size, scale = settings.size or 2, settings.scale or 1
     local items = {
-        { "Re-plan now", function() Engine.Replan(true) end },
+        { "Re-plan now", function() Engine.Replan(true, true) end },
         { Engine.view.chain and "Back to the leveling plan" or nil, function() Engine.EndChain() end },
         { (Engine.chardb and Engine.chardb.zone) and "Let LevelScout pick the zone" or nil, function() Engine.SetZone(nil) end },
         { (settings.locked and "Unlock" or "Lock") .. " position", function() settings.locked = not settings.locked; applyPosition() end },
@@ -1223,7 +1223,7 @@ local function build()
     end
     -- re-plan: from scratch on a left click (the shown route is not kept), the usual way on a right click
     local replan = button(header, 22, 22, function(_, mouse)
-        if mouse == "RightButton" then Engine.Replan(true) else Engine.ReplanFresh() end
+        if mouse == "RightButton" then Engine.Replan(true, true) else Engine.ReplanFresh() end
     end)
     replan:SetPoint("RIGHT", root.searchButton or menu, "LEFT", -2, 0)
     replan.icon = art(replan, "ARTWORK", "Interface\\Buttons\\UI-RefreshButton", C.accent)

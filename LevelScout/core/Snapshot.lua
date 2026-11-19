@@ -283,7 +283,7 @@ end
 --- How a plan was made, from what Zones.PlanZone stamped on it (see there), as the recipe the
 --- replay follows to make it again:
 ---   { kind = "chain" }                          a class quest chain
----   { kind = "seeded", seed, front, first }     a shown order kept, brought forward or pinned
+---   { kind = "seeded", seed, front, first, hold } a shown order kept, brought forward or pinned, or held
 ---   { kind = "ranked" }                         the very plan of a ranked zone
 ---   { kind = "fresh", warm, weights }           planned for the zone on its own
 --- With `border`, `borderFront` besides: quests taken along to the next zone, laid over the route
@@ -309,7 +309,7 @@ function Snapshot.Made(plan, ranked)
     if plan.chain then return { kind = "chain" } end
     if plan.seedOrder then
         return { kind = "seeded", seed = Snapshot.JoinList(plan.seedOrder), front = Snapshot.JoinList(plan.seedFront),
-            first = str(plan.seedFirst) }
+            first = str(plan.seedFirst), hold = plan.seedHold and true or nil }
     end
     for _, z in ipairs(ranked or {}) do
         if z.plan == plan then return { kind = "ranked" } end

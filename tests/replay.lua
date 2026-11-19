@@ -214,7 +214,7 @@ function R.Remake(ns, ctx, ranked, made, zone)
         if not base then return nil, "the shown zone is not ranked in the replay" end
     elseif made.kind == "seeded" then
         base = Z.PlanZone(zone, ctx, S.SplitList(made.seed), nil,
-            { front = made.front and S.SplitList(made.front) or nil, first = made.first })
+            { front = made.front and S.SplitList(made.front) or nil, first = made.first, hold = made.hold })
     elseif made.kind == "fresh" then
         base = Z.PlanZone(zone, ctx, nil, nil, { warm = made.warm and S.SplitList(made.warm) or false, weights = made.weights })
     else
@@ -529,7 +529,8 @@ local function madeText(made)
     if made.kind == "ranked" then return "the ranked route" end
     if made.kind == "seeded" then
         return "kept order (rebuilt from the order shown before"
-            .. (made.front and ", stops at hand brought forward" or "") .. (made.first and ", the step in hand first" or "") .. ")"
+            .. (made.front and ", stops at hand brought forward" or "") .. (made.first and ", the step in hand first" or "")
+            .. (made.hold and ", held" or "") .. ")"
     end
     if made.kind == "fresh" then return "planned for itself" .. (made.warm and " from a warm start" or "") end
     return made.kind

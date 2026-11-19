@@ -13,6 +13,8 @@ Engine.DEBOUNCE = 0.5        -- seconds: events arrive in bursts
 Engine.MIN_GAP = 2           -- seconds between plans: a kill quest updates the log on every kill
 Engine.RERANK_EVERY = 45     -- seconds between background re-rankings of the other zones
 Engine.KEEP_GOAL = true      -- a clearly better route for the shown zone is taken with the step in hand still first
+Engine.HOLD_ROUTE = true     -- the shown zone's route is held as it is until a quest of it drops out or the player acts (skip, options, re-plan)
+Engine.AHEAD_LEVELS = 0.5    -- ... or the character is this many levels ahead of what the held route expected by now
 Engine.PROGRESS = true       -- say what the planner is doing while it runs (view.progress)
 Engine.PROGRESS_EVERY = 0.15 -- seconds between two progress notices to the window, at least
 -- A full re-plan's bar: ranking the zones up to SHARE_RANK, checking the shown route up to
@@ -57,6 +59,7 @@ local quickNow                   -- the next plan is the shown route only, howev
 local freshWay                   -- the next plan's way to the current step is taken at once (Guide.Follow)
 local frontAsked = {}            -- [key] = the quest log and level it was last asked for with (asked once each)
 local snap, saveSnapshot         -- the snapshot being taken (Engine.Snapshot), and what saves it (defined below)
+local letGoAsked, letGoDone = 0, 0 -- the player asked for the held route to be planned again (Engine.Replan's `letGo`); done up to here
 local playEvent, autoSnapshot    -- the play log (ns.Play): an event; a snapshot for one (defined below)
 local lastActive                 -- the active clock at the last look at where the player is (TrackMove): the commitment's play time
 local hearthCast                 -- { at, loc }: the hearthstone was cast; its arrival is looked for (Planner.HEARTH)
@@ -465,7 +468,9 @@ startItinerary = function(result)
         local mine = snap and snap.ranked and snap.state == state -- the run a snapshot waits for
         if ok then
             view.itinerary = out.itinerary
-            if (Zones.BORDER or Zones.SEAM) and not view.chain then
+            -- (a held route keeps the quests taken along and the way across it had: the itinerary
+            -- does not change them until the route is planned again)
+            if (Zones.BORDER or Zones.SEAM) and not view.chain and not result.held then
                 local function copy(list) local out = {}; for i, k in ipairs(list or {}) do out[i] = k end; return out end
                 if Zones.BORDER then
                     local b = out.itinerary and out.itinerary.border
@@ -481,7 +486,9 @@ startItinerary = function(result)
                 end
                 if out.show and view.zone == zone and view.plan == shownPlan then
                     view.plan, view.flightStops = out.show.plan, out.show.flightStops
-                    chardb.route = { zone = zone, order = Zones.Plain(view.plan).order } -- (the overlays are laid over it again)
+                    local old = chardb.route
+                    chardb.route = { zone = zone, order = Zones.Plain(view.plan).order, -- (the overlays are laid over it again)
+                        from = old and old.zone == zone and old.from or nil, expect = old and old.zone == zone and old.expect or nil }
                     Tracker.OnPlan(view.plan, { now = Game.Now(), level = state.level, group = state.groupSize,
                         log = state.log, completed = completed })
                 end
@@ -792,6 +799,7 @@ local function run()
     end
     local frontKeys = front -- (see nearbyLater)
     front = nil
+    local letGo = letGoAsked -- (the held route may be planned again when this is past letGoDone)
     lastSignature = signature(state.log)
     lastRun = Game.Now()
     local view = Engine.view
@@ -981,7 +989,23 @@ local function run()
         local keep = shown and shown.zone == zone and #shown.steps > 0 and shown.order or nil
         local saved = chardb.route
         if not shown and saved and saved.zone == zone then keep = saved.order end
-        if keep then
+        -- The route held (Engine.HOLD_ROUTE): the shown route stays as it is, with only the quests
+        -- taken since added, until a quest of it drops out without being turned in (it became
+        -- impossible, was skipped or dropped from the log, or waits for a level now) or the
+        -- player asks (a skip, an option, re-plan). Then it is planned again as below.
+        local held
+        if keep and Engine.HOLD_ROUTE and letGo == letGoDone then
+            local h = Zones.PlanZone(zone, ctx, keep, nil, { front = frontKeys, hold = true })
+            if #h.steps > 0 and not Zones.RouteBroken(keep, h, ctx.avail and ctx.avail.completed) then held = h end
+            -- (something major: the character is well ahead of the route, having done other things)
+            local route = chardb.route
+            local ahead = held and route and route.zone == zone
+                and Zones.RouteAhead(route, held, state.level, state.xp, state.xpMax) or nil
+            if ahead and ahead >= Engine.AHEAD_LEVELS then held = nil end
+        end
+        if held then
+            plan = held
+        elseif keep then
             -- stops we stand at, further down: the shown route with them brought forward wins
             local kept = Zones.PlanZone(zone, ctx, keep, nil, frontKeys and { front = frontKeys } or nil)
             if kept.fronted or not Zones.PreferFresh(kept, fresh) then
@@ -1018,7 +1042,8 @@ local function run()
         end
         return { ranked = ranked, plan = plan, base = base, fresh = fresh, zone = zone, state = state, full = full, travel = ctx.travel,
             flightStops = Zones.FlightStops(plan, ctx, chardb.skippedNodes),
-            offers = offersOf(chains, ctx, nil, plan, best), ended = ended, reached = reached }
+            offers = offersOf(chains, ctx, nil, plan, best), ended = ended, reached = reached,
+            held = held ~= nil or nil, letGo = letGo }
     end, function(ok, result)
         -- The zones and the route are shown now; the itinerary follows in a job of its own.
         -- (a class quest plan has no itinerary: it is followed to its end)
@@ -1033,6 +1058,7 @@ local function run()
             end
             return publish()
         end
+        if result.letGo and result.letGo > letGoDone then letGoDone = result.letGo end -- (the player's ask is answered)
         if result.full then
             lastRank = Game.Now()
             if ns.Planner.GOAL == "surplus" then -- the next plans' alternative: the best score of this ranking
@@ -1049,7 +1075,17 @@ local function run()
             chardb.zone = result.zone
             -- the shown route's order, for the first plan of the next session (see `keep` above)
             -- (without the quests taken along: chardb.border lays them over it again after a relog)
-            chardb.route = #result.plan.steps > 0 and { zone = result.zone, order = (result.base or result.plan).order } or nil
+            -- (with what it expects of the XP to come: kept while the route is held, see Zones.RouteAhead)
+            local old, base = chardb.route, result.base or result.plan
+            local route = #result.plan.steps > 0 and { zone = result.zone, order = base.order } or nil
+            if route then
+                if result.held and old and old.zone == result.zone and old.expect then
+                    route.from, route.expect = old.from, old.expect
+                else
+                    route.from, route.expect = Zones.RouteExpect(base, result.state.level, result.state.xp)
+                end
+            end
+            chardb.route = route
             -- quests taken along from a zone no longer shown (moved on, or another zone): nothing to take along
             if chardb.border and chardb.border.zone ~= result.zone then chardb.border = nil end
             if chardb.seam and chardb.seam.zone ~= result.zone then chardb.seam = nil end
@@ -1134,9 +1170,12 @@ local function run()
     end)
 end
 
---- Ask for a new plan. `full` also re-ranks the other zones. Bursts of calls run once.
-function Engine.Replan(full)
+--- Ask for a new plan. `full` also re-ranks the other zones. `letGo`: the player asked for it (a
+--- skip, an option, re-plan), so the held route is planned again (Engine.HOLD_ROUTE). Bursts of
+--- calls run once.
+function Engine.Replan(full, letGo)
     if not started then return end
+    if letGo then letGoAsked = letGoAsked + 1 end
     if full then pendingFull = true end
     if pending then return end
     pending = true
@@ -1360,26 +1399,26 @@ function Engine.Ignore(questId, ignore)
         if ignore then autoSnapshot("auto: quest " .. tostring(questId) .. " skipped", e) end
     end
     chardb.ignored[questId] = ignore and true or nil
-    Engine.Replan(true)
+    Engine.Replan(true, true)
 end
 
 --- Route elite (group) quests, or only list them.
 function Engine.SetRouteElite(on)
     chardb.routeElite = on and true or false
-    Engine.Replan(true)
+    Engine.Replan(true, true)
 end
 
 --- Route escort quests, or only list them (the default). Saved with the character.
 function Engine.SetRouteEscort(on)
     chardb.routeEscort = on and true or false
-    Engine.Replan(true)
+    Engine.Replan(true, true)
 end
 
 --- The Deeprun Tram in routes: "on", "off" or "auto" (taken only while the flight between
 --- Stormwind and Ironforge is not known). Saved with the character.
 function Engine.SetTram(mode)
     chardb.tram = (mode == "on" or mode == "off") and mode or nil
-    Engine.Replan(true)
+    Engine.Replan(true, true)
 end
 
 --- The setting ("on" | "off" | "auto") and whether the last plan's routes could take the tram
@@ -1721,6 +1760,13 @@ function Engine.Start()
         if type(key) ~= "string" then valid = false break end
     end
     chardb.route = valid and route or nil
+    -- (what it expects of the XP to come, Zones.RouteExpect: dropped when not as written)
+    if chardb.route then
+        local f, e = route.from, route.expect
+        if not (type(f) == "table" and type(f.level) == "number" and type(f.xp) == "number" and type(e) == "table") then
+            route.from, route.expect = nil, nil
+        end
+    end
     -- quests the itinerary takes along to the next zone (Zones.BORDER): { zone, ids, to = { [id] = map }, before }
     local b = chardb.border
     local bValid = type(b) == "table" and type(b.zone) == "number" and type(b.ids) == "table" and type(b.to) == "table"

@@ -438,10 +438,11 @@ function Zones.PlanZone(map, ctx, seed, from, opts)
     if warm == nil and mem and not seed and Planner.WARM_START and not Zones.Dungeon(map) then
         warm, weights = ns.Memory.Seed(mem, map)
     end
-    local plan = Zones.PlanOne(map, ctx, seed, warm or nil, weights, opts.front, opts.first, opts.border, opts.exact)
+    local plan = Zones.PlanOne(map, ctx, seed, warm or nil, weights, opts.front, opts.first, opts.border, opts.exact, opts.hold)
     if Zones.BORDER or Zones.SEAM then plan.from = ctx.start end -- (where it was planned from: Zones.WithBorder and Zones.WithSeam plan it again from there)
     if opts.border then plan.seedBorder = opts.border end -- (ns.Snapshot)
     plan.seedOrder, plan.seedFront, plan.seedFirst = seed, opts.front, opts.first -- how it was made (ns.Snapshot)
+    plan.seedHold = seed and opts.hold or nil
     if warm then plan.warmSeed, plan.warmWeights = warm, weights end -- (the debug view plans the same again)
     if mem and not seed and not opts.readOnly and not Zones.Dungeon(map) then
         ns.Memory.Remember(mem, map, plan, plan.search and plan.search.warm or false)
@@ -450,7 +451,7 @@ function Zones.PlanZone(map, ctx, seed, from, opts)
 end
 
 -- (PlanZone without the memory: from the position in ctx.start)
-function Zones.PlanOne(map, ctx, seed, warm, weights, front, first, border, exact)
+function Zones.PlanOne(map, ctx, seed, warm, weights, front, first, border, exact, hold)
     local dungeon = Zones.Dungeon(map)
     if dungeon then
         -- Travel to the door, the givers and the prerequisite quests is all on the clock, so
@@ -459,7 +460,7 @@ function Zones.PlanOne(map, ctx, seed, warm, weights, front, first, border, exac
         ctx.dungeon = dungeonFor(dungeon, ctx)
         ctx.start = start or ctx.dungeon.loc
         ctx.near = ctx.dungeon.loc
-        local plan = Planner.Plan(dungeon.map, ctx, { overhead = 0, seed = seed, front = front, first = first })
+        local plan = Planner.Plan(dungeon.map, ctx, { overhead = 0, seed = seed, front = front, first = first, hold = hold })
         ctx.dungeon, ctx.start, ctx.near = nil, start, nil
         plan.zone, plan.dungeon = map, dungeon.name
         return plan
@@ -470,7 +471,7 @@ function Zones.PlanOne(map, ctx, seed, warm, weights, front, first, border, exac
         ctx.start = entryPoint(map, ctx.side)
     end
     ctx.near = Zones.EntryPoint(map, ctx.side)
-    local plan = Planner.Plan(map, ctx, { overhead = overhead, seed = seed, warm = warm, weights = weights, front = front, first = first, border = border, exact = exact })
+    local plan = Planner.Plan(map, ctx, { overhead = overhead, seed = seed, warm = warm, weights = weights, front = front, first = first, border = border, exact = exact, hold = hold })
     ctx.start, ctx.near = start, nil
     return plan
 end
@@ -796,6 +797,53 @@ function Zones.AltScore(plan) return plan.todayScore or plan.score end
 function Zones.PreferFresh(kept, fresh)
     if not kept or #kept.steps == 0 then return true end
     return fresh.score > kept.score * Zones.KEEP_ORDER
+end
+
+--- Has the held route lost a quest it had (Engine.HOLD_ROUTE)? `order` is the order the route was
+--- held in, `plan` the route rebuilt from it now. A quest of the order (an accept or a turn-in) that
+--- is in no stop of the new route and has not been turned in has become impossible, or was
+--- skipped, dropped from the log or left before its level: the route is then planned again.
+--- Returns the first such quest id, or nil.
+function Zones.RouteBroken(order, plan, completed)
+    local now = {}
+    for _, key in ipairs(plan.order or {}) do
+        local id = tonumber(key:match("^[PT]:(%d+)$") or "")
+        if id then now[id] = true end
+    end
+    for _, step in ipairs(plan.steps or {}) do
+        for _, q in ipairs(step.quests or {}) do now[q.id] = true end
+    end
+    for _, key in ipairs(order or {}) do
+        local id = tonumber(key:match("^[PT]:(%d+)$") or "")
+        if id and not now[id] and not (completed and completed[id]) then return id end
+    end
+    return nil
+end
+
+--- What a route expects of the XP to come, to save with it (Engine.HOLD_ROUTE): `from` = the level
+--- and XP it was planned at, `expect` = { [key] = the route's XP before that step }.
+function Zones.RouteExpect(plan, level, xp)
+    local expect = {}
+    for i, step in ipairs(plan and plan.steps or {}) do
+        local key = plan.order and plan.order[i]
+        if key then expect[key] = math.floor((step.cumXP or 0) - (step.xp or 0) + 0.5) end
+    end
+    return { level = level, xp = xp or 0 }, expect
+end
+
+--- How far ahead of a held route the character is, in levels (Engine.HOLD_ROUTE): the XP earned
+--- since the route was planned (`route.from`), less the XP the route expected before the first
+--- step of `plan` it has a figure for (`route.expect`), over the XP of the current level.
+--- nil when the route has no figures. Below 0: behind.
+function Zones.RouteAhead(route, plan, level, xp, xpMax)
+    if not (route and route.from and route.expect and xpMax and xpMax > 0) then return nil end
+    local gained = ns.Cost.XPGained(route.from.level, route.from.xp, level, xp)
+    if not gained then return nil end
+    for _, key in ipairs(plan and plan.order or {}) do
+        local e = route.expect[key]
+        if e then return (gained - e) / xpMax end
+    end
+    return nil
 end
 
 --- What leaving now for another zone is worth against staying, over the next hour:

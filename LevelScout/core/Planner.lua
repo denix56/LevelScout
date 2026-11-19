@@ -1981,6 +1981,12 @@ end
 ---          exact = with a seed: the seed is the route as it is: nothing else is added and nothing
 ---                  is dropped as slow (what is done or gone is left out, as always; what stayed out is
 ---                  listed as after a search). Zones.WithSeam and the next zone of a way across,
+---          hold = with a seed: the route on screen is held (Engine.HOLD_ROUTE): the seed is kept in
+---                 its order, nothing is dropped as slow, and the only quests added are ones taken
+---                 since (`held`: in the log, their work or turn-in here) or started by an item in
+---                 the bags; each goes to its cheapest place. A stop the player stands at is still
+---                 brought forward (`front`). A quest of the seed that cannot be rebuilt is left out,
+---                 as always (the Engine then plans again),
 ---          seam = the way across a zone border planned together (Zones.PlanSeam; no seed): see
 ---                 seamSearch below. The result is then { zone, seam = (seamSearch's result or nil),
 ---                 work } instead of a plan }
@@ -2003,6 +2009,7 @@ function Planner.Plan(zoneMap, ctx, opts)
     local border = opts.seed and opts.border or nil
     local borderGone
     local exact = opts.seed and opts.exact or nil
+    local hold = opts.seed and opts.hold and not exact or nil
     if border then candidates, borderGone = takeAlong(candidates, zoneMap, border, lists, checkpoint) end
     -- Always in the same order: a table keyed by quest models is walked in memory order, which
     -- differs from one run to the next, and the first quest tried at a camp decides where
@@ -2459,6 +2466,13 @@ function Planner.Plan(zoneMap, ctx, opts)
 
     if exact then
         -- (the seed is the route: nothing else is added)
+    elseif hold then
+        -- (the route held: only quests taken since, or started by an item in the bags)
+        local new = {}
+        for _, m in ipairs(candidates) do
+            if remaining[m] and (m.held or m.fromBag) then new[m] = true end
+        end
+        if next(new) then fill(0, nil, false, nil, new) end
     elseif ctx.chain then
         fillChain()
     elseif border then
@@ -2610,7 +2624,7 @@ function Planner.Plan(zoneMap, ctx, opts)
                 local added, gain
                 -- (a route kept with quests taken along adds nothing else: what stayed out is weighed
                 -- as after a search; an exact seed, too)
-                if (searched or border or exact) and ready(r, m) and not m.border then added, gain = r:try(m, false) end
+                if (searched or border or exact or hold) and ready(r, m) and not m.border then added, gain = r:try(m, false) end
                 if m.border then
                     local e = listEntry(m, "not before leaving for the next zone")
                     e.xp = m.borderXP
@@ -2632,8 +2646,8 @@ function Planner.Plan(zoneMap, ctx, opts)
         -- work or turn-in here).
         local nRouted = 0
         for _ in pairs(r.routed) do nRouted = nRouted + 1 end
-        -- (an exact seed keeps every quest it has)
-        while nRouted > 1 and not exact do
+        -- (an exact seed keeps every quest it has, and so does a held route)
+        while nRouted > 1 and not exact and not hold do
             local t0, x0 = r:totals()
             if t0 <= 0 then break end
             local worst, worstRatio

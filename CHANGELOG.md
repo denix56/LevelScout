@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The route stays put**: the zone's route on screen is no longer reshuffled as you play. Quests no
+  longer come and go between plans, and a slightly better route no longer replaces it. It changes only
+  when a quest of it can no longer be done, when you skip or bring back a quest, change an option or
+  click re-plan, or when you are half a level or more ahead of what it expected (you did other
+  things). A quest you take on your own is added to it; a stop you stand at is still brought forward.
 - **Quests you took stay in the plan**: a quest in your log with work or a turn-in in the zone is no
   longer left out as slow. Before, only finished ones were kept; one you had accepted could vanish
   from the route and show under "left out as slow". A turn-in carried from another zone is still
