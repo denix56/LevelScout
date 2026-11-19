@@ -4,7 +4,7 @@
 
 - **The zone you picked stays**: LevelScout no longer switches zones by itself. When the step the plan
   leaves a zone after is done, the banner says "Done here as planned. Next: <zone>" and chat says so once;
-  click it to go, right-click to stay. A zone you pick is kept for 40 minutes of play (or the time its plan
+  click it to go, right-click to stay. The zone shown (picked by you or by LevelScout) is kept for 40 minutes of play (or the time its plan
   gives it, if shorter): no banner about a better start in that time. A zone that runs out stays shown,
   with "Nothing left here" and the next zone's steps below it.
 - **Fair figures on the Zones tab**: every zone is figured over the same 2 h 30 starting there, and the best

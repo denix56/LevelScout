@@ -845,7 +845,7 @@ end
 --- played Zones.COMMIT_STAY seconds in it (the time the path planned there, if shorter).
 --- `c` is chardb.commit (see Zones.Commit).
 function Zones.Waited(c)
-    if not (c and c.hand) or c.reached then return true end
+    if not c or c.reached then return true end
     return (c.played or 0) >= math.min(Zones.COMMIT_STAY, c.stay or math.huge)
 end
 
@@ -949,7 +949,7 @@ Zones.MIN_STAY = 600           -- a zone is not visited for less than this (the 
 Zones.ITINERARY_ROUNDS = 40 -- with ITINERARY_WARM: the later zones start from their ranked plans
 Zones.KEEP_ITINERARY = 1.05    -- the order of zones on screen (and the step its first zone is left after) stays unless another earns 5% more, all planned again
 Zones.COMPARE_TOP = 3           -- other starts planned again like the shown zone's path (the best by today's plans); the rest are rough
-Zones.COMMIT_STAY = 2400        -- seconds of play in a zone picked by hand before another start is suggested (or the time the path planned there, if shorter)
+Zones.COMMIT_STAY = 2400        -- seconds of play in the shown zone (picked by hand or not) before another start is suggested (or the time the path planned there, if shorter)
 Zones.STONE_TRIPS = true        -- the trip to a zone of today's plans may go by hearthstone (ready by then, HEARTH_MIN_SAVE quicker)
 Zones.REFINE_TOP = 3           -- itineraries planned again before one is chosen: the best by today's plans, each with another next zone
 Zones.PIN_SHOWN = true        -- the itinerary starts in the shown zone while that has something left; the zone the Zones tab lists first, if another, is its `alt`

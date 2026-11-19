@@ -1290,7 +1290,7 @@ H.suite("Zones", function()
         eq(Z.MoveOn(active, ranked, nil, itinerary(1300), hand).suggest, true, "the path planned here took 10 minutes: asked then")
         hand.played = 599
         eq(Z.MoveOn(active, ranked, nil, itinerary(1300), hand).suggest, false)
-        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), { zone = 1, played = 0 }).suggest, true, "not picked by hand: nothing was promised")
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), { zone = 1, played = 0 }).suggest, false, "not picked by hand: held all the same")
         eq(Z.MoveOn(active, ranked, nil, itinerary(1300), { zone = 2, hand = true, played = 0 }).suggest, true, "a commitment to another zone does not count")
         eq(Z.MoveOn(active, ranked, nil, itinerary(1300), nil).suggest, true)
         -- the path's leave step done: the next zone of that path
@@ -1334,7 +1334,7 @@ H.suite("Zones", function()
         eq(Z.CommitPath(nil, 1), nil)
         -- waited
         eq(Z.Waited(nil), true)
-        eq(Z.Waited({ zone = 1, played = 0 }), true, "not picked by hand")
+        eq(Z.Waited({ zone = 1, played = 0 }), false, "not picked by hand: held all the same")
         eq(Z.Waited({ zone = 1, hand = true, played = 0 }), false)
         eq(Z.Waited({ zone = 1, hand = true, played = Z.COMMIT_STAY }), true)
         eq(Z.Waited({ zone = 1, hand = true, played = 300, stay = 300 }), true, "the path planned there is over")

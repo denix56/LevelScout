@@ -598,9 +598,9 @@ local function zoneRows(view)
                     lines[#lines + 1] = { "Click: plan " .. (it.alt.name or "that zone"), color = C.faint }
                 end
                 if it.segments[1].map ~= view.zone then lines[#lines + 1] = { "Click: plan " .. (it.segments[1].name or "the first zone"), color = C.faint } end
-                -- a zone picked by hand is kept for a while: another start is suggested after that
+                -- the zone shown is kept for a while: another start is suggested after that
                 local c = Engine.Commit()
-                if c and c.zone == view.zone and c.hand and not ns.Zones.Waited(c) then
+                if c and c.zone == view.zone and not ns.Zones.Waited(c) then
                     lines[#lines + 1] = { string.format("Another zone is suggested after %s in %s",
                         Format.Duration(math.min(ns.Zones.COMMIT_STAY, c.stay or math.huge)), view.zoneName or "this zone"),
                         right = Format.Duration(c.played or 0) .. " so far", color = C.faint }
