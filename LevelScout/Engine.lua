@@ -13,19 +13,18 @@ Engine.DEBOUNCE = 0.5        -- seconds: events arrive in bursts
 Engine.MIN_GAP = 2           -- seconds between plans: a kill quest updates the log on every kill
 Engine.RERANK_EVERY = 45     -- seconds between background re-rankings of the other zones
 Engine.KEEP_GOAL = true      -- a clearly better route for the shown zone is taken with the step in hand still first
-Engine.FOLLOW_PATH = true    -- the shown zone moves on by itself where the itinerary leaves it (see the plan job)
 Engine.PROGRESS = true       -- say what the planner is doing while it runs (view.progress)
 Engine.PROGRESS_EVERY = 0.15 -- seconds between two progress notices to the window, at least
 -- A full re-plan's bar: ranking the zones up to SHARE_RANK, checking the shown route up to
 -- SHARE_CHECK, then the next hours (its own job) to the end. Shares of measured time.
 Engine.SHARE_RANK, Engine.SHARE_CHECK = 0.75, 0.8
+Engine.TICK_MAX = 5          -- seconds of play counted for the commitment from one look at the player (see TrackMove)
 Engine.MOVE_EVERY = 1        -- seconds between two looks at where the player is (travel speed, see ns.Tracker.OnMove)
 Engine.NEAR_YARDS = 40       -- an accept or turn-in further down the route this close comes to its front
 Engine.SNAPSHOTS = 5         -- snapshots kept with the character, the oldest dropped first (see Engine.Snapshot)
 Engine.AUTO_SNAPSHOT = true  -- a snapshot is taken by itself when the player overrules the plan (a zone by hand, a skipped quest)
 Engine.AUTO_SNAPSHOTS = 3    -- of those, this many are kept (next to the ones asked for)
 Engine.AUTO_SNAPSHOT_EVERY = 900 -- seconds between two of them at least
-Engine.BACK_WITHIN = 900     -- seconds of play: a zone chosen by hand this soon after the path left it is "back" (see ns.Play)
 Engine.HEARTH_ARRIVE = 60    -- seconds after the hearthstone's cast within which a far-off position is its arrival (Planner.HEARTH)
 Engine.HEARTH_MOVED = 200    -- yards from where it was cast that count as arrived
 
@@ -59,7 +58,7 @@ local freshWay                   -- the next plan's way to the current step is t
 local frontAsked = {}            -- [key] = the quest log and level it was last asked for with (asked once each)
 local snap, saveSnapshot         -- the snapshot being taken (Engine.Snapshot), and what saves it (defined below)
 local playEvent, autoSnapshot    -- the play log (ns.Play): an event; a snapshot for one (defined below)
-local lastMoved                  -- { from = zone, a = active clock }: when the path last moved on by itself
+local lastActive                 -- the active clock at the last look at where the player is (TrackMove): the commitment's play time
 local hearthCast                 -- { at, loc }: the hearthstone was cast; its arrival is looked for (Planner.HEARTH)
 local plannedHearth              -- the stone's signature at the last plan (see hearthSig)
 local hearthKnown                -- where the last plan's bind spot came from: "learned" | "data"
@@ -403,7 +402,7 @@ end
 local function moveOn(plan, ranked, itinerary)
     local view = Engine.view
     local was = view.moveOn
-    view.moveOn = Zones.MoveOn(plan, ranked, view.moveOn, itinerary)
+    view.moveOn = Zones.MoveOn(plan, ranked, view.moveOn, itinerary, chardb and chardb.commit)
     if view.moveOn.map then
         view.moveOn.name = Zones.Name(view.moveOn.map) or Game.MapName(view.moveOn.map) or ("Map " .. view.moveOn.map)
     end
@@ -430,7 +429,8 @@ startItinerary = function(result)
         state.progress = view.progress and note or nil
         local ctx = Zones.Context(state)
         phase(Engine.SHARE_CHECK, 1, "Planning the next hours", true)
-        local was = view.itinerary
+        -- the path kept for this zone (chardb.commit) is the order to keep: it survives a /reload
+        local was = Zones.CommitPath(chardb.commit, zone)
         if snap and snap.state == state then snap.itineraryWas = Snapshot.Maps(was); snap.itineraryWasKeys = Snapshot.LeaveKeys(was); snap.borderWas = Snapshot.Copy(border); snap.seamWas = Snapshot.Copy(seam) end
         local itinerary = Zones.Itinerary(state, ctx, ranked, { shown = zone, plan = plan, was = was,
             border = border, borderPlan = (shownPlan ~= plan and shownPlan.base) and shownPlan or nil,
@@ -487,6 +487,11 @@ startItinerary = function(result)
                 end
             end
             view.trace = Engine.trace and out.trace or nil
+            -- what was promised for the zone on screen: the first path planned there, kept until its leave step is done
+            if mine then snap.commitWas = Snapshot.Copy(chardb.commit) end
+            if not view.chain and view.zone == zone then
+                chardb.commit = Zones.Commit(chardb.commit, out.itinerary, zone)
+            end
             local was = view.moveOn
             moveOn(view.plan, view.ranked, out.itinerary)
             if mine then saveSnapshot(was) end
@@ -583,7 +588,7 @@ local function takeInput(state, why)
         snap = nil
         return
     end
-    snap.state, snap.ranked, snap.itineraryWas, snap.itineraryWasKeys, snap.zone = state, nil, nil, nil, nil
+    snap.state, snap.ranked, snap.itineraryWas, snap.itineraryWasKeys, snap.commitWas, snap.zone = state, nil, nil, nil, nil, nil
     local ok, input = pcall(Snapshot.Capture, state)
     if not ok then
         if not snap.auto then ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(input)) end
@@ -614,7 +619,7 @@ local function record(s, moveOnWas)
         version = { addon = ns.version, client = pctx.clientBuild, data = Data.status.build,
             generated = Data.status.generated, sources = Snapshot.Copy(Data.status.sources) },
         settings = Snapshot.Settings(), zone = s.zone, input = s.input, warm = Snapshot.Warm(view.ranked),
-        itineraryWas = s.itineraryWas, itineraryWasKeys = s.itineraryWasKeys, borderWas = s.borderWas, seamWas = s.seamWas,
+        itineraryWas = s.itineraryWas, itineraryWasKeys = s.itineraryWasKeys, borderWas = s.borderWas, seamWas = s.seamWas, commitWas = s.commitWas,
         moveOnWas = moveOnWas and { suggest = moveOnWas.suggest and true or false, map = moveOnWas.map } or nil,
         shown = shown, before = s.before, names = names,
     }
@@ -903,7 +908,7 @@ local function run()
         -- without Zones.WithBorder would plan them whole, their far turn-in included; and without the
         -- way across planned together)
         local shown = (view.plan and not view.plan.chain) and Zones.Plain(view.plan) or nil
-        local zone, fresh, finished = chardb.zone, nil, nil
+        local zone, fresh = chardb.zone, nil
         -- A quick re-plan that finds the shown zone's route used up: the zones are ranked at
         -- once, so the next zone follows without waiting for the next ranking.
         if zone and not full then
@@ -914,19 +919,16 @@ local function run()
                 rank()
             end
         end
-        -- The path moves on. The itinerary made for the shown zone leaves it after a step (its
-        -- first zone's leave point) for the next zone. Once that step is done, the next zone is
-        -- the one shown, in the order the itinerary planned for it, and what is left here stays
-        -- for later: the route is one path across zones, and the step after the last one here
-        -- is the first one there. (Not into a dungeon: that takes a group, so it is the
-        -- player's choice. Leaving for a zone the itinerary did not plan from here stays the
-        -- banner's business, see Zones.MoveOn.)
-        local movedOn
-        local path = view.itinerary
-        if Engine.FOLLOW_PATH and zone and shown and shown.zone == zone and #shown.steps > 0
-            and path and path.shown == zone and path.segments[2] and path.segments[1].map == zone
-            and path.segments[1].leaveKey and path.segments[2].map > 0 then
-            local key = path.segments[1].leaveKey
+        -- The path's leave step done. The path planned for the shown zone (chardb.commit, see
+        -- Zones.Commit) leaves it after a step. Once that step is done the plan is as planned: the
+        -- banner points to the next zone (Zones.MoveOn), but the zone stays shown until the player
+        -- picks another, and what is left here stays. (A step whose quests were all skipped by hand
+        -- is not done, only skipped.)
+        local reached
+        local c = chardb.commit
+        if zone and shown and shown.zone == zone and #shown.steps > 0 and c and c.zone == zone and not c.reached
+            and c.leaveKey and c.zones and c.zones[2] then
+            local key = c.leaveKey
             local function has(order)
                 for _, k in ipairs(order or {}) do if k == key then return true end end
                 return false
@@ -934,44 +936,43 @@ local function run()
             -- (the shown route in its own order, as it stands now: the leave step is gone from it when it is done)
             -- (with the way across planned together, the step is one of that route: it is laid over the
             -- route as it stands now, as below)
+            local source = shown
             local before, rebuilt = shown.order, Zones.PlanZone(zone, ctx, shown.order)
             local now = rebuilt.order
             local layer = Zones.SEAM and chardb.seam and chardb.seam.zone == zone and Zones.SeamLayer(view.plan) or nil
             if layer then
-                before, now = layer.order, Zones.WithSeam(zone, ctx, rebuilt, chardb.seam).order
+                source, before, now = layer, layer.order, Zones.WithSeam(zone, ctx, rebuilt, chardb.seam).order
             end
             if has(before) and not has(now) then
-                if not full then
-                    full = true
-                    phase(0.1, Engine.SHARE_RANK, "Ranking zones")
-                    rank()
+                local skipped = false
+                for i, k in ipairs(before) do
+                    local step = k == key and source.steps[i] or nil
+                    if step and step.quests and #step.quests > 0 then
+                        skipped = true
+                        for _, q in ipairs(step.quests) do
+                            if not chardb.ignored[q.id] then skipped = false end
+                        end
+                    end
                 end
-                local onto = path.segments[2].map
-                if open(onto) then
-                    movedOn = { from = zone, to = onto, order = path.segments[2].plan and path.segments[2].plan.order or nil }
-                    zone, fresh = onto, nil
+                if not skipped then
+                    if not full then
+                        full = true
+                        phase(0.1, Engine.SHARE_RANK, "Ranking zones")
+                        rank()
+                    end
+                    reached = true
                 end
             end
         end
-        -- Which zone is shown: the chosen one while it has steps. When it has none left, the
-        -- zone its itinerary goes to next; else where we stand, else the best.
-        if zone and full and not open(zone) then zone, finished = nil, zone end
+        -- Which zone is shown: the chosen one, whether or not it has steps left (it stays; the banner
+        -- says where to go). With none chosen: where we stand while that has steps, else the best.
         if not zone then
-            local onward = Zones.NextZone(view.itinerary, finished)
-            if open(onward) then
-                zone = onward
-            else
-                zone = open(state.map) and state.map or (ranked[1] and ranked[1].map) or state.map
-            end
+            zone = open(state.map) and state.map or (ranked[1] and ranked[1].map) or state.map
             fresh = nil
         end
         if not fresh then
-            -- (a zone taken over from the finished zone we stand in was ranked as if left from
-            -- that zone's main town, see Zones.Rank: its route is made from where we stand)
-            -- (so was the zone the path moved on to)
-            local handed = full and ((finished ~= nil and finished == state.map) or movedOn ~= nil)
-            fresh = (full and not handed and planOf(zone))
-                or Zones.PlanZone(zone, ctx, nil, nil, { warm = (handed or Zones.WARM_SHOWN) and nil or false })
+            fresh = full and planOf(zone)
+                or Zones.PlanZone(zone, ctx, nil, nil, { warm = Zones.WARM_SHOWN and nil or false })
         end
         local plan = fresh
         phase(full and Engine.SHARE_RANK or 0.7, full and Engine.SHARE_CHECK or 1, "Checking the shown route", true)
@@ -980,14 +981,12 @@ local function run()
         local keep = shown and shown.zone == zone and #shown.steps > 0 and shown.order or nil
         local saved = chardb.route
         if not shown and saved and saved.zone == zone then keep = saved.order end
-        -- (the zone the path moved on to: the order the itinerary planned for it, as it was shown under "Then:")
-        if movedOn and movedOn.order then keep = movedOn.order end
         if keep then
             -- stops we stand at, further down: the shown route with them brought forward wins
             local kept = Zones.PlanZone(zone, ctx, keep, nil, frontKeys and { front = frontKeys } or nil)
             if kept.fronted or not Zones.PreferFresh(kept, fresh) then
                 plan = kept
-            elseif Engine.KEEP_GOAL and shown and shown.zone == zone and not movedOn and kept.order[1] then
+            elseif Engine.KEEP_GOAL and shown and shown.zone == zone and kept.order[1] then
                 -- The step in hand stays the step in hand: the better route is taken in its own
                 -- order with that step put first. Where that cannot be done (it waits for
                 -- something, or the new route does not have it) or it is no longer better than
@@ -1019,7 +1018,7 @@ local function run()
         end
         return { ranked = ranked, plan = plan, base = base, fresh = fresh, zone = zone, state = state, full = full, travel = ctx.travel,
             flightStops = Zones.FlightStops(plan, ctx, chardb.skippedNodes),
-            offers = offersOf(chains, ctx, nil, plan, best), ended = ended, movedOn = movedOn }
+            offers = offersOf(chains, ctx, nil, plan, best), ended = ended, reached = reached }
     end, function(ok, result)
         -- The zones and the route are shown now; the itinerary follows in a job of its own.
         -- (a class quest plan has no itinerary: it is followed to its end)
@@ -1079,19 +1078,12 @@ local function run()
         if chain then
             view.moveOn, view.itinerary = { suggest = false }, nil -- the chain is followed, wherever leveling is better
         else
-            -- The path moved on to its next zone: until the new itinerary is in, the one before
-            -- stands without the zone that was left (so its order of zones is the one kept).
-            if result.movedOn then
-                local was, segs, xp = view.itinerary, {}, 0
-                for i = 2, #(was and was.segments or {}) do
-                    segs[#segs + 1] = was.segments[i]
-                    xp = xp + (was.segments[i].xp or 0)
-                end
-                view.itinerary = (segs[1] and segs[1].map == result.zone)
-                    and { horizon = was.horizon, xp = xp, rate = xp / was.horizon * 3600, shown = result.zone, here = xp, segments = segs } or nil
-                ns.Print("On to %s. What is left in %s stays for later.", mapName(result.movedOn.to), mapName(result.movedOn.from))
-                playEvent("moved", { from = result.movedOn.from, to = result.movedOn.to })
-                lastMoved = { from = result.movedOn.from, a = Tracker.Active(Game.Now()) }
+            -- The path's leave step is done: say so once. The banner then names the next zone (Zones.MoveOn).
+            local c = chardb.commit
+            if result.reached and c and c.zone == result.zone and not c.reached and c.zones and c.zones[2] then
+                c.reached = true
+                ns.Print("Done in %s as planned: %s is next. Click the banner to go there, right-click it to stay.",
+                    mapName(result.zone), mapName(c.zones[2]))
             end
             -- until the new itinerary is in, the move-on rule uses the one worked out before
             moveOn(result.plan, result.ranked, view.itinerary)
@@ -1178,19 +1170,46 @@ function Engine.SetZone(map)
     if map ~= chardb.zone then
         local mo = Engine.view.moveOn
         local banner = (mo and mo.suggest and mo.map == map) or nil
-        local back = (lastMoved and lastMoved.from == map
-            and Tracker.Active(Game.Now()) - lastMoved.a <= Engine.BACK_WITHIN) or nil
-        local e = playEvent("zone", { from = chardb.zone, to = map, banner = banner, back = back })
+        local e = playEvent("zone", { from = chardb.zone, to = map, banner = banner })
         if not banner then autoSnapshot(string.format("auto: zone %s -> %s by hand", tostring(chardb.zone), tostring(map)), e) end
     end
     if chardb.chain then leaveChain() end
+    -- The zone is kept now (Zones.Waited): another start is suggested only after Zones.COMMIT_STAY of play
+    -- here, or once the path planned here has been followed. A zone the itinerary was going to
+    -- anyway keeps the route it was shown under "Then:".
+    local it, route = Engine.view.itinerary, nil
+    if map and it and it.shown == chardb.zone and map ~= chardb.zone then
+        for i = 2, #(it.segments or {}) do
+            local seg = it.segments[i]
+            if seg.map == map and seg.plan then route = { zone = map, order = seg.plan.order }; break end
+        end
+    end
     chardb.zone = map
-    chardb.route = nil
+    chardb.commit = map and { zone = map, hand = true, played = 0 } or nil
+    chardb.route = route
     chardb.border = nil
     chardb.seam = nil
     Engine.view.plan = nil
     Engine.Replan(true)
 end
+
+--- Stay in the shown zone against the banner: the commitment starts over (Zones.Waited) with the path
+--- the itinerary has for this zone now, and the banner goes. The banner may come again after
+--- Zones.COMMIT_STAY of play here, or when the new path's leave step is done. No effect while a class
+--- quest chain is followed.
+function Engine.StayHere()
+    local view = Engine.view
+    if not chardb or chardb.chain or not view.zone then return end
+    local zone = view.zone
+    local mo = view.moveOn
+    playEvent("stay", { zone = zone, to = mo and mo.map, reached = mo and mo.reached or nil })
+    chardb.commit = Zones.Commit({ zone = zone, hand = true, played = 0 }, view.itinerary, zone)
+    view.moveOn = { suggest = false }
+    publish()
+end
+
+--- The commitment to the shown zone (Zones.Commit), or nil.
+function Engine.Commit() return chardb and chardb.commit or nil end
 
 --- Follow a class quest chain on offer (view.chains): it becomes the plan shown until it is
 --- done. Its quests are no longer skipped.
@@ -1309,6 +1328,8 @@ end
 --- Plan from scratch: the shown route (and the one saved with the character) and the kept
 --- plans are forgotten, so nothing holds the new plan to the old order.
 function Engine.ReplanFresh()
+    local c = chardb.commit
+    if c then c.zones, c.leaveKey, c.stay, c.reached = nil, nil, nil, nil end -- (the path is made again too)
     chardb.route = nil
     chardb.border = nil
     chardb.seam = nil
@@ -1518,7 +1539,21 @@ function Engine.TrackMove()
     if info.loc then nearbyLater(info.loc, info.level) end
     if hearthCast and ns.Planner.HEARTH then Engine.LookForHearth(info) end
     local sample = Tracker.OnMove(info)
-    Play.Tick(Tracker.Active(info.now)) -- the play log: forecasts whose time has passed
+    local active = Tracker.Active(info.now)
+    Play.Tick(active) -- the play log: forecasts whose time has passed
+    -- The time played in the zone picked by hand (Zones.Waited): a stretch longer than TICK_MAX (the
+    -- game paused, a long load) counts for no more than that. When the wait is over the banner is
+    -- worked out again.
+    local c = chardb and chardb.commit
+    if c and lastActive and active > lastActive and c.zone == Engine.view.zone and not Engine.view.chain then
+        local waited = Zones.Waited(c)
+        c.played = (c.played or 0) + math.min(active - lastActive, Engine.TICK_MAX)
+        if not waited and Zones.Waited(c) then
+            moveOn(Engine.view.plan, Engine.view.ranked, Engine.view.itinerary)
+            publish()
+        end
+    end
+    lastActive = active
     return sample
 end
 -- XP came in: the play log counts what the session earns.
@@ -1701,11 +1736,23 @@ function Engine.Start()
         for _, k in ipairs(t) do if type(k) ~= "string" then return false end end
         return true
     end
+    local function keyListOfMaps(t)
+        if type(t) ~= "table" or #t == 0 then return false end
+        for _, m in ipairs(t) do if type(m) ~= "number" then return false end end
+        return true
+    end
     local smValid = type(sm) == "table" and type(sm.zone) == "number" and type(sm.to) == "number"
         and type(sm.leave) == "string" and keyList(sm.window) and #sm.window > 0 and keyList(sm.keys)
         and (sm.windowB == nil or keyList(sm.windowB)) and (sm.head == nil or keyList(sm.head))
         and (sm.leaveB == nil or type(sm.leaveB) == "string")
     chardb.seam = smValid and sm or nil
+    -- the commitment to the shown zone (Zones.Commit): { zone, hand, played, zones, leaveKey, stay, reached }
+    local cm = chardb.commit
+    local cmValid = type(cm) == "table" and type(cm.zone) == "number" and type(cm.played) == "number"
+        and (cm.hand == nil or cm.hand == true) and (cm.reached == nil or cm.reached == true)
+        and (cm.stay == nil or type(cm.stay) == "number") and (cm.leaveKey == nil or type(cm.leaveKey) == "string")
+        and (cm.zones == nil or keyListOfMaps(cm.zones))
+    chardb.commit = cmValid and cm or nil
     chardb.skippedNodes = type(chardb.skippedNodes) == "table" and chardb.skippedNodes or {}
     -- the hearthstone's bind spot as learned ({ name, map, x, y }) and its cooldown's length (Planner.HEARTH)
     local hs = chardb.hearthSpot

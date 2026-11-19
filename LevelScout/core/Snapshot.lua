@@ -26,6 +26,9 @@
 --   borderWas the set of quests taken along to the next zone that was on screen before the run
 --             ({ zone, ids, to, before }, see Zones.Itinerary)
 --   seamWas   the way across planned together that was on screen before the run (see Zones.Itinerary)
+--   commitWas (optional) the commitment to the shown zone before the run's itinerary updated it
+--             ({ zone, hand, played, zones, leaveKey, stay, reached }, see Zones.Commit); the replay
+--             works the banner out from it
 --   shown     what the addon showed for that run (Snapshot.View): ranked, plan (and how it was
 --             made), itinerary, moveOn, chain
 --   before    a light view of what was on screen when the command was typed
@@ -363,7 +366,7 @@ local function itineraryOf(it, light)
     end
     if it.starts and not light then
         out.starts = {}
-        for map, s in pairs(it.starts) do out.starts[map] = { xp = num(s.xp), rate = num(s.rate), next = num(s.next), path = s.path or nil } end
+        for map, s in pairs(it.starts) do out.starts[map] = { xp = num(s.xp), rate = num(s.rate), next = num(s.next), path = s.path or nil, rough = s.rough or nil } end
     end
     return out
 end
@@ -387,7 +390,7 @@ function Snapshot.View(view, light)
     end
     if view.itinerary then out.itinerary = itineraryOf(view.itinerary, light) end
     local m = view.moveOn
-    if m then out.moveOn = { suggest = m.suggest and true or false, map = num(m.map), gain = num(m.gain), horizon = num(m.horizon), rate = m.rate and true or nil } end
+    if m then out.moveOn = { suggest = m.suggest and true or false, map = num(m.map), gain = num(m.gain), horizon = num(m.horizon), rate = m.rate and true or nil, reached = m.reached and true or nil } end
     local c = view.chain
     if c then out.chain = { id = num(c.id), kind = str(c.kind), name = str(c.name) } end
     return out

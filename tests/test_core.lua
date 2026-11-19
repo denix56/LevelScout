@@ -1184,36 +1184,19 @@ H.suite("Zones", function()
         ok(ranked[1].plan.score >= ranked[2].plan.score, "best first")
     end)
 
-    test("move-on: suggested above 20%, kept until the lead is under 5%", function()
+    test("move-on without an itinerary: no banner while something is left, else the best other zone", function()
         local Z = load().Zones
         local function plan(score, zone) return { score = score, zone = zone, steps = { {} } } end
-        local ranked = { { map = 2, plan = plan(1150, 2) }, { map = 1, plan = plan(1000, 1) } }
+        local ranked = { { map = 2, plan = plan(1300, 2) }, { map = 3, plan = plan(1200, 3) }, { map = 1, plan = plan(1000, 1) } }
         local active = plan(1000, 1)
-        local first = Z.MoveOn(active, ranked, nil)
-        eq(first.suggest, false, "15% is not enough to start suggesting")
-        ranked[1].plan.score = 1300
-        local on = Z.MoveOn(active, ranked, first)
-        eq({ on.suggest, on.map }, { true, 2 })
-        near(on.gain, 0.3, 1e-9)
-        ranked[1].plan.score = 1100
-        eq(Z.MoveOn(active, ranked, on).suggest, true, "10% keeps an existing suggestion")
-        ranked[1].plan.score = 1040
-        eq(Z.MoveOn(active, ranked, on).suggest, false)
-        eq(Z.MoveOn(plan(0, 1), ranked, nil).suggest, true, "nothing left here")
-        -- little left here: both choices are valued over the same hour, so the answer is calm
-        local function short(xp, seconds) return { xp = xp, seconds = seconds, rate = xp / seconds * 3600, score = xp, zone = 1, steps = { {} } } end
-        ranked[1].plan.score = 1300
-        local good = Z.MoveOn(short(350, 900), ranked, nil)     -- 15 minutes at 1,400/h, then move
-        eq(good.suggest, false, "finish what is left before moving")
-        near(good.gain, 1300 / (350 + 1300 * 0.75) - 1, 1e-9)
-        local poor = Z.MoveOn(short(150, 900), ranked, nil)     -- 15 minutes at 600/h: leaving gains about 15%
-        eq(poor.suggest, false, "a short poor remainder alone does not trigger it")
-        ok(poor.gain > 0.1 and poor.gain < 0.2)
-        -- one more kill changes the remainder a little, and the answer a little
-        local a, b = Z.MoveOn(short(150, 900), ranked, nil).gain, Z.MoveOn(short(150, 870), ranked, nil).gain
-        ok(math.abs(a - b) < 0.02, "no jumps from small progress")
-        -- a long stretch of poor quests does trigger it
-        eq(Z.MoveOn({ xp = 3000, seconds = 7200, rate = 1000, score = 1000, zone = 1, steps = { {} } }, ranked, nil).suggest, true)
+        eq(Z.MoveOn(active, ranked, nil), { suggest = false }, "30% better by the one-hour scores: no banner without the itinerary's figures")
+        eq(Z.MoveOn(active, ranked, nil, nil, { zone = 1, hand = true, played = 99999 }), { suggest = false })
+        local used = { score = 0, zone = 1, steps = {} }
+        eq(Z.MoveOn(used, ranked, nil), { suggest = true, map = 2 }, "nothing left here: the best ranked zone with something to do")
+        ranked[1].plan.steps = {}
+        eq(Z.MoveOn(used, ranked, nil), { suggest = true, map = 3 }, "a zone with nothing to do is passed over")
+        ranked[2].plan.steps = {}
+        eq(Z.MoveOn(used, ranked, nil), { suggest = false }, "nothing anywhere")
     end)
 
     test("Zones.Choose: the best of the first few planned again, the order on screen kept within 5%", function()
@@ -1247,9 +1230,9 @@ H.suite("Zones", function()
         local function plan(score, zone) return { score = score, zone = zone, steps = { {} } } end
         local ranked = { { map = 2, plan = plan(3000, 2) }, { map = 3, plan = plan(2000, 3) }, { map = 1, plan = plan(1000, 1) } }
         local active = plan(1000, 1)
-        local function itinerary(r1, r2, r3, shown)
+        local function itinerary(r1, r2, r3, shown, rough3)
             local starts = { [1] = { rate = r1 }, [2] = { rate = r2 } }
-            if r3 then starts[3] = { rate = r3 } end
+            if r3 then starts[3] = { rate = r3, rough = rough3 } end
             return { horizon = 9000, shown = shown or 1, starts = starts, segments = { { map = 1 }, { map = 2 } } }
         end
         -- the one-hour scores would name zone 2; the start rates put zone 3 first
@@ -1266,17 +1249,110 @@ H.suite("Zones", function()
         -- the shown zone is first, or ties for it (the ranking's order decides, and the lead is nothing)
         eq(Z.MoveOn(active, ranked, nil, itinerary(1300, 1100, 1150)), { suggest = false })
         eq(Z.MoveOn(active, ranked, nil, itinerary(1000, 1000, 900)).suggest, false)
-        -- no figure for a zone of the ranking: the one-hour rule, as the tab then lists
-        local missing = Z.MoveOn(active, ranked, nil, itinerary(1000, 1100, nil))
-        eq({ missing.suggest, missing.map, missing.rate }, { true, 2, nil })
-        near(missing.gain, 2, 1e-9)
-        -- no figures, the path starts here: no banner
+        -- no figure for a zone of the ranking, or none at all: no banner (the one-hour rule is gone)
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1000, 1100, nil)), { suggest = false })
         eq(Z.MoveOn(active, ranked, nil, { horizon = 9000, shown = 1, segments = { { map = 1 }, { map = 2 } } }), { suggest = false })
-        -- made while another zone was shown, or nothing left here: the one-hour rule
-        local old = Z.MoveOn(active, ranked, nil, itinerary(1000, 1100, 1300, 2))
-        eq({ old.suggest, old.map, old.rate }, { true, 2, nil })
+        -- made while another zone was shown, or starting elsewhere: no banner
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1000, 1100, 1300, 2)), { suggest = false })
+        local elsewhere = itinerary(1000, 1100, 1300)
+        elsewhere.segments = { { map = 2 }, { map = 1 } }
+        eq(Z.MoveOn(active, ranked, nil, elsewhere), { suggest = false })
+        -- nothing left here: the zone the itinerary goes to (segment 2 here), else the best ranked
         local empty = Z.MoveOn({ score = 0, zone = 1, steps = {} }, ranked, nil, itinerary(1000, 1100, 1300))
-        eq({ empty.suggest, empty.map }, { true, 2 }, "nothing left here")
+        eq({ empty.suggest, empty.map, empty.gain }, { true, 2, nil }, "nothing left here")
+        ranked[1].plan.steps = {}
+        local passed = Z.MoveOn({ score = 0, zone = 1, steps = {} }, ranked, nil, itinerary(1000, 1100, 1300))
+        eq({ passed.suggest, passed.map }, { true, 3 }, "that zone has nothing to do: the best ranked other")
+        ranked[1].plan.steps = { {} }
+        -- a rough figure never triggers the banner, however high: the planned ones are listed before it
+        local rough = Z.MoveOn(active, ranked, nil, itinerary(1000, 1020, 5000, 1, true))
+        eq({ rough.suggest, rough.map }, { false, 2 })
+    end)
+
+    test("move-on: a zone picked by hand is kept for COMMIT_STAY, or the time its path planned there", function()
+        local Z = load().Zones
+        local function plan(score, zone) return { score = score, zone = zone, steps = { {} } } end
+        local ranked = { { map = 2, plan = plan(3000, 2) }, { map = 3, plan = plan(2000, 3) }, { map = 1, plan = plan(1000, 1) } }
+        local active = plan(1000, 1)
+        local function itinerary(r3) -- zone 3 leads by r3 / 1000
+            return { horizon = 9000, shown = 1, starts = { [1] = { rate = 1000 }, [2] = { rate = 1000 }, [3] = { rate = r3 } },
+                segments = { { map = 1 }, { map = 2 } } }
+        end
+        local hand = { zone = 1, hand = true, played = 0 }
+        local kept = Z.MoveOn(active, ranked, nil, itinerary(1300), hand)
+        eq({ kept.suggest, kept.map, kept.rate }, { false, 3, true }, "30% better, but just picked: no banner")
+        near(kept.gain, 0.3, 1e-9)
+        hand.played = Z.COMMIT_STAY - 1
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), hand).suggest, false, "a second short of the wait")
+        hand.played = Z.COMMIT_STAY
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), hand).suggest, true, "waited")
+        hand.played, hand.stay = 600, 600
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), hand).suggest, true, "the path planned here took 10 minutes: asked then")
+        hand.played = 599
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), hand).suggest, false)
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), { zone = 1, played = 0 }).suggest, true, "not picked by hand: nothing was promised")
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), { zone = 2, hand = true, played = 0 }).suggest, true, "a commitment to another zone does not count")
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1300), nil).suggest, true)
+        -- the path's leave step done: the next zone of that path
+        local done = { zone = 1, hand = true, played = 10, zones = { 1, 2 }, leaveKey = "T:5", reached = true }
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1000), done), { suggest = true, map = 2, reached = true })
+        local better = Z.MoveOn(active, ranked, nil, itinerary(1300), done)
+        eq({ better.suggest, better.map, better.rate, better.reached }, { true, 3, true, nil }, "a clearly better start is named instead")
+        done.zones = { 1 }
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1000), done).suggest, false, "no next zone on the path")
+        done.zones = { 1, 2 }
+        ranked[1].plan.steps = {}
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1000), done).suggest, false, "the next zone has nothing to do")
+        ranked[1].plan.steps = { {} }
+        done.reached = nil
+        eq(Z.MoveOn(active, ranked, nil, itinerary(1000), done).suggest, false, "the leave step is not done yet")
+    end)
+
+    test("Zones.Commit, CommitPath and Waited", function()
+        local Z = load().Zones
+        local it = { shown = 1, segments = { { map = 1, travel = 30, seconds = 600, leaveKey = "T:5" }, { map = 2, travel = 100, seconds = 900 } } }
+        local c = Z.Commit(nil, it, 1)
+        eq(c, { zone = 1, played = 0, stay = 630, leaveKey = "T:5", zones = { 1, 2 } }, "the first path planned for the zone")
+        c.played = 100
+        local later = { shown = 1, segments = { { map = 1, travel = 0, seconds = 99, leaveKey = "T:9" }, { map = 3 } } }
+        eq(Z.Commit(c, later, 1), { zone = 1, played = 100, stay = 630, leaveKey = "T:9", zones = { 1, 3 } }, "later paths: the maps and the leave step follow, the time promised does not")
+        c.reached = true
+        local latest = { shown = 1, segments = { { map = 1, seconds = 10, leaveKey = "T:7" }, { map = 4 } } }
+        eq(Z.Commit(c, latest, 1), { zone = 1, played = 100, stay = 630, leaveKey = "T:9", zones = { 1, 3 }, reached = true }, "frozen once reached")
+        eq(Z.Commit(c, it, 2), { zone = 2, played = 0 }, "another zone starts afresh")
+        eq(Z.Commit({ zone = 1, hand = true, played = 5 }, { shown = 1, segments = { { map = 2 }, { map = 1 } } }, 1),
+            { zone = 1, hand = true, played = 5 }, "an itinerary that starts elsewhere changes nothing")
+        eq(Z.Commit({ zone = 1, hand = true, played = 5 }, { shown = 2, segments = it.segments }, 1),
+            { zone = 1, hand = true, played = 5 }, "nor one made for another zone")
+        eq(Z.Commit(nil, { shown = 1, segments = { { map = 1, seconds = 50 } } }, 1), { zone = 1, played = 0, zones = { 1 } }, "a path that never leaves: no stay")
+        eq(Z.Commit(nil, it, nil), nil)
+        -- the path as the next itinerary's `was`
+        local was = Z.CommitPath({ zone = 1, played = 0, zones = { 1, 2 }, leaveKey = "T:5" }, 1)
+        eq(was, { segments = { { map = 1, leaveKey = "T:5" }, { map = 2 } } })
+        eq(Z.CommitPath({ zone = 1, played = 0, zones = { 1, 2 } }, 2), nil, "another zone")
+        eq(Z.CommitPath({ zone = 1, played = 0 }, 1), nil, "no path yet")
+        eq(Z.CommitPath(nil, 1), nil)
+        -- waited
+        eq(Z.Waited(nil), true)
+        eq(Z.Waited({ zone = 1, played = 0 }), true, "not picked by hand")
+        eq(Z.Waited({ zone = 1, hand = true, played = 0 }), false)
+        eq(Z.Waited({ zone = 1, hand = true, played = Z.COMMIT_STAY }), true)
+        eq(Z.Waited({ zone = 1, hand = true, played = 300, stay = 300 }), true, "the path planned there is over")
+        eq(Z.Waited({ zone = 1, hand = true, played = 299, stay = 300 }), false)
+        eq(Z.Waited({ zone = 1, hand = true, played = 0, reached = true }), true)
+    end)
+
+    test("Zones.StartOrder: planned starts before rough ones, then by rate, then the ranking's order", function()
+        local Z = load().Zones
+        local function plan() return { steps = { {} } } end
+        local ranked = { { map = 2, plan = plan() }, { map = 3, plan = plan() }, { map = 1, plan = plan() }, { map = 4, plan = plan() }, { map = 5, plan = { steps = {} } } }
+        local itinerary = { shown = 1, starts = { [1] = { rate = 1000 }, [2] = { rate = 3000, rough = true }, [3] = { rate = 900 }, [4] = { rate = 900 } } }
+        local order = {}
+        for i, z in ipairs(Z.StartOrder(itinerary, ranked, 1)) do order[i] = z.map end
+        eq(order, { 1, 3, 4, 2 }, "the rough 3000 comes last; the 900 tie keeps the ranking's order; a zone with nothing to do is not listed")
+        itinerary.starts[4] = nil
+        eq(Z.StartOrder(itinerary, ranked, 1), nil, "no figure for a listed zone")
+        eq(Z.StartOrder(itinerary, ranked, 2), nil, "made for another zone")
     end)
 
     test("walking around inside our zone does not change how other zones are judged", function()
@@ -1309,6 +1385,15 @@ H.suite("Zones", function()
         near(Z.Gain(here, { score = 3300 }), 0.10, 1e-9)
         near(Z.Gain(here, { score = 2400 }), -0.20, 1e-9)
         eq(Z.Gain({ xp = 0, seconds = 0, steps = {} }, { score = 1000 }), nil, "nothing left here")
+        -- little left here: both choices are valued over the same hour, so the answer is calm
+        local function short(xp, seconds) return { xp = xp, seconds = seconds, rate = xp / seconds * 3600, score = xp, zone = 1, steps = { {} } } end
+        local other = { score = 1300 }
+        near(Z.Gain(short(350, 900), other), 1300 / (350 + 1300 * 0.75) - 1, 1e-9) -- 15 minutes at 1,400/h, then move: about nothing gained
+        local poor = Z.Gain(short(150, 900), other)                                 -- 15 minutes at 600/h: leaving gains about 15%
+        ok(poor > 0.1 and poor < 0.2)
+        -- one more kill changes the remainder a little, and the answer a little
+        ok(math.abs(Z.Gain(short(150, 900), other) - Z.Gain(short(150, 870), other)) < 0.02, "no jumps from small progress")
+        ok(Z.Gain({ xp = 3000, seconds = 7200, rate = 1000, score = 1000, zone = 1, steps = { {} } }, other) > 0.2, "a long stretch of poor quests")
     end)
 
     test("a new order replaces the shown one only when clearly better", function()

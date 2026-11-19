@@ -341,10 +341,13 @@ end
 
 -- The zones the itinerary goes to after the shown one: for each a heading and the first steps
 -- of its route there (as planned from where the zone before is left), dimmed: what comes next
--- is on screen before the zone in hand runs out. `from` is where the shown zone is left.
+-- is on screen before the zone in hand runs out. `from` is where the shown zone is left (nil: nothing is
+-- left there). `first` is the segment to start with: 2, the one after the shown zone, unless the shown
+-- zone has nothing left and the itinerary starts elsewhere (1).
 UI.AHEAD_STEPS = 20 -- rows per zone
-local function onwardRows(it, out, from)
-    for n = 2, #it.segments do
+UI.GAIN_MIN = 0.05  -- a zone's "+N%" on the Zones tab is shown from this lead (or lag) on: under it the figures are about equal
+local function onwardRows(it, out, from, first)
+    for n = first or 2, #it.segments do
         local seg = it.segments[n]
         local steps = seg.plan and seg.plan.steps or {}
         local stone = steps[1] and steps[1].hearth -- (Planner.HEARTH: the way there is the stone)
@@ -394,7 +397,16 @@ local function routeRows(view)
                 state.skipped = nil
             end }
     end
-    if #plan.steps == 0 then return out end
+    if #plan.steps == 0 then
+        -- the zone stays shown (the banner says where to go): what the itinerary does next
+        local it = view.itinerary
+        local first = it and it.shown == view.zone and it.segments[1]
+        if first and not view.chain and (first.map ~= view.zone or it.segments[2]) then
+            out[#out + 1] = { section = "Nothing left here", h = SECTION_H, warn = true }
+            onwardRows(it, out, nil, first.map ~= view.zone and 1 or 2)
+        end
+        return out
+    end
     -- Where the itinerary leaves this zone for the next one.
     -- (`onward`: it goes on from this zone. A leave step that is not in the route any more:
     -- the next zone follows the route's end.)
@@ -576,12 +588,6 @@ local function zoneRows(view)
                         it.segments[2] and it.segments[2].name or "the next zone"), right = "+" .. Format.Number(it.seam.gain or 0) .. " XP", color = C.faint }
                 end
                 if it.stay then lines[#lines + 1] = { "Best single zone", right = Format.Number(it.stay) .. " XP" } end
-                -- (the list gives the shown zone's rate alone when going on earns less per hour)
-                local own = it.starts and it.starts[view.zone]
-                if own and not own.path then
-                    lines[#lines + 1] = { (view.zoneName or "The zone shown") .. " alone, while it lasts",
-                        right = Format.Number(own.rate) .. " XP/h" }
-                end
                 if it.here and it.segments[1].map ~= view.zone then
                     lines[#lines + 1] = { "Starting with " .. (view.zoneName or "the zone shown"), right = Format.Number(it.here) .. " XP" }
                 end
@@ -592,6 +598,13 @@ local function zoneRows(view)
                     lines[#lines + 1] = { "Click: plan " .. (it.alt.name or "that zone"), color = C.faint }
                 end
                 if it.segments[1].map ~= view.zone then lines[#lines + 1] = { "Click: plan " .. (it.segments[1].name or "the first zone"), color = C.faint } end
+                -- a zone picked by hand is kept for a while: another start is suggested after that
+                local c = Engine.Commit()
+                if c and c.zone == view.zone and c.hand and not ns.Zones.Waited(c) then
+                    lines[#lines + 1] = { string.format("Another zone is suggested after %s in %s",
+                        Format.Duration(math.min(ns.Zones.COMMIT_STAY, c.stay or math.huge)), view.zoneName or "this zone"),
+                        right = Format.Duration(c.played or 0) .. " so far", color = C.faint }
+                end
                 return lines
             end,
             onClick = function()
@@ -635,9 +648,10 @@ local function zoneRows(view)
         local onwardName = onward and (ns.Zones.Name(onward) or Game.MapName(onward) or ("Map " .. onward)) or nil
         -- (while a class quest chain is followed there is no zone to compare with)
         local gain
+        local rough = starts and starts[z.map] and starts[z.map].rough or nil
         if starts then
             local stay = starts[view.zone] and starts[view.zone].rate or 0
-            if not shown and stay > 0 and starts[z.map] then gain = starts[z.map].rate / stay - 1 end
+            if not shown and not rough and stay > 0 and starts[z.map] then gain = starts[z.map].rate / stay - 1 end
         elseif not shown and view.plan and not view.chain then
             gain = ns.Zones.Gain(view.plan, p)
         end
@@ -649,7 +663,7 @@ local function zoneRows(view)
         if onwardName then detail = detail .. "  |cff5f646e·|r  then " .. onwardName end
         if gain then
             local pct = math.floor(math.abs(gain) * 100 + 0.5)
-            if pct >= 1 then
+            if math.abs(gain) >= UI.GAIN_MIN then
                 detail = string.format("%s%s%d%%|r  |cff5f646e·|r  ", hex(gain > 0 and C.good or C.faint), gain > 0 and "+" or "-", pct) .. detail
             end
         end
@@ -659,19 +673,23 @@ local function zoneRows(view)
             -- a dungeon carries the game's dungeon-entrance icon in front of its name
             title = (z.dungeon and DUNGEON_ICON or "") .. name .. (z.lo and string.format("  %s%d-%d|r", hex(C.faint), z.lo, z.hi) or ""),
             dungeon = z.dungeon and true or nil,
-            detail = detail, right = Format.Number(value), rightSub = "XP/h",
+            detail = detail, right = (rough and "~" or "") .. Format.Number(value), rightSub = "XP/h",
             bar = best > 0 and value / best or 0,
             tip = function()
                 local pct = gain and string.format("%+d%%", gain * 100 + (gain >= 0 and 0.5 or -0.5)) or nil
                 local lines = { { name } }
                 if starts then
                     if onwardName then
-                        lines[#lines + 1] = { "XP per hour over the next " .. span .. ", starting here", right = Format.Number(value) }
+                        lines[#lines + 1] = { "XP per hour over the next " .. span .. ", starting here", right = (rough and "~" or "") .. Format.Number(value) }
                         lines[#lines + 1] = { "Then, from where this zone is left", right = onwardName }
                     else
-                        lines[#lines + 1] = { "XP per hour in this zone alone, while it lasts (an hour at least)", right = Format.Number(value) }
+                        lines[#lines + 1] = { "XP per hour over the next " .. span .. ", in this zone alone", right = (rough and "~" or "") .. Format.Number(value) }
                     end
-                    if gain then lines[#lines + 1] = { "Against starting with " .. (view.zoneName or "the zone shown"), right = pct } end
+                    if rough then
+                        lines[#lines + 1] = { "A rough figure: today's plans strung together; only the best "
+                            .. ns.Zones.COMPARE_TOP .. " other zones are planned again as you will find them.", color = C.faint }
+                    end
+                    if gain and math.abs(gain) >= UI.GAIN_MIN then lines[#lines + 1] = { "Against starting with " .. (view.zoneName or "the zone shown"), right = pct } end
                     lines[#lines + 1] = { "This zone alone, first hour, trip included", right = Format.Number(p.score) .. " XP/h" }
                 else
                     lines[#lines + 1] = { "XP per hour, trip included", right = Format.Number(p.score) }
@@ -1244,9 +1262,41 @@ local function build()
     end)
 
     -- move-on banner
-    local banner = button(root, WIDTH, BANNER_H, function()
+    -- Click: go to the zone named. Right-click: stay (when the banner is about a lead or a path done:
+    -- the commitment starts over, see Engine.StayHere).
+    local banner = button(root, WIDTH, BANNER_H, function(_, mouse)
         local m = Engine.view.moveOn
-        if m and m.map then Engine.SetZone(m.map); state.tab = "route"; state.scroll = 0 end
+        if not (m and m.map) then return end
+        if mouse == "RightButton" then
+            if m.reached or m.gain then Engine.StayHere() end
+        else
+            Engine.SetZone(m.map); state.tab = "route"; state.scroll = 0
+        end
+    end)
+    tooltip(banner, function()
+        local view = Engine.view
+        local m = view.moveOn or {}
+        if not (m.suggest and m.map) then return nil end
+        local who = m.name or "that zone"
+        local here = view.zoneName or "this zone"
+        local lines = {}
+        if m.reached then
+            lines[1] = { "Done here as planned" }
+            lines[2] = { "The path planned for " .. here .. " has been followed to its leave step. " .. who .. " is next on it." }
+        elseif m.gain then
+            lines[1] = { who .. ": " .. string.format("%d%% more XP per hour", m.gain * 100 + 0.5) }
+            lines[2] = { "Starting there earns that much more than starting here, over the next " .. ((view.itinerary and view.itinerary.horizon) and Format.Duration(view.itinerary.horizon) or "hours")
+                .. " (the Zones tab's figures)." }
+        else
+            lines[1] = { "Nothing left in " .. here }
+            lines[2] = { who .. " is where the plan goes next." }
+        end
+        lines[#lines + 1] = { "Click: plan " .. who, color = C.faint }
+        if m.reached or m.gain then
+            lines[#lines + 1] = { "Right-click: stay in " .. here .. " (asked again after "
+                .. Format.Duration(ns.Zones.COMMIT_STAY) .. " here)", color = C.faint }
+        end
+        return lines
     end)
     banner.bg = art(banner, "BACKGROUND", HIGHLIGHT, { C.accent[1], C.accent[2], C.accent[3], 0.5 }, "ADD")
     banner.bg:SetAllPoints()
@@ -1533,7 +1583,7 @@ function UI.Refresh()
         local who = m.name or "Another zone"
         root.banner.label:SetText(m.gain and (m.rate and string.format("%s: %d%% more XP per hour", who, m.gain * 100 + 0.5)
             or string.format("%s: %d%% more XP over the next hour", who, m.gain * 100 + 0.5))
-            or string.format("Done here. Next: %s", m.name or "another zone"))
+            or string.format(m.reached and "Done here as planned. Next: %s" or "Done here. Next: %s", m.name or "another zone"))
     end
     local h = layout(view)
 

@@ -10,16 +10,19 @@
 --               earned so far. When that much play has passed, the XP earned since is written
 --               next to it, and how often the player overruled the plan in between.
 --   Events      zone     the shown zone was changed by hand ({ from, to, banner = true when the
---                        banner had suggested it, back = true when the path had just left it })
+--                        banner had suggested it; `back` is only in logs of older versions })
+--               stay     the banner was answered with "stay here" ({ zone, to = the zone it named,
+--                        reached = true when it said the path was done here })
 --               skip     a quest was left out by hand ({ q }); unskip: brought back
 --               order    a quest was turned in that was more than ORDER_FRONT steps down the
 --                        route ({ q, i })
 --               extra    a quest was turned in that the route did not have ({ q })
 --               banner   the move-on banner came up, or named another zone ({ to, gain })
---               moved    the path moved on to its next zone by itself ({ from, to })
+--               moved    the path moved on to its next zone by itself ({ from, to }); only in logs
+--                        of older versions: the zone shown no longer changes by itself
 --               hearth   the hearthstone was used ({ planned = true when the shown route had it on its first
 --                        leg, to = where it is bound }); not "overruled": the plan may have it (Planner.HEARTH)
---               zone, skip, order and extra are "overruled": they count against the forecasts
+--               zone, stay, skip, order and extra are "overruled": they count against the forecasts
 --               open at that moment. Each event may carry snap = the id of the snapshot taken
 --               for it (ns.Snapshot).
 --
@@ -47,7 +50,7 @@ Play.KEEP_FORECASTS = 200          -- forecasts kept (the oldest go first)
 Play.KEEP_EVENTS = 300             -- events kept
 Play.ORDER_FRONT = 5               -- a turn-in further down the route than this was done out of order
 Play.COVERED = 0.9                 -- a forecast counts for a window when its path covers this share of it
-Play.OVERRULED = { zone = true, skip = true, order = true, extra = true }
+Play.OVERRULED = { zone = true, stay = true, skip = true, order = true, extra = true }
 
 local store          -- the character's log
 local total = 0      -- XP earned in this session
@@ -283,6 +286,7 @@ function Play.Describe(s)
         if sum.zoneBack > 0 then extra[#extra + 1] = sum.zoneBack .. " back to a zone the path had left" end
         parts[#parts + 1] = "changed zone by hand " .. times(k.zone) .. (#extra > 0 and (" (" .. table.concat(extra, ", ") .. ")") or "")
     end
+    if (k.stay or 0) > 0 then parts[#parts + 1] = "stayed against the banner " .. times(k.stay) end
     if (k.skip or 0) > 0 then parts[#parts + 1] = string.format("skipped %d quest%s", k.skip, k.skip == 1 and "" or "s") end
     if (k.order or 0) > 0 then parts[#parts + 1] = string.format("turned in %d out of order", k.order) end
     if (k.extra or 0) > 0 then parts[#parts + 1] = string.format("turned in %d the route did not have", k.extra) end

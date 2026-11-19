@@ -602,10 +602,10 @@ H.suite("Itinerary (real data)", function()
             end
         end
         local own = starts[shownMap]
-        if own.path then
-            eq(own.next, with.segments[2] and with.segments[2].map or nil, "the shown row's next zone is the path's")
-            H.near(own.rate, with.pathRate, 1e-6)
-        end
+        ok(own.path, "the shown zone's entry is the path itself, never the zone alone")
+        eq(own.next, with.segments[2] and with.segments[2].map or nil, "the shown row's next zone is the path's")
+        H.near(own.rate, with.pathRate, 1e-6)
+        for _, st in pairs(starts) do H.near(st.rate, st.xp / with.horizon * 3600, 1, "the same for every start") end
     end
     test("two zones inside the horizon beat the best single zone, and the times add up", function()
         ns, state, ctx, ranked = setup()

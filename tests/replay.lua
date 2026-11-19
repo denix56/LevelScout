@@ -265,8 +265,10 @@ function R.Replay(ns, snap, opts)
             seam = snap.seamWas, seamPlan = Z.SeamLayer(plan) })
     end
     local t3 = os.clock()
-    local moveOn = Z.MoveOn(plan, ranked, snap.moveOnWas, itinerary)
-    local result = { ranked = ranked, plan = plan, itinerary = itinerary, moveOn = moveOn, why = why,
+    -- the commitment to the zone as the game had it before this run's itinerary, then as that updated it
+    local commit = zone and Z.Commit(S.Copy(snap.commitWas), itinerary, zone) or nil
+    local moveOn = Z.MoveOn(plan, ranked, snap.moveOnWas, itinerary, commit)
+    local result = { ranked = ranked, plan = plan, itinerary = itinerary, moveOn = moveOn, commit = commit, why = why,
         time = { rank = t1 - t0, route = t2 - t1, itinerary = t3 - t2, total = t3 - t0 } }
     result.view = S.View({ ranked = ranked, plan = plan, zone = zone, itinerary = itinerary, moveOn = moveOn, status = "ready" })
     return result
@@ -440,6 +442,7 @@ function R.Compare(want, got, opts)
                     eq("itinerary", who .. " rate", s.rate, g.rate, "rate")
                     eq("itinerary", who .. " next", s.next, g.next)
                     eq("itinerary", who .. " path", s.path or false, g.path or false)
+                    eq("itinerary", who .. " rough", s.rough or false, g.rough or false)
                 end
             end
         end
@@ -450,6 +453,7 @@ function R.Compare(want, got, opts)
         eq("banner", "zone", wb.map, gb.map)
         eq("banner", "gain", wb.gain, gb.gain, "gain")
         eq("banner", "rate", wb.rate or false, gb.rate or false)
+        eq("banner", "reached", wb.reached or false, gb.reached or false)
         eq("banner", "horizon", wb.horizon, gb.horizon)
     end
     return diffs, count, notes
@@ -516,7 +520,8 @@ end
 
 local function bannerText(snap, m)
     if not (m and m.suggest) then return "none" end
-    return string.format("%s%s", mapName(snap, m.map), m.gain and string.format(" (%+.1f%%)", m.gain * 100) or "")
+    return string.format("%s%s%s", mapName(snap, m.map), m.gain and string.format(" (%+.1f%%)", m.gain * 100) or "",
+        m.reached and " (done here as planned)" or "")
 end
 
 local function madeText(made)
@@ -673,6 +678,12 @@ function R.Report(ns, snap, result, info)
         local sameBanner = true
         for _, d in ipairs(info.diffs) do if d.section == "banner" then sameBanner = false end end
         say("Banner      game: %s; replay: %s", bannerText(snap, shown.moveOn), sameBanner and bannerText(snap, shown.moveOn) or bannerText(snap, result.view.moveOn))
+        local c = result.commit
+        if c then
+            say("Commitment  %s%s, played %d s%s%s", mapName(snap, c.zone), c.hand and " picked by hand" or "", floor(c.played or 0),
+                c.zones and (", path " .. #c.zones .. " zone" .. (#c.zones == 1 and "" or "s") .. (c.reached and ", leave step done" or "")) or "",
+                c.stay and string.format(", asked again after %s", hm(math.min(Z.COMMIT_STAY, c.stay))) or "")
+        end
     end
 
     -- what was on screen when the command was typed
