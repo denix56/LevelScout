@@ -723,8 +723,8 @@ end
 
 local LISTS = {
     { "later", "Later", "Needs a higher level." },
-    { "group", "Needs a group", "Elite quest. Turn on \"Group quests: in the route\" in the options to plan it." },
-    { "escort", "Escort quests", "Walk an NPC somewhere or keep it alive: several minutes, and it fails if the NPC dies. Turn on \"Escort quests: in the route\" in the options to plan it." },
+    { "group", "Needs a group", "Elite quest. Turn on \"Group quests: in the route\" in the options to plan it. One you have taken is planned." },
+    { "escort", "Escort quests", "Walk an NPC somewhere or keep it alive: several minutes, and it fails if the NPC dies. Turn on \"Escort quests: in the route\" in the options to plan it. One you have taken is planned, unless it failed." },
     { "skipped", "Left out as slow", "Pays much less per minute than the rest of the route." },
     { "unlocated", "No known location", "No database knows where this is done." },
     { "unconfirmed", "Not confirmed in Forever", "No player data shows this quest exists in Forever. It is planned once it is in your log." },
