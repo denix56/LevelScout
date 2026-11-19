@@ -546,8 +546,16 @@ Limits and unknowns:
 
 ## The hearthstone (`Planner.HEARTH`)
 
-**Off by default** (`Planner.HEARTH = false`): not benched yet, and not tried in the game. Nothing in the
+**Off by default** (`Planner.HEARTH = false`): benched "better", but not tried in the game. Nothing in the
 game reads the stone yet; only the planner, the bench and the tests know it (`state.hearth`).
+
+Benched (2026-11-19, `ONLYSET=1 CHARS=all SALTS="0 1 2 3 4" SET="hearth:Planner.HEARTH=true"`; each character
+bound in its own town, the stone ready): itinerary XP +0.86% (SE 0.29, bar 0.62), "better", no character harmed
+(worst -0.6%); top zone's first 120 minutes +2.1%; mean zone score +8.2% against +6.8% without. The stone is used in
+41 of 80 runs' itineraries (0.96 uses, 228 s saved per run) and 3.5 times per run over the ranked zones' plans
+(1,089 s). Work is unchanged (the search is the same), and with it off the step dumps of the 8 characters over 2
+salts are identical to before. The pairing is tight (base-to-hearth correlation +0.89), since the search is the
+same. Not measured: another bind point, a stone not ready at the start, the game's real cooldown and load time.
 
 The route is searched as before. When it is described, the stone is used on it: on the first leg, once the
 stone is ready, that it makes at least `Planner.HEARTH_MIN_SAVE` (2 minutes) shorter. Such a leg is the cast and
