@@ -277,7 +277,7 @@ local function signature(log)
     for _, q in ipairs(log) do
         local o = {}
         for _, ob in ipairs(q.objectives) do o[#o + 1] = tostring(ob.have) .. "/" .. tostring(ob.need) .. (ob.finished and "!" or "") end
-        parts[#parts + 1] = q.id .. (q.isComplete and "C" or "") .. ":" .. table.concat(o, ",")
+        parts[#parts + 1] = q.id .. (q.isComplete and "C" or "") .. (q.isFailed and "F" or "") .. ":" .. table.concat(o, ",")
     end
     table.sort(parts)
     return table.concat(parts, ";")
@@ -1445,7 +1445,13 @@ end
 function Engine.IsIgnored(questId) return chardb and chardb.ignored[questId] == true end
 
 local handlers = {}
-function handlers.QUEST_ACCEPTED() Engine.Replan() end
+-- A quest accepted. One the player had skipped is skipped no longer: taking it is choosing it
+-- (AutoQuest takes only the plan's quests). The client sends the quest id, or the log index and then the id.
+function handlers.QUEST_ACCEPTED(a, b)
+    local id = type(b) == "number" and b or a
+    if type(id) == "number" and chardb then chardb.ignored[id] = nil end
+    Engine.Replan()
+end
 -- A quest of the chain being followed left the log: turned in, or dropped. Dropped (the game
 -- says it is not done, a moment later), the chain is left and offered again.
 function handlers.QUEST_REMOVED(questId)

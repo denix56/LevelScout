@@ -1741,17 +1741,23 @@ local function collect(zoneMap, ctx, lists, also)
     if ctx.chain then
         for _, m in ipairs(order) do m.must = true end
     end
-    -- A quest already taken stays in the route (`held`): it is in the log with its work or its
-    -- turn-in on this map, so the plan does not drop it as slow, and a search round that takes
-    -- it out puts it back whatever it pays. Not for a dungeon plan or the way across a border.
-    -- A quest in the log with nothing to do here (a turn-in carried from elsewhere) is weighed
-    -- as before.
-    if not ctx.dungeon and not ctx.chain and not (also and #also > 0) then
+    -- A quest already taken stays in the route (`held`): it is taken (in the log, not failed)
+    -- with its work or its turn-in on this map, so the plan does not drop it as slow, and a
+    -- search round that takes it out puts it back whatever it pays. In a dungeon's plan, the
+    -- quests of that dungeon. Not for a class quest plan (all its quests are `must`) or the
+    -- way across a border (Zones.WithSeam keeps every quest of the route). A quest with
+    -- nothing to do here (a turn-in carried from elsewhere) is weighed as before.
+    if not ctx.chain and not (also and #also > 0) then
         for _, m in ipairs(order) do
-            if m.inLog then
-                local here = m.turnin and inZones[m.turnin.map]
-                for _, t in ipairs(m.tasks) do
-                    if t.loc and inZones[t.loc.map] then here = true end
+            if m.taken then
+                local here
+                if ctx.dungeon then
+                    here = m.dungeon -- (a quest of this dungeon: its run is the plan)
+                else
+                    here = m.turnin and inZones[m.turnin.map]
+                    for _, t in ipairs(m.tasks) do
+                        if t.loc and inZones[t.loc.map] then here = true end
+                    end
                 end
                 if here then m.held = true end
             end
@@ -1983,7 +1989,7 @@ end
 ---                  listed as after a search). Zones.WithSeam and the next zone of a way across,
 ---          hold = with a seed: the route on screen is held (Engine.HOLD_ROUTE): the seed is kept in
 ---                 its order, nothing is dropped as slow, and the only quests added are ones taken
----                 since (`held`: in the log, their work or turn-in here) or started by an item in
+---                 since (`held`: taken, in the log and not failed, their work or turn-in here) or started by an item in
 ---                 the bags; each goes to its cheapest place. A stop the player stands at is still
 ---                 brought forward (`front`). A quest of the seed that cannot be rebuilt is left out,
 ---                 as always (the Engine then plans again),
@@ -2642,8 +2648,8 @@ function Planner.Plan(zoneMap, ctx, opts)
 
 
         -- Drop quests that pay far less per second than the rest of the route does without them. A quest that others
-        -- in the route depend on stays, and so does one already taken (`held`: in the log, its
-        -- work or turn-in here).
+        -- in the route depend on stays, and so does one already taken (`held`: in the log and not
+        -- failed, its work or turn-in here).
         local nRouted = 0
         for _ in pairs(r.routed) do nRouted = nRouted + 1 end
         -- (an exact seed keeps every quest it has, and so does a held route)

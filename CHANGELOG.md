@@ -9,10 +9,17 @@
   things). A quest you take on your own is added to it; a stop you stand at is still brought forward.
   The way to the current step still follows you: travel far off and it points you to a flight master
   or boat as before.
-- **Quests you took stay in the plan**: a quest in your log with work or a turn-in in the zone is no
-  longer left out as slow. Before, only finished ones were kept; one you had accepted could vanish
-  from the route and show under "left out as slow". A turn-in carried from another zone is still
-  weighed as before, and so are quests in a dungeon plan.
+- **Quests you take are planned**: a quest in your log with work or a turn-in in the zone stays in the
+  route whatever it pays. Before, only finished ones were kept, and one you had accepted could vanish and
+  show under "left out as slow". This now goes for every quest you take yourself: a red quest, an escort,
+  or an elite quest while group quests are listed only is planned once it is in your log (until you take
+  it, it stays listed). Taking a quest you had skipped brings it back. A dungeon quest you have taken
+  stays in that dungeon's plan, and a finished elite quest is turned in whatever the option says. Still
+  left out: a quest whose mobs are too strong for your level (planned once you reach it), one done wholly
+  in another zone (that zone's plan has it), and a failed one ("Escort quests" says to abandon it and take
+  it again). A turn-in carried from another zone is still weighed as before.
+- **A quest you take no longer drops out of the route** when no database knows where it is turned in: the
+  turn-in is guessed at its giver, as before you took it.
 - **The zone you picked stays**: LevelScout no longer switches zones by itself. When the step the plan
   leaves a zone after is done, the banner says "Done here as planned. Next: <zone>" and chat says so once;
   click it to go, right-click to stay. The zone shown (picked by you or by LevelScout) is kept for 40 minutes of play (or the time its plan
@@ -25,7 +32,10 @@
 - **Hearthstone on the way to the next zone**: the trip between zones may go by hearthstone when it is ready
   and saves 2 minutes or more. In a level 35 snapshot the missed path earned 60,998 XP against 51,296 for
   the one chosen before.
-- **For developers**: `Engine.FOLLOW_PATH` and `Engine.BACK_WITHIN` are gone. New: `Zones.Commit`,
+- **For developers**: `Model.Build` marks a quest in the log that has not failed `taken`. `held` is set
+  from it, and in a dungeon's plan for that dungeon's own quests. The Engine's log signature includes the
+  failed flag, and `QUEST_ACCEPTED` clears `chardb.ignored` for the quest. `Engine.FOLLOW_PATH` and
+  `Engine.BACK_WITHIN` are gone. New: `Zones.Commit`,
   `Zones.CommitPath`, `Zones.Waited`, `Zones.COMMIT_STAY`, `Zones.COMPARE_TOP`, `Zones.STONE_TRIPS`,
   `Engine.StayHere`, `Engine.Commit`, `UI.GAIN_MIN`, the play event `stay`, `starts[].rough`,
   `moveOn.reached`, and `commitWas` in snapshots. `Zones.MoveOn` takes the commitment as a fifth argument.

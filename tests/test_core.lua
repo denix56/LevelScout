@@ -108,6 +108,10 @@ local function listed(list)
     for _, e in ipairs(list) do out[#out + 1] = e.id end
     return out
 end
+local function has(ids, id)
+    for _, v in ipairs(ids) do if v == id then return true end end
+    return false
+end
 
 H.suite("Core numbers", function()
     test("map points become world yards; distance is nil across continents", function()
@@ -510,10 +514,12 @@ H.suite("Planner", function()
         eq(turnin.xp, 1234)
     end)
 
-    test("a red quest waits for later, even in the log; once complete it is turned in", function()
+    test("a red quest waits for later until you take it; once complete it is turned in", function()
         local ns = load(function(data)
             data.quests[30] = quest({ name = "Preserving Knowledge", level = 14, min = 6, xp = 9000, starts = "n100", ends = "n100",
                 objectives = "c206:5:C" })
+            data.quests[32] = quest({ name = "Red High Wolves", level = 14, min = 6, xp = 9000, starts = "n100", ends = "n100",
+                objectives = "c203:2:C" })
             data.npcs[206] = "Librarian|9|9|0|0||" .. camp(1, 15, 85)
         end)
         local function plan(extra) return ns.Zones.PlanZone(1, ns.Zones.Context(state(extra))) end
@@ -524,8 +530,21 @@ H.suite("Planner", function()
         for _, e in ipairs(fresh.lists.later) do if e.id == 30 then entry = e end end
         ok(entry, "listed under Later")
         eq(entry.needLevel, 10, "yellow-orange again at level 10")
-        local inLog = plan({ log = { { id = 30, level = 14, isComplete = false, objectives = { { have = 0, need = 5, finished = false } } } } })
-        eq(indexOf(inLog, "T:30"), nil, "in the log but red: not worked on")
+        local function red(extra)
+            local e = { id = 30, level = 14, isComplete = false, objectives = { { have = 0, need = 5, finished = false } } }
+            for k, v in pairs(extra or {}) do e[k] = v end
+            return plan({ log = { e } })
+        end
+        local taken = red()
+        ok(indexOf(taken, "T:30") and indexOf(taken, "W:m206"), "taken: planned whatever its level")
+        ok(not has(listed(taken.lists.later), 30), "and not listed under Later")
+        local failed = red({ isFailed = true })
+        eq(indexOf(failed, "T:30"), nil, "failed: it has to be taken again, so it waits")
+        ok(has(listed(failed.lists.later), 30), "failed: listed under Later")
+        -- a taken quest whose own targets are too strong for the level still waits for it
+        local entry32 = { id = 32, level = 14, isComplete = false, objectives = { { have = 0, need = 2, finished = false } } }
+        local strong = ns.Model.Build(32, ns.Zones.Context(state({ log = { entry32 } })))
+        eq({ strong.status, strong.blocked, strong.needLevel }, { "later", true, 10 })
         local done = plan({ log = { { id = 30, level = 14, isComplete = true, objectives = {} } } })
         ok(indexOf(done, "T:30"), "complete: turn it in")
         ok(indexOf(plan({ level = 10 }), "P:30"), "four levels above is orange: planned")
@@ -682,6 +701,14 @@ H.suite("Planner", function()
         local off, offPlan = ogre({ routeElite = false })
         eq(off, nil)
         eq(listed(offPlan.lists.group), { 6 })
+        -- one you have taken is routed with the option off, built as with it on
+        local mine = { { id = 6, isComplete = false, objectives = { { have = 0, need = 1, finished = false } } } }
+        local taken, takenPlan = ogre({ routeElite = false, log = mine })
+        ok(taken and taken.group, "taken: in the route as a group step")
+        near(taken.seconds, 30 * 1.2 * 2.5 * (0.3 + 0.7 / 3), 0.01)
+        eq(#takenPlan.lists.group, 0)
+        local done = { { id = 6, isComplete = true, objectives = { { have = 1, need = 1, finished = true } } } }
+        ok(indexOf(select(2, ogre({ routeElite = false, log = done })), "T:6"), "finished: turned in with the option off")
     end)
 
     test("escort quests are listed, or routed with the escort's time at their stop", function()
@@ -714,6 +741,26 @@ H.suite("Planner", function()
         local k = build(41, { routeEscort = true }).tasks[1]
         ok(k.escort)
         near(k.kills * k.cycle + k.wait, ns.Cost.ESCORT_SECONDS, 1e-6)
+        -- one you have taken is planned with the option off, and without the wait: the NPC was caught
+        local function mine(extra)
+            local e = { id = 40, isComplete = false, objectives = { { have = 0, need = 1, finished = false } } }
+            for k2, v in pairs(extra or {}) do e[k2] = v end
+            return { e }
+        end
+        eq(build(40, { log = mine() }).status, "ok")
+        local taken = plan({ log = mine() })
+        ok(indexOf(taken, "W:p40:1") and indexOf(taken, "T:40"), "taken: routed with the option off")
+        eq(listed(taken.lists.escort), { 41 })
+        ns.Cost.ESCORT_WAIT[40] = 600
+        eq(build(40, { log = mine() }).tasks[1].seconds, ns.Cost.ESCORT_SECONDS, "no wait once taken")
+        eq(build(40, { routeEscort = true }).tasks[1].seconds, ns.Cost.ESCORT_SECONDS + 600, "untaken: the wait stays")
+        ns.Cost.ESCORT_WAIT[40] = nil
+        -- failed (the NPC died): listed whatever the option, to be abandoned and taken again
+        for _, on in ipairs({ false, true }) do
+            local failed = build(40, { log = mine({ isFailed = true }), routeEscort = on })
+            eq({ failed.status, failed.detail }, { "escort", "failed: abandon it and take it again" })
+            eq(indexOf(plan({ log = mine({ isFailed = true }), routeEscort = on }), "T:40"), nil)
+        end
     end)
 
     test("a skipped quest stays out, but once it is complete in the log its turn-in is planned", function()
@@ -730,6 +777,66 @@ H.suite("Planner", function()
         local done = plan({ { id = 1, isComplete = true, objectives = { { have = 10, need = 10, finished = true } } } })
         ok(indexOf(done, "T:1"), "done anyway: turn it in")
         eq(listed(done.lists.ignored), {})
+    end)
+
+    test("a quest you have taken is held, whatever its kind; a failed one is not", function()
+        local ns = load(function(data)
+            data.quests[30] = quest({ name = "Preserving Knowledge", level = 14, min = 6, xp = 9000, starts = "n100", ends = "n100",
+                objectives = "c206:5:C" })
+            data.npcs[206] = "Librarian|9|9|0|0||" .. camp(1, 15, 85)
+            data.quests[40] = quest({ name = "Walk the Peddler", xp = 900, flags = "s", starts = "n100", ends = "n100", objectives = "e:1:Q" })
+            data.questSpots[40] = { [1] = S(1, 55, 55) }
+        end)
+        local function entry(id, extra)
+            local e = { id = id, isComplete = false, objectives = { { have = 0, need = 1, finished = false } } }
+            for k, v in pairs(extra or {}) do e[k] = v end
+            return e
+        end
+        local function build(id, log) return ns.Model.Build(id, ns.Zones.Context(state({ log = log }))) end
+        eq(build(10, { entry(10) }).taken, true)
+        eq(build(10, { entry(10, { isFailed = true }) }).taken, nil)
+        eq(build(10, {}).taken, nil)
+        -- Slow Crawl pays too little to be worth the walk: left out, unless you took it
+        local function plan10(log) return ns.Zones.PlanZone(1, ns.Zones.Context(state({ log = log }))) end
+        ok(has(listed(plan10({}).lists.skipped), 10), "not taken: left out as slow")
+        local mine = plan10({ entry(10, { objectives = { { have = 0, need = 10, finished = false } } }) })
+        ok(indexOf(mine, "T:10"), "taken: routed")
+        ok(not has(listed(mine.lists.skipped), 10), "taken: not left out")
+        local failed = plan10({ entry(10, { isFailed = true, objectives = { { have = 0, need = 10, finished = false } } }) })
+        eq(indexOf(failed, "T:10"), nil)
+        ok(has(listed(failed.lists.skipped), 10), "failed: weighed as before, left out")
+        -- the held route takes them all: a red quest, an escort and an elite quest, with the options off
+        local function ctx(log) return ns.Zones.Context(state({ routeElite = false, log = log })) end
+        local base = ns.Zones.PlanZone(1, ctx({}))
+        local log = { entry(30, { level = 14, objectives = { { have = 0, need = 5, finished = false } } }), entry(40), entry(6) }
+        local held = ns.Zones.PlanZone(1, ctx(log), base.order, nil, { hold = true })
+        for _, k in ipairs({ "T:30", "T:40", "T:6" }) do ok(indexOf(held, k), k .. " is held") end
+        local seeded, kept = {}, {}
+        for _, k in ipairs(base.order) do seeded[k] = true end
+        for _, k in ipairs(held.order) do if seeded[k] then kept[#kept + 1] = k end end
+        eq(kept, base.order, "the route held stays in its order")
+        -- a quest of another zone is the business of that zone's plan
+        local other = { entry(20, { objectives = { { have = 0, need = 6, finished = false } } }) }
+        local one = ns.Zones.PlanZone(1, ns.Zones.Context(state({ log = other })))
+        eq({ indexOf(one, "T:20"), indexOf(one, "W:m210") }, {})
+        ok(indexOf(ns.Zones.PlanZone(2, ns.Zones.Context(state({ log = other, map = 2 }))), "T:20"))
+    end)
+
+    test("a taken quest whose turn-in no database knows is turned in at its giver", function()
+        local ns = load(function(data)
+            data.quests[70] = quest({ name = "Lost Letter", xp = 700, starts = "n100", ends = "", objectives = "c200:3:C" })
+        end)
+        local function plan(log) return ns.Zones.PlanZone(1, ns.Zones.Context(state({ log = log }))) end
+        local fresh = plan({})
+        ok(indexOf(fresh, "P:70") and indexOf(fresh, "T:70"), "not taken: accepted and turned in at the giver")
+        local mine = plan({ { id = 70, isComplete = false, objectives = { { have = 0, need = 3, finished = false } } } })
+        local at = indexOf(mine, "T:70")
+        ok(at, "taken: still turned in")
+        local loc = mine.steps[at].loc
+        ok(loc and loc.map == 1, "at the giver on map 1")
+        near(loc.mx, 50, 0.5)
+        near(loc.my, 50, 0.5)
+        ok(not has(listed(mine.lists.unlocated), 70), "not listed as unlocated")
     end)
 
     test("drops are split between the members who are on the quest", function()
@@ -1016,6 +1123,20 @@ H.suite("Dungeons", function()
         end
         eq(indexOf(plan(false), "T:40"), nil, "not finished: not this dungeon's quest, left out")
         ok(indexOf(plan(true), "T:40"), "finished: turned in")
+    end)
+
+    test("a dungeon quest you have taken is not dropped from its dungeon's plan as slow", function()
+        local ns = load(function(data)
+            data.npcs[130] = "Far Clerk|10|10|0|2|A|" .. S(3, 50, 50)
+            data.quests[60] = quest({ name = "Far Errand", xp = 20, flags = "d", starts = "n100", ends = "n130", objectives = "c201:1:C" })
+            data.world.dungeons[900].quests = "5,15,60"
+        end)
+        local function plan(log) return ns.Zones.PlanZone(-900, ns.Zones.Context(state({ log = log }))) end
+        local fresh = plan({})
+        eq(indexOf(fresh, "T:60"), nil)
+        eq(listed(fresh.lists.skipped), { 60 }, "worth too little: left out as slow")
+        local mine = plan({ { id = 60, isComplete = false, objectives = { { have = 0, need = 1, finished = false } } } })
+        ok(indexOf(mine, "T:60"), "taken: part of the dungeon's plan")
     end)
 
     test("a dungeon waits for the level its quests ask for", function()

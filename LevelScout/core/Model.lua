@@ -100,13 +100,15 @@ end
 --- Build the model of one quest for this character.
 --- ctx = { level, xpBonus (0.05 = +5% from buffs), pace, drops, dropBias (own drop counts and what they say about each data source, see ns.Learn; optional), near (location), log = { [questId] = log entry },
 ---         tagOf = function(questId) -> "dungeon"|"raid"|"elite"|nil (optional) }
+--- The model has `taken` when the quest is in the log and has not failed.
 --- Returns nil for an unknown quest. `status` is "ok", or why the quest is not routed:
 ---   "dungeon"   dungeon or raid quest (planned only under its dungeon, or once it is complete:
 ---               then only its turn-in is left)
----   "group"     elite quest, when ctx.routeElite is off (otherwise it is routed, `elite` set)
----   "escort"    escort quest, when ctx.routeEscort is off (otherwise it is routed; its escort
----               stop has escort = true)
----   "later"     needs a higher level (`needLevel`)
+---   "group"     elite quest, when ctx.routeElite is off and the quest is not taken (otherwise it
+---               is routed, `elite` set)
+---   "escort"    escort quest, when ctx.routeEscort is off and it is not taken, or failed in the log
+---               whatever the option (otherwise it is routed; its escort stop has escort = true)
+---   "later"     needs a higher level (`needLevel`; a red quest only when not taken)
 ---   "excluded"  repeatable, daily, weekly or seasonal
 ---   "unconfirmed" no player data shows the quest exists in Forever (see Model.Unconfirmed)
 ---   "item"      starts from an item
@@ -116,8 +118,10 @@ function Model.Build(questId, ctx)
     local q = Data.GetQuest(questId)
     if not q then return nil end
     local entry = ctx.log and ctx.log[questId] or nil
+    -- Taken: in the log and not failed (a failed quest has to be abandoned and taken again).
+    local taken = entry ~= nil and not entry.isFailed
     local m = { id = questId, name = q.name, level = q.level, minLevel = q.minLevel, zone = q.zone,
-        inLog = entry ~= nil, tasks = {}, status = "ok", quest = q, lv = ctx.level }
+        inLog = entry ~= nil, taken = taken or nil, tasks = {}, status = "ok", quest = q, lv = ctx.level }
 
     local tag = ctx.tagOf and ctx.tagOf(questId) or nil
     if tag == nil then tag = Data.GetQuestTag(questId) end
@@ -141,8 +145,15 @@ function Model.Build(questId, ctx)
             return m
         end
     end
+    local asElite = false
     if tag == "elite" then
-        if ctx.routeElite then m.elite = true else m.status = "group" end
+        if ctx.routeElite then
+            m.elite = true
+        elseif taken then
+            m.elite, asElite = true, true
+        else
+            m.status = "group"
+        end
     end
     -- An escort is listed, not routed, unless ctx.routeEscort is on. Complete in the log, only
     -- its turn-in is left: planned like any other. (Decided below, once its stops are known.)
@@ -154,11 +165,15 @@ function Model.Build(questId, ctx)
         local others = ctx.partyOn(questId)
         if others then ctx.share, m.share = 1 + others, 1 + others end
     end
-    -- A red quest (5 or more levels above us) waits, also when it is already in the log: its
-    -- targets are meant for a higher level whatever the data says about them. Once it is
-    -- complete, only the turn-in is left and that is planned.
+    -- A taken elite quest is built as with the option on (killTask and Model.Task read
+    -- ctx.routeElite). Made after the share above is set: the rest reads it through the proxy.
+    if asElite then ctx = setmetatable({ routeElite = true }, { __index = ctx }) end
+    -- A red quest (5 or more levels above us) waits, unless it is taken: one in the log is
+    -- planned, and its mobs' level is in the kill times. A taken quest whose own targets are
+    -- too strong still waits (task.tooHigh below). Once it is complete, only the turn-in is
+    -- left and that is planned.
     local shownLevel = (entry and type(entry.level) == "number" and entry.level > 0) and entry.level or q.level
-    if shownLevel - ctx.level >= Cost.RED_QUEST and not (entry and entry.isComplete) then
+    if shownLevel - ctx.level >= Cost.RED_QUEST and not taken and not (entry and entry.isComplete) then
         m.status, m.needLevel, m.detail = "later", shownLevel - Cost.RED_QUEST + 1, "red quest"
         -- the planner may still take it along when its work is in a camp we visit anyway (not an
         -- escort while escorts are listed only)
@@ -218,6 +233,15 @@ function Model.Build(questId, ctx)
     m.turnin, m.turninName = giverLoc(q.spots.finish, q.finishers, q.zone, m.pickup or ctx.near)
     if not m.turnin and inDungeon then
         m.turnin, m.turninName = D.loc, (m.turninName or "inside") .. " (in " .. D.name .. ")"
+    end
+    if not m.turnin and entry and not m.pickup then
+        -- (in the log: no pickup is planned, but the turn-in is guessed at the giver, as before it was taken)
+        local onlyItems = #q.starters > 0
+        for _, g in ipairs(q.starters) do if g.kind ~= "item" then onlyItems = false end end
+        if not onlyItems then
+            local giver, giverName = giverLoc(q.spots.start, q.starters, q.zone, ctx.near)
+            if giver then m.turnin, m.turninName, m.turninGuessed = giver, giverName, true end
+        end
     end
     if not m.turnin then
         if m.pickup then
@@ -296,15 +320,19 @@ function Model.Build(questId, ctx)
         for _, t in ipairs(m.tasks) do if not hasEvent or t.kind == "event" then at = t; break end end
         if at then
             local seconds, wait = Cost.EscortSeconds(questId)
+            if taken then seconds, wait = seconds - wait, 0 end -- (the NPC was caught when it was taken)
             at.escort = true
             if at.kills and at.cycle then
                 at.wait = max(at.wait or 0, seconds - at.kills * at.cycle)
             else
                 at.seconds = seconds
             end
-            if not ctx.routeEscort and m.status == "ok" then
+            local failed = entry ~= nil and not taken -- (in the log, failed: the NPC died)
+            if m.status == "ok" and (failed or not (ctx.routeEscort or taken)) then
                 m.status = "escort"
-                if wait > 0 then
+                if failed then
+                    m.detail = "failed: abandon it and take it again"
+                elseif wait > 0 then
                     m.detail = "the NPC must be caught on its way: about " .. math.floor(wait / 60 + 0.5) .. " minutes' wait"
                 end
             end
