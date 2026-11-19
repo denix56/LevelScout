@@ -906,7 +906,7 @@ end
 --- `was` the previous answer, `itinerary` from Zones.Itinerary, `commit` chardb.commit (both
 --- optional). Returns { suggest, map, gain, rate, reached }. In this order:
 ---   1. Nothing left here: the zone the itinerary goes to next (else the best ranked zone with
----      something to do): { suggest = true, map }.
+---      something to do, a higher one than here first: Zones.HANDOFF): { suggest = true, map }.
 ---   2. No itinerary made for the shown zone that starts in it: no banner.
 ---   3. A clearly better start: the top of Zones.StartOrder, when it is not the shown zone and
 ---      not a rough figure, leads by more than MOVE_ON_ENTER (MOVE_ON_EXIT while it is the zone
@@ -921,7 +921,18 @@ function Zones.MoveOn(active, ranked, was, itinerary, commit)
         local to = Zones.NextZone(itinerary, here)
         if not (to and hasSteps(ranked, to)) then
             to = nil
-            for _, z in ipairs(ranked or {}) do if z.map ~= here and z.plan and #z.plan.steps > 0 then to = z.map; break end end
+            -- (Zones.HANDOFF) a zone higher than this one first, by the ranking's level ranges; else the best
+            local mine, best
+            for _, z in ipairs(ranked or {}) do if z.map == here and not Zones.Dungeon(z.map) then mine = z end end
+            for _, z in ipairs(ranked or {}) do
+                if z.map ~= here and z.plan and #z.plan.steps > 0 then
+                    best = best or z.map
+                    if not (Zones.HANDOFF and mine) or Zones.Dungeon(z.map) or Zones.Higher(mine.lo, mine.hi, z.lo, z.hi) then
+                        to = z.map; break
+                    end
+                end
+            end
+            to = to or best
         end
         if not to then return { suggest = false } end
         return { suggest = true, map = to }
@@ -985,12 +996,20 @@ end
 -- at the level reached by then, with its quests done and the quests still in the log carried
 -- along. The one that earns most then wins, unless the order on screen is within
 -- Zones.KEEP_ITINERARY of it.
+-- A zone after the first is a higher one, entered when little is left of the zone before, that zone is
+-- nearly outgrown or the next one fits (Zones.HANDOFF, Zones.Handoff).
 
 Zones.HORIZON = 9000           -- seconds an itinerary covers (two and a half hours)
 Zones.ITINERARY_ZONES = 5      -- best-ranked zones that may appear in it
 Zones.ITINERARY_STOPS = 3      -- zones in a row at most
 Zones.LEAVE_EVERY = 900        -- a zone may be left at the first turn-in after each quarter of an hour
 Zones.MIN_STAY = 600           -- a zone is not visited for less than this (the zone on screen may be: we are in it already)
+Zones.HANDOFF = true           -- a zone after the first is a higher one, and the zone before it is left at a sensible moment (Zones.Handoff; off: as before)
+Zones.HANDOFF_RISE = 0         -- levels: a higher zone has the middle of its level range more than this above the middle of the other's
+Zones.HANDOFF_QUESTS = 3       -- a sensible moment: at most this many quests still to turn in there after the step it is left after...
+Zones.HANDOFF_NEAR_CAP = 1     -- ...or within this many levels of the top of its level range by then...
+Zones.HANDOFF_FIT = 2          -- ...or this many levels into the next zone's range on arriving there (0: in it; 2 chosen by the player)
+Zones.HANDOFF_LEVELS = 10      -- level-ups worked out for the level along the itinerary (the plans look Planner.LEVELS_AHEAD ahead)
 -- Search rounds when a later zone is planned again (nil: as many as a full plan). Measured on
 -- six characters: 40, 60 or 80 rounds cut the time to a quarter or a third but gave two of them
 -- a worse itinerary (5% and 11% less XP), so the full search is kept.
@@ -1042,6 +1061,42 @@ end
 local function since(plan, i)
     local first = plan.steps[1]
     return plan.steps[i].t - first.t + first.seconds
+end
+
+--- (Zones.HANDOFF) Is a zone of level range bLo-bHi higher than one of aLo-aHi: the middle of its range
+--- more than Zones.HANDOFF_RISE levels above the other's? True when either range is unknown.
+function Zones.Higher(aLo, aHi, bLo, bHi)
+    if not (aLo and aHi and bLo and bHi) then return true end
+    return (bLo + bHi) / 2 > (aLo + aHi) / 2 + Zones.HANDOFF_RISE
+end
+
+--- The level after `gained` XP more, with the share of that level done (22.4: level 22, 40% of the way to
+--- 23). `level` and `xp` (XP into it) are where it starts, `ups` = Cost.LevelUps from there. Past the last
+--- level-up in `ups` (the level cap, or further than they were worked out): that level, whole. nil without a level.
+function Zones.LevelAt(ups, level, xp, gained)
+    if type(level) ~= "number" then return nil end
+    local d = 0
+    while ups[d + 1] and gained >= ups[d + 1] do d = d + 1 end
+    local hi = ups[d + 1]
+    if not hi then return level + d end
+    local lo = d > 0 and ups[d] or -math.max(0, tonumber(xp) or 0)
+    return level + d + math.max(0, math.min(1, (gained - lo) / math.max(1, hi - lo)))
+end
+
+--- (Zones.HANDOFF) May an itinerary go on to zone `to` after leaving zone `from` (maps; `side` as ctx.side)?
+--- `left` = the quests `from`'s route still turns in after the step it is left after; `lvLeave` = the level
+--- then and `lvArrive` = on arriving in `to` (Zones.LevelAt; the same unless a dungeon is between). True with
+--- the rule off, when either is a dungeon, or when either has no level range. Otherwise `to` must be higher
+--- (Zones.Higher), and `from` left at a sensible moment: at most Zones.HANDOFF_QUESTS turn-ins left there,
+--- within Zones.HANDOFF_NEAR_CAP levels of the top of its range, or Zones.HANDOFF_FIT levels into `to`'s on arriving.
+function Zones.Handoff(from, to, side, left, lvLeave, lvArrive)
+    if not Zones.HANDOFF or Zones.Dungeon(from) or Zones.Dungeon(to) then return true end
+    local a, b = Zones.Info(from, side), Zones.Info(to, side)
+    if not (a and a.lo and a.hi and b and b.lo and b.hi) then return true end
+    if not Zones.Higher(a.lo, a.hi, b.lo, b.hi) then return false end
+    if (left or 0) <= Zones.HANDOFF_QUESTS then return true end
+    if lvLeave and lvLeave >= a.hi - Zones.HANDOFF_NEAR_CAP then return true end
+    return lvArrive ~= nil and lvArrive >= b.lo + Zones.HANDOFF_FIT
 end
 
 -- (for the quests taken along, Zones.Itinerary)
@@ -1362,6 +1417,9 @@ end
 ---                     without it) }
 --- The zone on screen is the one in hand: as an itinerary's first zone it may be left however
 --- little is left in it (Zones.MIN_STAY is for zones that take a trip to reach).
+--- A zone after the first is a higher one than the zone before it that is not a dungeon, entered at a
+--- sensible moment (Zones.HANDOFF, Zones.Handoff). When the shown zone has nothing left, the path starts in
+--- a zone higher than it if one has an itinerary (else anywhere, as before).
 --- Returns nil when nothing can be planned, else
 ---   { horizon, xp, rate (XP per hour over the horizon), stay = XP of the best single zone,
 ---     pathRate = XP per hour of the path over the horizon (the shown zone's figure of `starts`),
@@ -1471,6 +1529,39 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         points[#points + 1] = at
         table.sort(points)
     end
+    -- Moving on (Zones.HANDOFF, Zones.Handoff): a zone after the first must be a higher one, and the zone before
+    -- it left at a sensible moment. The level along the itinerary is worked out from its start with the XP of
+    -- everything before (further ahead than ctx.levelUps: Zones.HANDOFF_LEVELS).
+    local handUps = Cost.LevelUps(state.level, state.xp, state.xpMax, Zones.HANDOFF_LEVELS, state.maxLevel) or {}
+    local function levelAt(gained) return Zones.LevelAt(handUps, state.level, state.xp, gained) end
+    local turnsAfter = {} -- [plan] = { [i] = quests it turns in after step i }
+    local function leftAfter(plan, i)
+        local c = turnsAfter[plan]
+        if not c then
+            c = {}
+            local n, steps = 0, plan.steps
+            for k = #steps, 1, -1 do
+                c[k] = n
+                if steps[k].kind == "turnin" then n = n + #(steps[k].quests or {}) end
+            end
+            turnsAfter[plan] = c
+        end
+        return c[i] or 0
+    end
+    -- may the itinerary go on to zone B after segs[1 .. depth-1], with `xp` earned on arriving there?
+    -- (a dungeon is no zone here: B may be one after anything; the zone left is the last one before B that
+    -- is not a dungeon, none: B may follow)
+    local function mayGo(segs, depth, B, xp)
+        if Zones.Dungeon(B) then return true end
+        local j, xpA = depth - 1, xp
+        while j >= 1 and Zones.Dungeon(segs[j].map) do xpA, j = xpA - segs[j].xp, j - 1 end
+        if j < 1 then return true end
+        local a = segs[j]
+        return Zones.Handoff(a.map, B, ctx.side, leftAfter(a.plan, a.leave), levelAt(xpA), levelAt(xp))
+    end
+    -- (the shown zone when it has nothing left: the path then starts in a higher zone if one has an
+    -- itinerary; set only while that path is picked, see below)
+    local above
 
     -- Try every order (or only `order`, a list of maps; or only those starting in `first`),
     -- every leave point (or only `fixed[n]` for the n-th zone: then at least two zones), with `swap[map]` in place of
@@ -1478,12 +1569,16 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     -- plan when it is the first zone.
     -- With `top` ({ by = {}, list = {} }) the best itinerary for each pair of first two zones is
     -- collected in `top.list`, in first-seen order.
+    -- A zone after the first comes only where Zones.Handoff allows it (Zones.HANDOFF); while `above` is set,
+    -- the first zone only when higher than that.
     local function search(order, fixed, swap, depthMax, first, leadPlans, top)
         local best
         local segs, used = {}, {}
         local function go(depth, time, xp, loc, ready)
             for _, z in ipairs(zones) do
-                if not used[z.map] and (not order or order[depth] == z.map) and (depth > 1 or not first or first == z.map) then
+                if not used[z.map] and (not order or order[depth] == z.map) and (depth > 1 or not first or first == z.map)
+                    and (depth > 1 or not above or Zones.Handoff(above, z.map, ctx.side, 0))
+                    and (depth == 1 or not Zones.HANDOFF or mayGo(segs, depth, z.map, xp)) then
                     local plan = (depth == 1 and leadPlans and leadPlans[z.map]) or (swap and depth > 1 and swap[z.map]) or z.plan
                     local first = plan.steps[1]
                     local hl = depth > 1 and Zones.HearthLead(loc, plan) or nil
@@ -1622,7 +1717,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
         local cands = top.list
         table.sort(cands, function(a, b) if a.xp ~= b.xp then return a.xp > b.xp end return a.at < b.at end)
         local alone = single
-        if first then alone = search(nil, nil, nil, 1, first) end
+        if first or above then alone = search(nil, nil, nil, 1, first) end
         local kept
         if keptOrder and (not first or keptOrder[1] == first) then
             local raw
@@ -1639,7 +1734,15 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     local mine = opts.shown and pick(opts.shown) or nil
     local best = mine
     if not (mine and Zones.PIN_SHOWN) then
-        local any = pick(nil)
+        local any
+        -- (Zones.HANDOFF) the shown zone has nothing left: a zone higher than it first, when one has an
+        -- itinerary; else wherever pays best, as before
+        if Zones.HANDOFF and opts.shown and not mine then
+            above = opts.shown
+            any = pick(nil)
+            above = nil
+        end
+        any = any or pick(nil)
         if any and not (mine and mine.xp >= any.xp) then best = any end
     end
     if not best then return nil end

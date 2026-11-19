@@ -1199,6 +1199,20 @@ H.suite("Zones", function()
         eq(Z.MoveOn(used, ranked, nil), { suggest = false }, "nothing anywhere")
     end)
 
+    test("move-on when nothing is left here: a higher zone first (Zones.HANDOFF)", function()
+        local Z = load().Zones
+        local function plan(score, zone) return { score = score, zone = zone, steps = { {} } } end
+        local ranked = { { map = 2, lo = 3, hi = 7, plan = plan(1300, 2) }, { map = 3, lo = 9, hi = 14, plan = plan(1200, 3) },
+            { map = 1, lo = 5, hi = 10, plan = plan(1000, 1) } }
+        local used = { score = 0, zone = 1, steps = {} }
+        eq(Z.MoveOn(used, ranked, nil), { suggest = true, map = 3 }, "the best ranked higher zone, not the best ranked")
+        ranked[2].plan.steps = {}
+        eq(Z.MoveOn(used, ranked, nil), { suggest = true, map = 2 }, "no higher zone with something to do: the best ranked")
+        ranked[2].plan.steps = { {} }
+        Z.HANDOFF = false
+        eq(Z.MoveOn(used, ranked, nil), { suggest = true, map = 2 }, "the rule off: as before")
+    end)
+
     test("Zones.Choose: the best of the first few planned again, the order on screen kept within 5%", function()
         local Z = load().Zones
         local function it(xp, maps)
@@ -1705,6 +1719,74 @@ H.suite("Quests across a border", function()
         end
         ok(result, "it finishes")
         ok(yields > 0, "and yields on the way")
+    end)
+end)
+
+H.suite("Moving on to a higher zone", function()
+    -- the next hours from zone 1 (as the border suite's `hours`), zone 2's level range as given
+    local function hours(range)
+        local ns = load(function(data)
+            borderWorld(data)
+            if range then data.world.zones[2] = "0|C|s|" .. range .. "||0|5,5|||Fort~b~20~50~10~6~12|" end
+        end)
+        ns.Zones.SEAM, ns.Zones.BORDER = false, false -- (the plain itinerary)
+        local function run(plan)
+            local st = state()
+            local ctx = ns.Zones.Context(st)
+            local ranked = ns.Zones.Rank(ctx)
+            return ns.Zones.Itinerary(st, ns.Zones.Context(st), ranked, { shown = 1, plan = plan or ns.Zones.PlanZone(1, ctx) })
+        end
+        return ns, run
+    end
+
+    test("the level along the itinerary, with the share of the level done", function()
+        local Z, ups = load().Zones, { 1000, 3000, 6000 }
+        near(Z.LevelAt(ups, 10, 500, 0), 10 + 500 / 1500, 1e-9, "where it starts: 500 of 1500")
+        near(Z.LevelAt(ups, 10, 500, 1000), 11, 1e-9, "the next level reached")
+        near(Z.LevelAt(ups, 10, 500, 2000), 11.5, 1e-9)
+        eq(Z.LevelAt(ups, 10, 500, 9000), 13, "past the last level-up worked out: that level")
+        eq(Z.LevelAt({}, 60, 0, 5000), 60, "at the cap")
+    end)
+
+    test("a higher zone, left at a sensible moment", function()
+        local ns = load(function(data)
+            data.world.zones[4] = "0|C|s|10-17||0|0,0||||"
+            data.world.zones[5] = "0|C|s|15-25||0|0,0||||"
+            data.world.zones[6] = "0|C|s|10-17||0|0,0||||"
+        end)
+        local Z = ns.Zones
+        eq(Z.Handoff(5, 4, "a", 0, 20, 20), false, "never down")
+        eq(Z.Handoff(4, 6, "a", 0, 16, 16), false, "the same range is not higher")
+        eq(Z.Handoff(4, 5, "a", 9, 14.5, 14.5), false, "quests left, far from the top, short of the next range")
+        eq(Z.Handoff(4, 5, "a", 3, 14.5, 14.5), true, "little left")
+        eq(Z.Handoff(4, 5, "a", 9, 16, 16), true, "a level from the top of 10-17")
+        eq(Z.Handoff(4, 5, "a", 9, 15, 15), false, "in 15-25 by then, but not two levels into it")
+        eq(Z.Handoff(4, 5, "a", 9, 17, 17), true, "two levels into 15-25 by then")
+        eq(Z.Handoff(4, 5, "a", 9, 14.5, 17.2), true, "two levels into it on arriving (a dungeon between)")
+        eq(Z.Handoff(5, -900, "a", 9, 10, 10), true, "a dungeon is no zone here")
+        eq(Z.Handoff(-900, 4, "a", 9, 10, 10), true)
+        Z.HANDOFF = false
+        eq(Z.Handoff(5, 4, "a", 9, 10, 10), true, "the rule off")
+    end)
+
+    test("the itinerary does not move on to a lower zone; with the rule off, as before", function()
+        local _, run = hours()
+        local up = run()
+        eq(up.segments[2] and up.segments[2].map, 2, "6-12 after 5-10: higher, and two levels into its range at level 8")
+        local ns, runLow = hours("3-7")
+        local down = runLow()
+        ok(down, "an itinerary")
+        for i = 2, #down.segments do ok(down.segments[i].map ~= 2, "3-7 is lower than 5-10") end
+        ns.Zones.HANDOFF = false
+        local off = runLow()
+        eq(off.segments[2] and off.segments[2].map, 2, "the rule off: on to zone 2 as before")
+    end)
+
+    test("a zone with nothing left still gets a next zone when only a lower one has something", function()
+        local ns, run = hours("3-7")
+        local it = run({ zone = 1, steps = {}, order = {} })
+        ok(it and it.segments[1].map == 2, "no higher zone: wherever pays, as before")
+        eq(ns.Zones.NextZone(it, 1), 2)
     end)
 end)
 
