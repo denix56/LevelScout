@@ -1,5 +1,14 @@
 # LevelScout
 
+## Unreleased
+
+- **For developers: the hearthstone in the plan (off)**: with `Planner.HEARTH` on, a route uses the
+  hearthstone on the first trip it shortens by 2 minutes or more, once the stone is ready, and the
+  next hours carry its cooldown from zone to zone. The route's order does not change; its times, the
+  zone ranking and the next hours see the time saved. The bench binds each character in its town
+  (`SET="hearth:Planner.HEARTH=true"`, `BIND=capital`, `HEARTH_READY=`). Nothing in the game reads
+  the stone yet, and with the flag off plans are unchanged.
+
 ## 0.2.0
 
 - **Quests that end in the next zone are taken along**: when the next hours go on to another

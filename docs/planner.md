@@ -328,7 +328,8 @@ Each zone's route is planned for that zone alone, and the itinerary strings them
 - **Who is on the quest**: for a quest in your log, the game is asked which party members are on
   it, and drops are split between those only. For quests not yet accepted, every member is
   assumed to take them. Not available in a raid.
-- **Hearthstone** as a free return trip.
+- **Hearthstone**: built behind `Planner.HEARTH` (off); see "The hearthstone". Not built: reading it in the
+  game, suggesting where to bind it, and other teleports.
 - **Death risk**: only the cutoff exists (mobs 4+ levels above wait for later).
 - **Town trips** (vendor, repair, trainer).
 - **Mount speed** as a figure of its own: travel starts from ForeverDB's observed run speed for the
@@ -542,6 +543,37 @@ Limits and unknowns:
   cannot be missed: `/ls buffs` lists every buff with its id and description, to find out why.
 - The window's footer shows "Rested" and "+N% XP" when they apply; the XP-per-hour tooltip names
   the buffs.
+
+## The hearthstone (`Planner.HEARTH`)
+
+**Off by default** (`Planner.HEARTH = false`): not benched yet, and not tried in the game. Nothing in the
+game reads the stone yet; only the planner, the bench and the tests know it (`state.hearth`).
+
+The route is searched as before. When it is described, the stone is used on it: on the first leg, once the
+stone is ready, that it makes at least `Planner.HEARTH_MIN_SAVE` (2 minutes) shorter. Such a leg is the cast and
+the loading screen (`HEARTH_CAST`, 10 s, or what the game says; `HEARTH_LOAD`, 20 s), then the way from where
+the stone is bound. Each use starts the cooldown again (`HEARTH_COOLDOWN`, an hour, or what the game has shown).
+
+- **What it changes**: the times of the steps, so the score, the moment to leave, the slow tail, the zone
+  ranking, the next hours and the banner. Not the order of a route: the search, the insertion of stops and the
+  tidy-up do not see the stone. Without a search a zone's route is the same with and without it.
+- **Why not in the search**: a prototype used the same rule in every evaluation the search makes. The search then
+  took other paths, and the next hours earned no more (+0.3%, 5 of 16 characters lower).
+- **The stone's state** (`state.hearth`, `ctx.stone` from `Zones.Stone`): where it takes you, the seconds until it
+  is ready (rounded up to 30 s, `HEARTH_READY_STEP`), the cooldown, the cast. It is part of the plan memory's
+  key and of a snapshot. A plan with a use has `plan.hearth` (`uses`, `from`) and the step has `hearth`.
+- **Across zones**: `Zones.Project` carries the cooldown on to the next zone. A later zone planned again from where
+  the zone before is left, whose first leg is the stone, has that leg as its trip (`Zones.HearthLead`). The
+  choice of zones and their order is still made with trips on foot and by air.
+- **Measured** (prototype; bound in the character's town, ready; 16 characters, 2 salts): about one use per
+  itinerary, 200 s saved of 2.5 hours, itinerary XP +0.7% (SE 0.3). Bound in the side's capital: +1.8%. A
+  shorter cooldown, a later ready time or a longer cast gained less. Using the stone on the leg that saves most,
+  instead of the first, gained less too. The bench itself has not run it yet.
+- **Bench**: `SET="hearth:Planner.HEARTH=true"`; `BIND=town|capital|none` (default town: the hub of the side
+  nearest to the character), `HEARTH_READY=` (seconds), `HEARTH_CD=`. Every config gets the same `state.hearth`;
+  it is used only where the flag is on. A "HEARTH" line gives the uses and the seconds saved.
+- **Limits**: the stone goes on the first leg that is good enough, not the best one. Where to bind is not
+  suggested. Other teleports (Astral Recall, mage teleports) are not used.
 
 ## Which zones are offered (`Zones.Shortlist`)
 
