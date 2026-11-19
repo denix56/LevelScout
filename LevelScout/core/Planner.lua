@@ -1485,6 +1485,7 @@ local function collect(zoneMap, ctx, lists, also)
             reds[#reds + 1] = m -- decided below, once we know where the plan goes
         elseif m.status == "later" then later(m)
         elseif m.status == "group" then lists.group[#lists.group + 1] = listEntry(m)
+        elseif m.status == "escort" then lists.escort[#lists.escort + 1] = listEntry(m)
         elseif m.status == "unconfirmed" then lists.unconfirmed[#lists.unconfirmed + 1] = listEntry(m)
         elseif m.status == "unlocated" or m.status == "item" then lists.unlocated[#lists.unlocated + 1] = listEntry(m)
         end
@@ -1776,6 +1777,7 @@ local function describe(r, plan)
             step.quests, step.parts = {}, {}
             local listed = {}
             for _, req in ipairs(node.reqs) do
+                if req.task.escort then step.escort = true end
                 if not listed[req.quest.id] then
                     listed[req.quest.id] = true
                     step.quests[#step.quests + 1] = { id = req.quest.id, name = req.quest.name, level = req.quest.level }
@@ -1921,7 +1923,7 @@ end
 function Planner.Plan(zoneMap, ctx, opts)
     opts = opts or {}
     local checkpoint = ctx.checkpoint
-    local lists = { later = {}, group = {}, skipped = {}, unlocated = {}, ignored = {}, unconfirmed = {} }
+    local lists = { later = {}, group = {}, escort = {}, skipped = {}, unlocated = {}, ignored = {}, unconfirmed = {} }
     ctx.near = ctx.near or ctx.start
     local candidates, _, inputs = collect(zoneMap, ctx, lists, opts.seam and opts.seam.also)
     -- Quests taken along to the next zone (opts.border, with a seed: Zones.Itinerary and

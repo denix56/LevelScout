@@ -25,7 +25,7 @@ local COUNT_SOURCE = { C = "CMaNGOS", F = "ForeverDB", Q = "QuestieDB" }
 local XP_SOURCE = { f = "ForeverDB", q = "QuestieDB" }
 local RATE_SOURCE = { f = "ForeverDB", c = "QuestieDB correction", m = "CMaNGOS", w = "Wowhead", k = "CMaNGOS" }
 local FLAG = { d = "dungeon", r = "raid", g = "group", p = "repeatable", y = "daily", w = "weekly",
-    n = "new", u = "unseen", v = "event" }
+    n = "new", u = "unseen", v = "event", s = "escort" }
 
 ---------------------------------------------------------------------------------------------
 -- Helpers

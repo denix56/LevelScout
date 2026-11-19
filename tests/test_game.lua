@@ -473,10 +473,15 @@ H.suite("Engine and window (real data)", function()
         eq(#M.timers, 1, "a member's log changed: re-plan")
         ok(M.settle())
         ok(ns.Engine.RoutesElite(), "group quests are routed by default")
+        ok(not ns.Engine.RoutesEscort(), "escort quests are listed by default")
         M.clock = M.clock + 5000
         ns.Engine.SetRouteElite(false)
         ok(M.settle())
         eq(LevelScoutCharDB.routeElite, false)
         for _, s in ipairs(ns.Engine.view.plan.steps) do ok(not s.group, "no group steps when listed only") end
+        M.clock = M.clock + 5000
+        ns.Engine.SetRouteEscort(true)
+        ok(M.settle())
+        eq(LevelScoutCharDB.routeEscort, true)
     end)
 end)

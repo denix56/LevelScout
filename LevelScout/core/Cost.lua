@@ -29,6 +29,22 @@ end
 Cost.INTERACT_SECONDS = 8     -- accepting or turning in a quest
 Cost.RESPAWN_SECONDS = 300    -- a mob is back about this long after it dies
 Cost.SINGLE_SPAWN_WAIT = 60   -- a named, single-spawn target is often dead when you arrive
+
+-- An escort: an NPC walked somewhere, or kept alive through a scripted fight (Data flag
+-- "escort"). An assumption, not a measurement. The way from its giver to where it ends is
+-- travel like any other. This is what the escort adds: the NPC walks slower than you run,
+-- there are ambushes, and the NPC may be out with another player when you arrive.
+Cost.ESCORT_SECONDS = 300
+-- Escorts whose NPC must be caught on its way: the wait on top, on average, by quest id.
+-- The Gizelton Caravan sets out about once an hour, and the two quests are about half an
+-- hour apart (warcraft.wiki.gg). Arriving at a random time: half an hour.
+Cost.ESCORT_WAIT = { [5821] = 1800, [5943] = 1800 }
+
+--- Seconds an escort quest's escort takes, and the wait for its NPC among them.
+function Cost.EscortSeconds(questId)
+    local wait = Cost.ESCORT_WAIT[questId] or 0
+    return Cost.ESCORT_SECONDS + wait, wait
+end
 Cost.DEFAULT_COUNT = { kill = 8, item = 6, object = 4, event = 1, other = 1 }
 Cost.DEFAULT_PACE = { c = 30, i = 25, o = 25, e = 120, x = 60, r = 7 }
 

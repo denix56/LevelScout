@@ -1,5 +1,14 @@
 # LevelScout
 
+## Unreleased
+
+- **Escort quests are listed, not routed**: quests where you walk an NPC somewhere or keep it alive
+  through an attack (Missing In Action, Protecting the Shipment, the Gizelton Caravan) take minutes
+  and fail when the NPC dies. They now show under "Escort quests" on the Quests tab. "Escort quests:
+  in the route" in the options plans them again; the choice is saved with the character. When
+  planned, an escort counts 5 minutes (it was 2), and the two Gizelton Caravan quests half an hour
+  more: the caravan sets out about once an hour. Quests that follow an escort wait until it is done.
+
 ## 0.2.0
 
 - **Quests that end in the next zone are taken along**: when the next hours go on to another

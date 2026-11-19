@@ -272,6 +272,16 @@ H.suite("Generated data", function()
         eq({ Data.IsAvailable(7, { faction = "Horde", raceId = 2, class = "WARRIOR", completed = { [783] = true }, inLog = {} }) }, { false, "race" })
     end)
 
+    test("known facts: escort quests", function()
+        local Data = init()
+        for _, id in ipairs({ 219, 309, 5821, 5943, 1560, 6641 }) do
+            ok(Data.GetQuest(id).flags.escort, "quest " .. id .. " is an escort")
+        end
+        for _, id in ipairs({ 754, 1640, 4492, 1144 }) do
+            eq(Data.GetQuest(id).flags.escort, nil, "quest " .. id .. " is not")
+        end
+    end)
+
     test("world tables: pace, XP curve, travel, zones, enums", function()
         local Data = init()
         local w = Data.World()

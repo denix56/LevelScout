@@ -70,6 +70,26 @@ Merge.band = band
 
 local function hasFlag(v, flag) return v ~= nil and v % (2 * flag) >= flag end
 
+-- QuestieDB marks nearly every escort "party accept" but also short scripted events; the
+-- trigger text tells them apart, and QuestieDB keeps it in English on every client. The
+-- extra ids are escorts whose trigger text does not say so: Escorting Erland, Questioning
+-- Reethe, Tooga's Quest, Guardians of the Altar, Protect Kanati Greycloud, In Dreams,
+-- Torek's Assault, Vorsha the Lasher.
+local PARTY_ACCEPT = 2
+local ESCORT_TRIGGER = { "escort", "^protect ", "^defend ", "^rescue ", "^lead ", "^help ", "^take .+ to " }
+Merge.ESCORT_EXTRA = { [435] = true, [1273] = true, [1560] = true, [4901] = true, [4966] = true,
+    [5944] = true, [6544] = true, [6641] = true }
+
+function Merge.IsEscort(id, q)
+    if Merge.ESCORT_EXTRA[id] then return true end
+    if not (q and hasFlag(q.questFlags, PARTY_ACCEPT)) then return false end
+    local text = type(q.triggerEnd) == "table" and q.triggerEnd[1]
+    if type(text) ~= "string" then return false end
+    text = text:lower()
+    for _, p in ipairs(ESCORT_TRIGGER) do if text:find(p) then return true end end
+    return false
+end
+
 local function joinIds(ids)
     local out = {}
     for _, id in ipairs(ids or {}) do out[#out + 1] = tostring(id) end
@@ -586,7 +606,8 @@ function Merge.Quest(id)
     -- flags
     local f = {}
     local cflags = qc and qc[QC.flags] or ""
-    if isDungeon(zos, cflags) then f[#f + 1] = "d" end
+    local dungeon = isDungeon(zos, cflags)
+    if dungeon then f[#f + 1] = "d" end
     if cflags:find("r", 1, true) then f[#f + 1] = "r" end
     if cflags:find("g", 1, true) then f[#f + 1] = "g" end
     if (q and hasFlag(q.specialFlags, 1)) or cflags:find("p", 1, true) then f[#f + 1] = "p" end
@@ -595,6 +616,7 @@ function Merge.Quest(id)
     if qf and qf[QF.new] == "1" then f[#f + 1] = "n" end
     if not qc and not qf then f[#f + 1] = "u" end
     if eventSorts[zos] then f[#f + 1] = "v" end
+    if not dungeon and Merge.IsEscort(id, q) then f[#f + 1] = "s" end
     r.flags = concat(f)
     r.xp, r.xpSrc = xpOf(id)
     -- givers
