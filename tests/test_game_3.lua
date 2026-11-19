@@ -349,7 +349,7 @@ H.suite("Engine and window (real data)", function()
         ok(models[1].current or models[2].current)
     end)
 
-    test("a zone that runs out hands over at once to the next zone of its itinerary", function()
+    test("a zone that runs out stays shown, and the banner names the next zone of its itinerary", function()
         local ns = start()
         local view = ns.Engine.view
         local first = view.zone
@@ -379,12 +379,24 @@ H.suite("Engine and window (real data)", function()
         ns.Engine.Replan()
         ok(M.settle())
         eq(ranks, 1, "the zones are ranked in the same job")
-        eq(view.zone, target, "the itinerary's next zone is shown")
-        eq(ns.Engine.chardb.zone, target, "and stays the shown zone")
-        ok(#view.plan.steps > 0 and view.plan.zone == target, "with its route")
-        ok(view.itinerary and view.itinerary.shown == target, "and an itinerary of its own")
+        eq(view.zone, first, "the zone stays shown")
+        eq(ns.Engine.chardb.zone, first, "and stays the chosen one")
+        eq(#view.plan.steps, 0, "with nothing left in it")
+        ok(view.itinerary and view.itinerary.shown == first, "the itinerary is made for it")
+        ok(view.itinerary.segments[1].map ~= first, "and starts elsewhere")
         eq(view.status, "ready")
-        -- without an itinerary for the finished zone: where we stand, else the best, as before
+        local m = view.moveOn
+        eq({ m.suggest, m.map, m.gain }, { true, view.itinerary.segments[1].map, nil }, "the banner names where the itinerary goes")
+        -- the route tab says so, then shows the next zone's first steps
+        ns.UI.state.tab, ns.UI.state.scroll = "route", 0
+        ns.UI.Refresh()
+        local rows = ns.UI.state.models
+        eq(rows[1].section, "Nothing left here")
+        local then_ = false
+        for _, row in ipairs(rows) do if row.section and row.section:find("^Then: ") then then_ = true end end
+        ok(then_, "followed by the next zone's heading")
+        -- without an itinerary for the finished zone: no banner is made up from the one-hour scores
+        -- except that the zone is used up: the best ranked one with something to do
         ns.Zones.PlanZone = realPlan
         ns.Engine.SetZone(first)
         ok(M.settle())
@@ -394,9 +406,11 @@ H.suite("Engine and window (real data)", function()
         ns.Engine.Replan()
         ok(M.settle())
         local best
-        for _, z in ipairs(view.ranked) do if #z.plan.steps > 0 then best = best or z.map end end
-        eq(view.zone, best, "the best zone with something to do")
-        ok(view.zone ~= first)
+        for _, z in ipairs(view.ranked) do if #z.plan.steps > 0 and z.map ~= first then best = best or z.map end end
+        eq(view.zone, first, "still the zone chosen")
+        ok(view.moveOn.suggest and view.moveOn.gain == nil, "the banner says this zone is done")
+        -- (the itinerary made for it afterwards goes where the best start is; before it, the best ranked zone)
+        ok(view.moveOn.map == best or (view.itinerary and view.moveOn.map == view.itinerary.segments[1].map))
         -- nothing anywhere: no loop of rankings, the empty route stays
         ns.Zones.PlanZone = function(map, ...)
             local p = realPlan(map, ...)
@@ -414,70 +428,82 @@ H.suite("Engine and window (real data)", function()
         ns.Zones.Rank, ns.Zones.PlanZone = realRank, realPlan
     end)
 
-    test("the path moves on: when the step the itinerary leaves the zone after is done, the next zone is shown", function()
+    test("the leave step done: the zone stays and the banner says the path is done, as planned", function()
         local ns = start()
         local view = ns.Engine.view
         local first = view.zone
         local realPlan = ns.Zones.PlanZone
-        local target, targetPlan
+        local target
         for i, z in ipairs(view.ranked) do
-            if i > 1 and z.map > 0 and z.map ~= first and z.map ~= view.here and #z.plan.steps > 0 then target, targetPlan = z.map, z.plan end
+            if i > 1 and z.map > 0 and z.map ~= first and z.map ~= view.here and #z.plan.steps > 0 then target = z.map end
         end
         ok(target, "another zone to go to")
-        local key = view.plan.order[1]
-        local function path()
-            return { horizon = 9000, xp = 1000, rate = 400, stay = 900, shown = first, here = 1000, segments = {
-                { map = first, name = "Here", travel = 0, seconds = 300, xp = 400, leave = 1, leaveKey = key },
-                { map = target, name = "Next", travel = 300, seconds = 2400, xp = 600, plan = targetPlan } } }
+        local key, step -- the first step with quests: the one the path leaves the zone after
+        for i, st in ipairs(view.plan.steps) do
+            if st.quests and #st.quests > 0 then key, step = view.plan.order[i], st; break end
         end
-        -- the leave step still ahead: the shown zone stays
-        view.itinerary = path()
+        ok(key, "a step to leave the zone after")
+        local function commit()
+            return { zone = first, hand = true, played = 0, zones = { first, target }, leaveKey = key, stay = 900 }
+        end
+        local function without(k) -- the step is gone from every plan of the zone: done
+            return function(map, ...)
+                local p = realPlan(map, ...)
+                if map == first then
+                    for i, o in ipairs(p.order) do
+                        if o == k then table.remove(p.order, i); table.remove(p.steps, i); break end
+                    end
+                end
+                return p
+            end
+        end
+        local chardb = ns.Engine.chardb
+        -- the leave step still ahead: nothing is reached
+        chardb.commit = commit()
         ns.Engine.Replan()
         ok(M.settle())
-        eq(view.zone, first, "nothing is left behind while the leave step is ahead")
-        -- the leave step is done: it is gone from every plan of the zone
-        ns.Zones.PlanZone = function(map, ...)
-            local p = realPlan(map, ...)
-            if map == first then
-                for i, k in ipairs(p.order) do
-                    if k == key then table.remove(p.order, i); table.remove(p.steps, i); break end
-                end
-            end
-            return p
-        end
-        view.itinerary = path()
+        eq(view.zone, first)
+        ok(not chardb.commit.reached, "the leave step is still ahead")
+        -- the leave step is done
+        ns.Zones.PlanZone = without(key)
+        chardb.commit = commit()
         M.printed = {}
         ns.Engine.Replan()
         ok(M.settle())
         ns.Zones.PlanZone = realPlan
-        eq(view.zone, target, "the itinerary's next zone is shown")
-        eq(ns.Engine.chardb.zone, target, "and stays the shown zone")
-        ok(#view.plan.steps > 0 and view.plan.zone == target, "with its route")
-        contains(output(), "On to ", "chat says so")
-        ok(view.itinerary and view.itinerary.shown == target, "and an itinerary of its own")
-        eq(view.itinerary.segments[1].map, target, "that starts in it")
-        -- (the banner is the new itinerary's business: it speaks only of a better start it found itself)
-        if view.moveOn.suggest then eq(view.moveOn.map, view.itinerary.alt and view.itinerary.alt.map) end
+        eq(view.zone, first, "the zone stays shown")
+        eq(chardb.zone, first)
+        ok(#view.plan.steps > 0 and view.plan.zone == first, "with its route")
+        ok(chardb.commit.reached, "the path is done here")
+        contains(output(), "as planned", "chat says so")
+        contains(output(), "right-click it to stay")
+        local m = view.moveOn
+        ok(m.suggest, "the banner is up")
+        -- (a clearly better start of the new itinerary may be named instead)
+        if m.reached then eq(m.map, target) else ok(m.rate and m.gain >= ns.Zones.MOVE_ON_ENTER - 1) end
         eq(view.status, "ready")
-        -- switched off: the zone stays
-        ns.Engine.SetZone(first)
+        -- skipped by hand, not done: the step's quests are all in the ignored list
+        chardb.commit = commit()
+        for _, q in ipairs(step.quests) do ns.Engine.Ignore(q.id, true) end
         ok(M.settle())
-        eq(view.zone, first)
-        ns.Engine.FOLLOW_PATH = false
-        ns.Zones.PlanZone = function(map, ...)
-            local p = realPlan(map, ...)
-            if map == first then
-                for i, k in ipairs(p.order) do
-                    if k == view.itinerary.segments[1].leaveKey then table.remove(p.order, i); table.remove(p.steps, i); break end
-                end
-            end
-            return p
-        end
-        key = view.plan.order[1]
-        view.itinerary = path()
-        ns.Engine.Replan()
+        ok(not chardb.commit.reached, "skipping the leave step is not doing it")
+        for _, q in ipairs(step.quests) do ns.Engine.Ignore(q.id, false) end
         ok(M.settle())
-        ns.Zones.PlanZone, ns.Engine.FOLLOW_PATH = realPlan, true
-        eq(view.zone, first, "Engine.FOLLOW_PATH off: the shown zone is not left")
+        -- stay: the commitment starts over, the banner goes
+        chardb.commit = commit()
+        chardb.commit.reached = true
+        view.moveOn = { suggest = true, map = target, reached = true, name = "Next" }
+        ns.Engine.StayHere()
+        ok(not chardb.commit.reached, "the commitment started over")
+        eq({ chardb.commit.zone, chardb.commit.hand, chardb.commit.played }, { first, true, 0 })
+        eq(view.moveOn, { suggest = false })
+        local stays = 0
+        for _, ev in ipairs(ns.Engine.chardb.play.events) do if ev.k == "stay" then stays = stays + 1 end end
+        eq(stays, 1, "an event in the play log")
+        -- a zone picked by hand is kept: the commitment is made, and is for that zone
+        ns.Engine.SetZone(target)
+        ok(M.settle())
+        eq({ chardb.commit.zone, chardb.commit.hand }, { target, true })
+        eq(chardb.zone, target)
     end)
 end)

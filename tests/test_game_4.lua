@@ -32,6 +32,9 @@ H.suite("Engine and window (real data)", function()
         view.moveOn = { suggest = true, map = -1, name = "Elsewhere" }
         ns.UI.Refresh()
         eq(banner.label.text, "Done here. Next: Elsewhere")
+        view.moveOn = { suggest = true, map = -1, name = "Elsewhere", reached = true }
+        ns.UI.Refresh()
+        eq(banner.label.text, "Done here as planned. Next: Elsewhere")
         view.moveOn = { suggest = false }
         ns.UI.Refresh()
         ok(not banner:IsShown())

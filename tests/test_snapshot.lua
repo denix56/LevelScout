@@ -129,6 +129,21 @@ H.suite("Snapshots and replay (real data)", function()
         eq(result.view.made.kind, s.shown.made.kind)
     end)
 
+    test("the commitment is recorded and the replay works the banner out from it", function()
+        local ns = start()
+        local zone = ns.Engine.view.zone
+        ns.Engine.chardb.commit = { zone = zone, hand = true, played = 123 }
+        local s = take("picked by hand")
+        eq(s.commitWas, { zone = zone, hand = true, played = 123 }, "what it was before this run's itinerary")
+        local c = ns.Engine.chardb.commit
+        eq({ c.zone, c.hand, c.played }, { zone, true, 123 }, "the run keeps it, and adds the path")
+        local f = throughFile(LevelScoutCharDB).snapshots[1]
+        local result = replay(f)
+        eq(R.Compare(f.shown, result.view, { names = f.names }), {})
+        eq(result.commit.zone, zone)
+        eq(result.commit.hand, true)
+    end)
+
     test("warm starts replay the same", function()
         local ns = start(nil, { search = true, rounds = 8 })
         ns.Zones.ITINERARY_ROUNDS = 0 -- (the settings are recorded: the replay does the same)
