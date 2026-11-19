@@ -173,7 +173,7 @@ SlashCmdList.LEVELSCOUT = function(msg)
             ns.Engine.ReplanFresh()
             ns.Print("re-planning from scratch (the shown route is not kept)")
         else
-            ns.Engine.Replan(true)
+            ns.Engine.Replan(true, true)
             ns.Print("re-planning")
         end
     elseif cmd == "plan" then

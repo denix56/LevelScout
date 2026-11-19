@@ -1741,6 +1741,22 @@ local function collect(zoneMap, ctx, lists, also)
     if ctx.chain then
         for _, m in ipairs(order) do m.must = true end
     end
+    -- A quest already taken stays in the route (`held`): it is in the log with its work or its
+    -- turn-in on this map, so the plan does not drop it as slow, and a search round that takes
+    -- it out puts it back whatever it pays. Not for a dungeon plan or the way across a border.
+    -- A quest in the log with nothing to do here (a turn-in carried from elsewhere) is weighed
+    -- as before.
+    if not ctx.dungeon and not ctx.chain and not (also and #also > 0) then
+        for _, m in ipairs(order) do
+            if m.inLog then
+                local here = m.turnin and inZones[m.turnin.map]
+                for _, t in ipairs(m.tasks) do
+                    if t.loc and inZones[t.loc.map] then here = true end
+                end
+                if here then m.held = true end
+            end
+        end
+    end
     ctx.campKeys = nil
     return order, models, inputs
 end
@@ -1965,6 +1981,12 @@ end
 ---          exact = with a seed: the seed is the route as it is: nothing else is added and nothing
 ---                  is dropped as slow (what is done or gone is left out, as always; what stayed out is
 ---                  listed as after a search). Zones.WithSeam and the next zone of a way across,
+---          hold = with a seed: the route on screen is held (Engine.HOLD_ROUTE): the seed is kept in
+---                 its order, nothing is dropped as slow, and the only quests added are ones taken
+---                 since (`held`: in the log, their work or turn-in here) or started by an item in
+---                 the bags; each goes to its cheapest place. A stop the player stands at is still
+---                 brought forward (`front`). A quest of the seed that cannot be rebuilt is left out,
+---                 as always (the Engine then plans again),
 ---          seam = the way across a zone border planned together (Zones.PlanSeam; no seed): see
 ---                 seamSearch below. The result is then { zone, seam = (seamSearch's result or nil),
 ---                 work } instead of a plan }
@@ -1987,6 +2009,7 @@ function Planner.Plan(zoneMap, ctx, opts)
     local border = opts.seed and opts.border or nil
     local borderGone
     local exact = opts.seed and opts.exact or nil
+    local hold = opts.seed and opts.hold and not exact or nil
     if border then candidates, borderGone = takeAlong(candidates, zoneMap, border, lists, checkpoint) end
     -- Always in the same order: a table keyed by quest models is walked in memory order, which
     -- differs from one run to the next, and the first quest tried at a camp decides where
@@ -2081,10 +2104,10 @@ function Planner.Plan(zoneMap, ctx, opts)
                     local added, gain, regret = r:try(m, false)
                     if added then
                         local ratio = gain / max(added, 1)
-                        -- (a quest already finished in the log always goes back in: only the
-                        -- usual check at the end may drop its turn-in)
+                        -- (a quest already finished in the log always goes back in, and so
+                        -- does one taken whose work or turn-in is here: `held`)
                         local entry = ctx.log[m.id]
-                        if floorRatio and ratio < floorRatio and not (entry and entry.isComplete) then
+                        if floorRatio and ratio < floorRatio and not (entry and entry.isComplete) and not m.held then
                             parked[m] = true
                         else
                             local key = ratio
@@ -2443,6 +2466,13 @@ function Planner.Plan(zoneMap, ctx, opts)
 
     if exact then
         -- (the seed is the route: nothing else is added)
+    elseif hold then
+        -- (the route held: only quests taken since, or started by an item in the bags)
+        local new = {}
+        for _, m in ipairs(candidates) do
+            if remaining[m] and (m.held or m.fromBag) then new[m] = true end
+        end
+        if next(new) then fill(0, nil, false, nil, new) end
     elseif ctx.chain then
         fillChain()
     elseif border then
@@ -2594,7 +2624,7 @@ function Planner.Plan(zoneMap, ctx, opts)
                 local added, gain
                 -- (a route kept with quests taken along adds nothing else: what stayed out is weighed
                 -- as after a search; an exact seed, too)
-                if (searched or border or exact) and ready(r, m) and not m.border then added, gain = r:try(m, false) end
+                if (searched or border or exact or hold) and ready(r, m) and not m.border then added, gain = r:try(m, false) end
                 if m.border then
                     local e = listEntry(m, "not before leaving for the next zone")
                     e.xp = m.borderXP
@@ -2612,18 +2642,18 @@ function Planner.Plan(zoneMap, ctx, opts)
 
 
         -- Drop quests that pay far less per second than the rest of the route does without them. A quest that others
-        -- in the route depend on stays. Quests already in the log are dropped the same way: the
-        -- plan simply does not spend time on them.
+        -- in the route depend on stays, and so does one already taken (`held`: in the log, its
+        -- work or turn-in here).
         local nRouted = 0
         for _ in pairs(r.routed) do nRouted = nRouted + 1 end
-        -- (an exact seed keeps every quest it has)
-        while nRouted > 1 and not exact do
+        -- (an exact seed keeps every quest it has, and so does a held route)
+        while nRouted > 1 and not exact and not hold do
             local t0, x0 = r:totals()
             if t0 <= 0 then break end
             local worst, worstRatio
             for _, m in ipairs(candidates) do
                 -- (with quests taken along only they may go: the rest of the route is kept as it is)
-                if r.routed[m] and not m.must and #(m.dependents or {}) == 0 and (not border or m.border) then
+                if r.routed[m] and not m.must and not m.held and #(m.dependents or {}) == 0 and (not border or m.border) then
                     local t1, x1 = r:totals(m)
                     local ratio = (x0 - x1) / max(t0 - t1, 1)
                     -- (a quest taken along pays where it is finished: that XP against its time here)

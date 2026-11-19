@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The route stays put**: the zone's route on screen is no longer reshuffled as you play. Quests no
+  longer come and go between plans, and a slightly better route no longer replaces it. It changes only
+  when a quest of it can no longer be done, when you skip or bring back a quest, change an option or
+  click re-plan, or when you are half a level or more ahead of what it expected (you did other
+  things). A quest you take on your own is added to it; a stop you stand at is still brought forward.
+  The way to the current step still follows you: travel far off and it points you to a flight master
+  or boat as before.
+- **Quests you took stay in the plan**: a quest in your log with work or a turn-in in the zone is no
+  longer left out as slow. Before, only finished ones were kept; one you had accepted could vanish
+  from the route and show under "left out as slow". A turn-in carried from another zone is still
+  weighed as before, and so are quests in a dungeon plan.
 - **The zone you picked stays**: LevelScout no longer switches zones by itself. When the step the plan
   leaves a zone after is done, the banner says "Done here as planned. Next: <zone>" and chat says so once;
   click it to go, right-click to stay. The zone shown (picked by you or by LevelScout) is kept for 40 minutes of play (or the time its plan

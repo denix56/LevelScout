@@ -75,6 +75,23 @@ function Cost.LevelUps(level, xp, xpMax, count, maxLevel)
     return out
 end
 
+--- XP earned from (fromLevel, fromXP) to (level, xp), by the classic table; nil when a level is
+--- not in it. Negative when the second is the earlier.
+function Cost.XPGained(fromLevel, fromXP, level, xp)
+    if type(fromLevel) ~= "number" or type(level) ~= "number" then return nil end
+    if level < fromLevel then
+        local back = Cost.XPGained(level, xp, fromLevel, fromXP)
+        return back and -back or nil
+    end
+    local total = (xp or 0) - (fromXP or 0)
+    for l = fromLevel, level - 1 do
+        local need = XP_TO_LEVEL[l]
+        if not need then return nil end
+        total = total + need
+    end
+    return total
+end
+
 --- Share of a quest's base XP awarded at this level (classic rule: full within 5 levels).
 function Cost.QuestXPFactor(questLevel, playerLevel)
     local diff = playerLevel - questLevel
