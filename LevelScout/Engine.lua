@@ -431,7 +431,7 @@ startItinerary = function(result)
         local ctx = Zones.Context(state)
         phase(Engine.SHARE_CHECK, 1, "Planning the next hours", true)
         local was = view.itinerary
-        if snap and snap.state == state then snap.itineraryWas = Snapshot.Maps(was); snap.borderWas = Snapshot.Copy(border); snap.seamWas = Snapshot.Copy(seam) end
+        if snap and snap.state == state then snap.itineraryWas = Snapshot.Maps(was); snap.itineraryWasKeys = Snapshot.LeaveKeys(was); snap.borderWas = Snapshot.Copy(border); snap.seamWas = Snapshot.Copy(seam) end
         local itinerary = Zones.Itinerary(state, ctx, ranked, { shown = zone, plan = plan, was = was,
             border = border, borderPlan = (shownPlan ~= plan and shownPlan.base) and shownPlan or nil,
             seam = seam, seamPlan = seamPlan })
@@ -583,7 +583,7 @@ local function takeInput(state, why)
         snap = nil
         return
     end
-    snap.state, snap.ranked, snap.itineraryWas, snap.zone = state, nil, nil, nil
+    snap.state, snap.ranked, snap.itineraryWas, snap.itineraryWasKeys, snap.zone = state, nil, nil, nil, nil
     local ok, input = pcall(Snapshot.Capture, state)
     if not ok then
         if not snap.auto then ns.Print("|cffff5555Snapshot not taken: %s|r", tostring(input)) end
@@ -614,7 +614,7 @@ local function record(s, moveOnWas)
         version = { addon = ns.version, client = pctx.clientBuild, data = Data.status.build,
             generated = Data.status.generated, sources = Snapshot.Copy(Data.status.sources) },
         settings = Snapshot.Settings(), zone = s.zone, input = s.input, warm = Snapshot.Warm(view.ranked),
-        itineraryWas = s.itineraryWas, borderWas = s.borderWas, seamWas = s.seamWas,
+        itineraryWas = s.itineraryWas, itineraryWasKeys = s.itineraryWasKeys, borderWas = s.borderWas, seamWas = s.seamWas,
         moveOnWas = moveOnWas and { suggest = moveOnWas.suggest and true or false, map = moveOnWas.map } or nil,
         shown = shown, before = s.before, names = names,
     }

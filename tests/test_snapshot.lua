@@ -135,6 +135,9 @@ H.suite("Snapshots and replay (real data)", function()
         take()
         local second = take()
         ok(next(second.warm), "the zones started from their last plans")
+        if second.itineraryWas and #second.itineraryWas > 1 then
+            ok(second.itineraryWasKeys and second.itineraryWasKeys[1], "the step the first zone was left after is recorded")
+        end
         local s = throughFile({ snapshots = { second } }).snapshots[1]
         local result = replay(s)
         eq(R.Compare(s.shown, result.view, { names = s.names }), {})

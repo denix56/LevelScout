@@ -580,6 +580,33 @@ H.suite("Itinerary (real data)", function()
     end
 
     local ns, state, ctx, ranked, it
+    -- The banner is the Zones tab's first zone, with the tab's figures; the shown zone's entry is the path's.
+    local function bannerIs(with, active, shownMap)
+        local Z = ns.Zones
+        local order = Z.StartOrder(with, ranked, shownMap)
+        ok(order and order[1], "the zones in the tab's order")
+        local top, starts = order[1], with.starts
+        local m = Z.MoveOn(active, ranked, nil, with)
+        if top.map == shownMap then
+            eq(m.suggest, false, "the shown zone is first: no banner")
+            ok(with.alt == nil, "and no better start")
+        else
+            local lead = starts[top.map].rate / starts[shownMap].rate
+            eq(m.map, top.map, "the banner names the zone the tab lists first")
+            H.near(m.gain, lead - 1, 1e-9)
+            eq(m.suggest, lead > Z.MOVE_ON_ENTER)
+            eq(m.rate, true)
+            if lead > 1 then
+                eq(with.alt.map, top.map)
+                H.near(with.alt.gain, m.gain, 1e-9)
+            end
+        end
+        local own = starts[shownMap]
+        if own.path then
+            eq(own.next, with.segments[2] and with.segments[2].map or nil, "the shown row's next zone is the path's")
+            H.near(own.rate, with.pathRate, 1e-6)
+        end
+    end
     test("two zones inside the horizon beat the best single zone, and the times add up", function()
         ns, state, ctx, ranked = setup()
         it = ns.Zones.Itinerary(state, ctx, ranked)
@@ -718,7 +745,7 @@ H.suite("Itinerary (real data)", function()
         ok(with.segments[2].seconds >= ns.Zones.MIN_STAY, "a zone that takes a trip is still a real stay")
         ok(with.segments[2].plan and #with.segments[2].plan.steps > 0, "with its route")
         eq(with.here, with.xp)
-        eq(ns.Zones.MoveOn(rest, ranked, nil, with).suggest, false, "no banner: finishing here is the plan")
+        bannerIs(with, rest, shown.map)
         eq(ns.Zones.NextZone(with, shown.map), with.segments[2].map)
         -- only for the zone on screen: the same short plan under another zone's name must stay MIN_STAY
         local other = ns.Zones.Itinerary(state, ctx, ranked, { plan = rest })
@@ -859,6 +886,56 @@ H.suite("Itinerary (real data)", function()
         eq(again.xp, long.xp)
     end)
 
+    test("the order on screen stays within 5% when starting in the shown zone", function()
+        local Z = ns.Zones
+        local S, P = it.segments[1].map, nil
+        for _, z in ipairs(ranked) do if z.map == S then P = z.plan end end
+        local border, seam, keep = Z.BORDER, Z.SEAM, Z.KEEP_ITINERARY
+        Z.BORDER, Z.SEAM = false, false
+        local function run(was) return Z.Itinerary(state, ctx, ranked, { shown = S, plan = P, was = was }) end
+        local fresh = run()
+        local B, forced
+        for _, z in ipairs(ranked) do
+            if not B and z.map ~= S and z.map ~= fresh.segments[2].map and #z.plan.steps > 0 then
+                Z.KEEP_ITINERARY = 1e9
+                local got = run({ segments = { { map = S }, { map = z.map } } })
+                Z.KEEP_ITINERARY = keep
+                if got.segments[2] and got.segments[2].map == z.map then B, forced = z.map, got end
+            end
+        end
+        local was = { segments = { { map = S }, { map = B } } }
+        local again = B and run(was)
+        local same = run(fresh)
+        Z.BORDER, Z.SEAM, Z.KEEP_ITINERARY = border, seam, keep
+        ok(B, "another second zone that can be forced")
+        -- (the outputs are floored: a figure that close to the bar decides nothing)
+        if math.abs(fresh.xp / forced.xp - keep) >= 1e-3 then
+            eq((again.segments[2] and again.segments[2].map == B) or false, fresh.xp <= forced.xp * keep, "kept unless the other earns 5% more")
+        end
+        eq({ same.segments[2].map, same.segments[1].leaveKey, same.xp },
+            { fresh.segments[2].map, fresh.segments[1].leaveKey, fresh.xp }, "the order and step on screen stand")
+    end)
+
+    test("the step the first zone was left after is kept", function()
+        local Z = ns.Zones
+        local S, P = it.segments[1].map, nil
+        for _, z in ipairs(ranked) do if z.map == S then P = z.plan end end
+        local k
+        for i = 2, #P.steps do
+            if not k and P.steps[i].kind == "turnin" and P.steps[i].t < Z.HORIZON / 2 then k = P.order[i] end
+        end
+        ok(k, "a turn-in in the first half of the horizon")
+        local keep, border, seam = Z.KEEP_ITINERARY, Z.BORDER, Z.SEAM
+        -- (the way across, planned together, may move the step the zone is left after)
+        Z.KEEP_ITINERARY, Z.BORDER, Z.SEAM = 1e9, false, false
+        local fresh = Z.Itinerary(state, ctx, ranked, { shown = S, plan = P })
+        local got = Z.Itinerary(state, ctx, ranked, { shown = S, plan = P,
+            was = { segments = { { map = S, leaveKey = k }, { map = fresh.segments[2].map } } } })
+        Z.KEEP_ITINERARY, Z.BORDER, Z.SEAM = keep, border, seam
+        ok(#got.segments >= 2)
+        eq(got.segments[1].leaveKey, k)
+    end)
+
     test("move-on follows the itinerary: its first zone against starting in the shown zone", function()
         local first = it.segments[1].map
         local shown
@@ -869,20 +946,14 @@ H.suite("Itinerary (real data)", function()
         ok(with.here and with.here > 0, "something is left in the shown zone")
         eq(with.segments[1].map, shown.map, "the itinerary starts in the shown zone: the player chose it")
         eq(with.xp, with.here)
-        ok(with.alt and with.alt.map ~= shown.map and with.alt.xp > with.here,
-            string.format("starting elsewhere earns more: %d against %d", with.alt and with.alt.xp or 0, with.here))
-        local m = ns.Zones.MoveOn(shown.plan, ranked, nil, with)
-        eq(m.map, with.alt.map, "the banner names the better start")
-        H.near(m.gain, with.alt.xp / with.here - 1, 1e-9)
-        eq(m.suggest, with.alt.xp / with.here > ns.Zones.MOVE_ON_ENTER)
-        eq(m.horizon, with.horizon)
+        bannerIs(with, shown.plan, shown.map)
         -- shown zone = the itinerary's first zone: nothing to suggest
         local stay = ns.Zones.Itinerary(state, ctx, ranked, { shown = first })
         eq(stay.segments[1].map, first)
         eq(stay.here, stay.xp)
         local plan
         for _, z in ipairs(ranked) do if z.map == first then plan = z.plan end end
-        eq(ns.Zones.MoveOn(plan, ranked, nil, stay).suggest, false)
+        bannerIs(stay, plan, first)
     end)
 end)
 

@@ -548,16 +548,14 @@ local function zoneRows(view)
         for i, seg in ipairs(it.segments) do
             parts[i] = string.format("%s %s%s|r", seg.name or ("Map " .. seg.map), hex(C.faint), Format.Duration(seg.seconds))
         end
-        local gain = (it.stay and it.stay > 0) and (it.xp / it.stay - 1) or 0
         local hours = it.horizon / 3600
         local span = hours == math.floor(hours) and string.format("%d hours", hours) or Format.Duration(it.horizon)
         out[#out + 1] = { section = "Next " .. span, h = SECTION_H }
         out[#out + 1] = {
             h = ROW_H, pill = "PLAN", icon = ICON.tip, itinerary = true,
             title = table.concat(parts, "  >  "),
-            detail = (gain >= 0.005 and string.format("%s+%d%%|r against one zone  |cff5f646e·|r  ", hex(C.good), gain * 100 + 0.5) or "")
-                .. Format.Number(it.xp) .. " XP",
-            right = Format.Number(it.rate), rightSub = "XP/h",
+            detail = Format.Number(it.xp) .. " XP",
+            right = Format.Number(it.pathRate or it.rate), rightSub = "XP/h",
             tip = function()
                 local lines = { { "The next " .. span }, { "The order of zones that earns most in that time: each zone's route is followed up to a turn-in, then you travel on." } }
                 for i, seg in ipairs(it.segments) do
@@ -578,13 +576,19 @@ local function zoneRows(view)
                         it.segments[2] and it.segments[2].name or "the next zone"), right = "+" .. Format.Number(it.seam.gain or 0) .. " XP", color = C.faint }
                 end
                 if it.stay then lines[#lines + 1] = { "Best single zone", right = Format.Number(it.stay) .. " XP" } end
+                -- (the list gives the shown zone's rate alone when going on earns less per hour)
+                local own = it.starts and it.starts[view.zone]
+                if own and not own.path then
+                    lines[#lines + 1] = { (view.zoneName or "The zone shown") .. " alone, while it lasts",
+                        right = Format.Number(own.rate) .. " XP/h" }
+                end
                 if it.here and it.segments[1].map ~= view.zone then
                     lines[#lines + 1] = { "Starting with " .. (view.zoneName or "the zone shown"), right = Format.Number(it.here) .. " XP" }
                 end
                 lines[#lines + 1] = { "Each later zone is planned as you will find it: from where you leave the zone before, at the level you will have, with the quests still in your log.", color = C.faint }
                 if it.alt then
                     lines[#lines + 1] = { "Starting with " .. (it.alt.name or Game.MapName(it.alt.map) or "another zone") .. " instead",
-                        right = Format.Number(it.alt.xp) .. " XP" }
+                        right = string.format("%+d%% XP/h", (it.alt.gain or 0) * 100 + 0.5) }
                     lines[#lines + 1] = { "Click: plan " .. (it.alt.name or "that zone"), color = C.faint }
                 end
                 if it.segments[1].map ~= view.zone then lines[#lines + 1] = { "Click: plan " .. (it.segments[1].name or "the first zone"), color = C.faint } end
@@ -600,25 +604,21 @@ local function zoneRows(view)
     -- zone is done first and the best way on is taken after it (itinerary.starts); the zones
     -- are then listed by that. Without one (or while it is for another zone, or does not know a
     -- listed zone yet): the zone's own XP per hour, trip included, in the ranking's order.
-    local starts = (it and it.starts and it.shown == view.zone and not view.chain) and it.starts or nil
-    if starts then
-        for _, z in ipairs(ranked) do
-            if #z.plan.steps > 0 and not starts[z.map] then starts = nil; break end
-        end
+    local starts
+    local order = (it and not view.chain) and ns.Zones.StartOrder(it, view.ranked, view.zone) or nil
+    if order then
+        -- the zone shown stays first, then the Zones.StartOrder (the banner's order), then the
+        -- zones with nothing to do
+        starts = it.starts
+        local list, listed = {}, {}
+        for _, z in ipairs(ranked) do if z.map == view.zone then list[#list + 1] = z; listed[z] = true end end
+        for _, z in ipairs(order) do if not listed[z] then list[#list + 1] = z; listed[z] = true end end
+        for _, z in ipairs(ranked) do if not listed[z] then list[#list + 1] = z end end
+        ranked = list
     end
     local function worth(z)
         if not starts then return z.plan.score end
         return starts[z.map] and starts[z.map].rate or 0
-    end
-    if starts then
-        local at = {}
-        for i, z in ipairs(ranked) do at[z] = i end
-        table.sort(ranked, function(a, b)
-            if (a.map == view.zone) ~= (b.map == view.zone) then return a.map == view.zone end
-            local wa, wb = worth(a), worth(b)
-            if wa ~= wb then return wa > wb end
-            return at[a] < at[b]
-        end)
     end
     local span = it and (it.horizon % 3600 == 0 and string.format("%d hours", it.horizon / 3600) or Format.Duration(it.horizon)) or nil
     local best = 0
@@ -665,8 +665,12 @@ local function zoneRows(view)
                 local pct = gain and string.format("%+d%%", gain * 100 + (gain >= 0 and 0.5 or -0.5)) or nil
                 local lines = { { name } }
                 if starts then
-                    lines[#lines + 1] = { "XP per hour over the next " .. span .. ", starting here", right = Format.Number(value) }
-                    if onwardName then lines[#lines + 1] = { "Then, from where this zone is left", right = onwardName } end
+                    if onwardName then
+                        lines[#lines + 1] = { "XP per hour over the next " .. span .. ", starting here", right = Format.Number(value) }
+                        lines[#lines + 1] = { "Then, from where this zone is left", right = onwardName }
+                    else
+                        lines[#lines + 1] = { "XP per hour in this zone alone, while it lasts (an hour at least)", right = Format.Number(value) }
+                    end
                     if gain then lines[#lines + 1] = { "Against starting with " .. (view.zoneName or "the zone shown"), right = pct } end
                     lines[#lines + 1] = { "This zone alone, first hour, trip included", right = Format.Number(p.score) .. " XP/h" }
                 else
@@ -1525,10 +1529,10 @@ function UI.Refresh()
     if not state.classShown and state.tab == "class" then state.tab, state.scroll = "route", 0 end
     local m = view.moveOn or {}
     if m.suggest then
-        -- with an itinerary the gain is over its horizon (going there first against staying here first)
-        local hours = m.horizon and m.horizon / 3600 or 1
-        local span = hours == 1 and "hour" or (hours == math.floor(hours) and string.format("%d hours", hours) or Format.Duration(m.horizon))
-        root.banner.label:SetText(m.gain and string.format("%s: %d%% more XP over the next %s", m.name or "Another zone", m.gain * 100 + 0.5, span)
+        -- with an itinerary the gain is in XP per hour, the Zones tab's figures (m.rate); else over the next hour
+        local who = m.name or "Another zone"
+        root.banner.label:SetText(m.gain and (m.rate and string.format("%s: %d%% more XP per hour", who, m.gain * 100 + 0.5)
+            or string.format("%s: %d%% more XP over the next hour", who, m.gain * 100 + 0.5))
             or string.format("Done here. Next: %s", m.name or "another zone"))
     end
     local h = layout(view)

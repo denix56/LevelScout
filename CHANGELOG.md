@@ -8,6 +8,15 @@
   in the route" in the options plans them again; the choice is saved with the character. When
   planned, an escort counts 5 minutes (it was 2), and the two Gizelton Caravan quests half an hour
   more: the caravan sets out about once an hour. Quests that follow an escort wait until it is done.
+- **The next zone stays put**: the zone the path goes on to no longer flips between rankings. The order
+  on screen, and the step its first zone is left after, stays unless another earns 5% more. Both are
+  planned again as you will find them, also when the path starts in the zone you chose.
+- **A better next zone**: the three best choices by today's plans are planned again before one is picked
+  (a level 34 snapshot: +18% XP over the next 2 h 30).
+- **The banner agrees with the Zones list**: it names the zone the list puts first and says how much more
+  XP per hour it earns, with the list's figures. The "Next" row shows the path's XP and its XP per hour.
+- **For developers**: snapshots record the step each zone was left after (`itineraryWasKeys`).
+  `Zones.Choose`, `Zones.StartOrder` and `Zones.REFINE_TOP` are new.
 - **For developers: the hearthstone in the plan** (`Planner.HEARTH`, on): a route uses the
   hearthstone on the first trip it shortens by 2 minutes or more, once the stone is ready, and the
   next hours carry its cooldown from zone to zone. The route's order does not change; its times, the
