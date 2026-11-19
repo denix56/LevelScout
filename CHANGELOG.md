@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **The zone you picked stays**: LevelScout no longer switches zones by itself. When the step the plan
+  leaves a zone after is done, the banner says "Done here as planned. Next: <zone>" and chat says so once;
+  click it to go, right-click to stay. A zone you pick is kept for 40 minutes of play (or the time its plan
+  gives it, if shorter): no banner about a better start in that time. A zone that runs out stays shown,
+  with "Nothing left here" and the next zone's steps below it.
+- **Fair figures on the Zones tab**: every zone is figured over the same 2 h 30 starting there, and the best
+  three others are planned again like the shown zone's path. The other rows show "~" before the figure (a
+  rough one) and no percentage. A difference under 5% is not shown, and the banner only names a start that
+  was planned again.
+- **Hearthstone on the way to the next zone**: the trip between zones may go by hearthstone when it is ready
+  and saves 2 minutes or more. In a level 35 snapshot the missed path earned 60,998 XP against 51,296 for
+  the one chosen before.
+- **For developers**: `Engine.FOLLOW_PATH` and `Engine.BACK_WITHIN` are gone. New: `Zones.Commit`,
+  `Zones.CommitPath`, `Zones.Waited`, `Zones.COMMIT_STAY`, `Zones.COMPARE_TOP`, `Zones.STONE_TRIPS`,
+  `Engine.StayHere`, `Engine.Commit`, `UI.GAIN_MIN`, the play event `stay`, `starts[].rough`,
+  `moveOn.reached`, and `commitWas` in snapshots. `Zones.MoveOn` takes the commitment as a fifth argument.
+  The itinerary takes about 1 to 1.5 s more CPU.
 - **Escort quests are listed, not routed**: quests where you walk an NPC somewhere or keep it alive
   through an attack (Missing In Action, Protecting the Shipment, the Gizelton Caravan) take minutes
   and fail when the NPC dies. They now show under "Escort quests" on the Quests tab. "Escort quests:
