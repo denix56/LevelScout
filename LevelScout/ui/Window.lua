@@ -332,6 +332,7 @@ local function chainTip(o, clicks)
             lines[#lines + 1] = { string.format("Step %d is a group quest (elite): %s.", f.eliteStep, f.eliteName or "?"), color = C.warn }
         end
         if f.groupName then lines[#lines + 1] = { f.groupName .. " needs a group: the plan stops before it.", color = C.warn } end
+        if f.escortName then lines[#lines + 1] = { f.escortName .. " is an escort quest: the plan stops before it.", color = C.warn } end
         if f.laterLevel then lines[#lines + 1] = { string.format("The rest of the chain needs level %d.", f.laterLevel), color = C.warn } end
         for _, l in ipairs(clicks or {}) do lines[#lines + 1] = { l, color = C.faint } end
         return lines
@@ -681,6 +682,7 @@ local function zoneRows(view)
                 local l = p.lists
                 if #l.later > 0 then lines[#lines + 1] = { "Quests for a higher level", right = tostring(#l.later) } end
                 if #l.group > 0 then lines[#lines + 1] = { "Group quests", right = tostring(#l.group) } end
+                if l.escort and #l.escort > 0 then lines[#lines + 1] = { "Escort quests", right = tostring(#l.escort) } end
                 lines[#lines + 1] = { shown and "This zone is shown." or "Click: plan this zone", color = C.faint }
                 return lines
             end,
@@ -693,6 +695,7 @@ end
 local LISTS = {
     { "later", "Later", "Needs a higher level." },
     { "group", "Needs a group", "Elite quest. Turn on \"Group quests: in the route\" in the options to plan it." },
+    { "escort", "Escort quests", "Walk an NPC somewhere or keep it alive: several minutes, and it fails if the NPC dies. Turn on \"Escort quests: in the route\" in the options to plan it." },
     { "skipped", "Left out as slow", "Pays much less per minute than the rest of the route." },
     { "unlocated", "No known location", "No database knows where this is done." },
     { "unconfirmed", "Not confirmed in Forever", "No player data shows this quest exists in Forever. It is planned once it is in your log." },
@@ -773,7 +776,7 @@ local function questRows(view)
     if not lists then return out end
     for _, def in ipairs(LISTS) do
         local key, title, hint = def[1], def[2], def[3]
-        local list = lists[key]
+        local list = lists[key] or {}
         if #list > 0 then
             out[#out + 1] = { section = string.format("%s  %s%d|r", title, hex(C.faint), #list), h = SECTION_H }
             for _, e in ipairs(list) do
@@ -1063,6 +1066,7 @@ local function menuItems()
         { (Engine.chardb and Engine.chardb.zone) and "Let LevelScout pick the zone" or nil, function() Engine.SetZone(nil) end },
         { (settings.locked and "Unlock" or "Lock") .. " position", function() settings.locked = not settings.locked; applyPosition() end },
         { "Group quests: " .. (Engine.RoutesElite() and "in the route" or "listed only"), function() Engine.SetRouteElite(not Engine.RoutesElite()) end },
+        { "Escort quests: " .. (Engine.RoutesEscort() and "in the route" or "listed only"), function() Engine.SetRouteEscort(not Engine.RoutesEscort()) end },
         -- talking to an NPC accepts and hands in the plan's quests there (Shift held: not this time)
         { "Accept planned quests: " .. (ns.AutoQuest.Accepts() and "auto" or "by hand"), function() ns.AutoQuest.SetAccept(not ns.AutoQuest.Accepts()) end },
         { "Turn in planned quests: " .. (ns.AutoQuest.TurnsIn() and "auto" or "by hand"), function() ns.AutoQuest.SetTurnIn(not ns.AutoQuest.TurnsIn()) end },

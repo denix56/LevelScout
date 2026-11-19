@@ -104,6 +104,8 @@ end
 ---   "dungeon"   dungeon or raid quest (planned only under its dungeon, or once it is complete:
 ---               then only its turn-in is left)
 ---   "group"     elite quest, when ctx.routeElite is off (otherwise it is routed, `elite` set)
+---   "escort"    escort quest, when ctx.routeEscort is off (otherwise it is routed; its escort
+---               stop has escort = true)
 ---   "later"     needs a higher level (`needLevel`)
 ---   "excluded"  repeatable, daily, weekly or seasonal
 ---   "unconfirmed" no player data shows the quest exists in Forever (see Model.Unconfirmed)
@@ -142,6 +144,9 @@ function Model.Build(questId, ctx)
     if tag == "elite" then
         if ctx.routeElite then m.elite = true else m.status = "group" end
     end
+    -- An escort is listed, not routed, unless ctx.routeEscort is on. Complete in the log, only
+    -- its turn-in is left: planned like any other. (Decided below, once its stops are known.)
+    m.escort = (q.flags.escort and not inDungeon and not (entry and entry.isComplete)) or nil
     -- How many group members the quest's drops are split between: for a quest in the log the
     -- game says who else is on it; otherwise everyone in the group is assumed to take it.
     ctx.share = nil
@@ -155,7 +160,9 @@ function Model.Build(questId, ctx)
     local shownLevel = (entry and type(entry.level) == "number" and entry.level > 0) and entry.level or q.level
     if shownLevel - ctx.level >= Cost.RED_QUEST and not (entry and entry.isComplete) then
         m.status, m.needLevel, m.detail = "later", shownLevel - Cost.RED_QUEST + 1, "red quest"
-        m.red = true -- the planner may still take it along when its work is in a camp we visit anyway
+        -- the planner may still take it along when its work is in a camp we visit anyway (not an
+        -- escort while escorts are listed only)
+        m.red = (not (m.escort and not ctx.routeEscort)) or nil
     end
     if not entry then
         if q.flags.repeatable or q.flags.daily or q.flags.weekly or q.flags.event then m.status = "excluded"; return m end
@@ -278,6 +285,31 @@ function Model.Build(questId, ctx)
                 -- live in several camps, the camp we are already in is the one to use.
                 if task.loc then near = task.loc end
             end
+        end
+    end
+    -- An escort takes its script's time at one stop: its event, else its first stop. Kills asked
+    -- for there are fought during it, so the stop takes the escort's time at least, not that
+    -- time plus the kills.
+    if m.escort then
+        local hasEvent, at = false, nil
+        for _, o in ipairs(q.objectives) do if o.kind == "event" then hasEvent = true end end
+        for _, t in ipairs(m.tasks) do if not hasEvent or t.kind == "event" then at = t; break end end
+        if at then
+            local seconds, wait = Cost.EscortSeconds(questId)
+            at.escort = true
+            if at.kills and at.cycle then
+                at.wait = max(at.wait or 0, seconds - at.kills * at.cycle)
+            else
+                at.seconds = seconds
+            end
+            if not ctx.routeEscort and m.status == "ok" then
+                m.status = "escort"
+                if wait > 0 then
+                    m.detail = "the NPC must be caught on its way: about " .. math.floor(wait / 60 + 0.5) .. " minutes' wait"
+                end
+            end
+        else
+            m.escort = nil -- its escort is done: the rest is planned as any quest
         end
     end
     return m

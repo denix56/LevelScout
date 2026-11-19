@@ -12,7 +12,7 @@
 --   zone      the zone the ranking was asked to include (Zones.Rank's `always`)
 --   input     the planning state (Snapshot.Capture; Snapshot.State turns it back into a state):
 --             level, restedPool, xpBonus, xp, xpMax, maxLevel, raceId, faction, class, map, x, y,
---             capacity, groupSize, routeElite, tram, now, altRate (plain values),
+--             capacity, groupSize, routeElite, routeEscort, tram, now, altRate (plain values),
 --             hearth (the hearthstone: { name, map, x, y, ready, cd, cast }),
 --             log (the quest log, as the game gave it), bagQuests, pace, stepModel (plain copies),
 --             completed, knownNodes, ignored ("12,3,1,40": sorted ids as differences),
@@ -172,6 +172,7 @@ function Snapshot.Capture(state)
     for _, k in ipairs(NUMBERS) do input[k] = num(state[k]) end
     for _, k in ipairs(STRINGS) do input[k] = str(state[k]) end
     if type(state.routeElite) == "boolean" then input.routeElite = state.routeElite end
+    if type(state.routeEscort) == "boolean" then input.routeEscort = state.routeEscort end
     if state.rested == true then input.rested = true end
     input.log = Snapshot.Copy(state.log or {})
     if state.completed then input.completed = Snapshot.EncodeIds(state.completed) end
@@ -205,6 +206,7 @@ function Snapshot.State(input)
     for _, k in ipairs(NUMBERS) do state[k] = input[k] end
     for _, k in ipairs(STRINGS) do state[k] = input[k] end
     state.routeElite, state.rested = input.routeElite, input.rested
+    state.routeEscort = input.routeEscort -- (old snapshots have none: off)
     state.log = Snapshot.Copy(input.log) or {}
     if input.completed then state.completed = Snapshot.DecodeIds(input.completed) end
     if input.knownNodes then state.knownNodes = Snapshot.DecodeIds(input.knownNodes) end

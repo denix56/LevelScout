@@ -130,7 +130,7 @@ function Memory.GlobalKey(ctx)
     local key = table.concat({
         "L" .. tostring(ctx.level), tostring(ctx.side), tostring(avail.class), tostring(avail.raceId), tostring(avail.faction),
         c.xp and "x" or "cap", rested,
-        string.format("%.3f", ctx.xpBonus or 0), "g" .. tostring(ctx.group), tostring(ctx.routeElite), "tram" .. tostring(ctx.tram),
+        string.format("%.3f", ctx.xpBonus or 0), "g" .. tostring(ctx.group), tostring(ctx.routeElite), "esc" .. tostring(ctx.routeEscort), "tram" .. tostring(ctx.tram),
         "cap" .. tostring(ctx.capacity), "sp" .. tostring(ctx.speed),
         "sr" .. tostring(ctx.searchRounds) .. "/" .. tostring(ctx.searchWork),
         "f" .. idList(ctx.knownNodes),

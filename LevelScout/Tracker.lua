@@ -302,13 +302,15 @@ end
 ---     (elite) step, n = planned kills, d = mob level minus own level when the step started
 ---     (both may be nil), h = 1 when a teleport was in the step (Planner.HEARTH: the hearthstone, or a jump of
 ---     position; its travel is not learned) }
+--- An escort step is not logged: its time is the script's, and a wait for its NPC is mostly
+--- standing still.
 --- info = { now, level, group, log = ns.Game.GetQuestLog(), completed = { [questId] = true } }.
 function Tracker.OnPlan(plan, info)
     if not stepStore or not info or not info.now then return end
     local key = plan and plan.order and plan.order[1] or nil
     if current and current.key ~= key then
         local took = Tracker.Active(info.now) - current.a0
-        if took > 0 and took <= Tracker.STEP_MAX and stepFinished(current, info) then
+        if took > 0 and took <= Tracker.STEP_MAX and not current.escort and stepFinished(current, info) then
             local line = { k = current.kind, w = current.action, p = current.p, pt = current.pt,
                 a = math.floor(took + 0.5), lv = info.level, g = info.group or 1, e = current.elite,
                 n = current.n, d = current.d }
@@ -334,7 +336,7 @@ function Tracker.OnPlan(plan, info)
         -- a stop shared by several quests is learned as the kind of work the planner corrected it as
         current = { key = key, a0 = Tracker.Active(info.now), loc = step.loc, kind = step.kind, action = step.workAs or step.action,
             p = math.floor(travel + seconds + 0.5), pt = math.floor(travel + 0.5),
-            elite = step.group and true or nil, quest = step.quests and step.quests[1] and step.quests[1].id, parts = parts,
+            elite = step.group and true or nil, escort = step.escort, quest = step.quests and step.quests[1] and step.quests[1].id, parts = parts,
             n = step.kills, d = step.mobLevel and info.level and math.floor(step.mobLevel - info.level + 0.5) or nil,
             hearth = step.hearth and true or nil }
     end

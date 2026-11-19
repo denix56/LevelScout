@@ -152,6 +152,7 @@ Every data file starts with the line `-- Data: ForeverDB.net (https://foreverdb.
 | `n` | new in Forever |
 | `u` | unseen by ForeverDB players (QuestieDB only) |
 | `v` | seasonal/event category |
+| `s` | escort: a QuestieDB "party accept" quest (questFlags 2) whose trigger text says an NPC is escorted, protected, defended, rescued, led, helped or taken somewhere, or one of Merge.ESCORT_EXTRA. Never a dungeon quest. |
 
 **Objectives (field 15):** entries separated by `;`, in quest-log order (Questie's order,
 including its "objective first" hints). Each entry is `<kind><ids>:<count>:<countSource>`.

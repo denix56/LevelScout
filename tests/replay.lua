@@ -557,9 +557,10 @@ function R.Report(ns, snap, result, info)
     say("           at %s (%s) %.1f, %.1f; %d/%s quests in the log, %d done, %d flight points,",
         mapName(snap, input.map), tostring(input.map), (input.x or 0) * 100, (input.y or 0) * 100, #input.log,
         tostring(input.capacity), countKeys(completed), countKeys(nodes))
-    say("           %d skipped, %s, elite %s, tram %s; pace %s samples, step model %s, drops %d",
+    say("           %d skipped, %s, elite %s, escort %s, tram %s; pace %s samples, step model %s, drops %d",
         countKeys(ignored), (input.groupSize or 1) > 1 and ("group of " .. input.groupSize) or "solo",
-        input.routeElite == false and "listed only" or "routed", tostring(input.tram or "auto"), #pace > 0 and table.concat(pace, " ") or "none",
+        input.routeElite == false and "listed only" or "routed",
+        input.routeEscort and "routed" or "listed only", tostring(input.tram or "auto"), #pace > 0 and table.concat(pace, " ") or "none",
         show(input.stepModel and input.stepModel.n or 0), countKeys(ns.Snapshot.DecodeDrops(input.drops)))
 
     -- versions
