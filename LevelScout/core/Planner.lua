@@ -56,7 +56,7 @@ Planner.GOAL = "rate"          -- what a route is worth: "rate" = its best XP-so
                                -- in the same time (max over leaving points of XP(k) - R * time(k); see ctx.altRate)
 Planner.ALT_SHARE = 1.0        -- surplus goal: R = ctx.altRate * ALT_SHARE (the share of the best zone's rate the player can get elsewhere)
 -- The hearthstone (describe; docs/planner.md, "The hearthstone"): off until benched.
-Planner.HEARTH = false         -- use the hearthstone on the route (ctx.stone, from state.hearth)
+Planner.HEARTH = true          -- use the hearthstone on the route (ctx.stone, from state.hearth); benched "better"
 Planner.HEARTH_MIN_SAVE = 120  -- seconds: a leg goes by hearthstone only when that is at least this much quicker
 Planner.HEARTH_CAST = 10       -- seconds: its cast, when the game does not say
 Planner.HEARTH_LOAD = 20       -- seconds: the loading screen after it (the game does not say)

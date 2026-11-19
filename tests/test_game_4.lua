@@ -831,6 +831,7 @@ H.suite("Hearthstone in the game", function()
 
     test("the planner gets the stone only with the flag on, a stone in the bags, its cooldown read and a place for it", function()
         local ns = start()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
         local env = stoneClient(newEnv())
         M.clock = M.clock + 1e7 -- (the client's clock is well past a cooldown's length)
         local state
@@ -881,6 +882,7 @@ H.suite("Hearthstone in the game", function()
 
     test("HEARTHSTONE_BOUND learns where it is bound (flag on)", function()
         local ns = start()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
         local env = stoneClient(newEnv())
         local chardb = ns.Engine.chardb
         for _, name in ipairs({ "HEARTHSTONE_BOUND", "UNIT_SPELLCAST_SUCCEEDED" }) do
@@ -938,6 +940,7 @@ H.suite("Hearthstone in the game", function()
 
     test("a cast of the hearthstone is written to the play log; where it lands is learned", function()
         local ns, _, _, _, stand = E.wayfinding()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
         local env = stoneClient(newEnv())
         local chardb = ns.Engine.chardb
         local events = chardb.play.events
@@ -983,6 +986,7 @@ H.suite("Hearthstone in the game", function()
 
     test("a teleport in a timed step is logged with h and leaves the travel factor alone", function()
         local ns = start()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
         local Tracker, Geo, Learn = ns.Tracker, ns.Geo, ns.Learn
         local inn = Geo.Loc(1429, 43.8, 65.9)
         local function step(key, loc, extra)

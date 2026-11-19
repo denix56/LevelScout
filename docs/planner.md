@@ -328,7 +328,7 @@ Each zone's route is planned for that zone alone, and the itinerary strings them
 - **Who is on the quest**: for a quest in your log, the game is asked which party members are on
   it, and drops are split between those only. For quests not yet accepted, every member is
   assumed to take them. Not available in a raid.
-- **Hearthstone**: built behind `Planner.HEARTH` (off); see "The hearthstone". Not built: suggesting where to
+- **Hearthstone**: built (`Planner.HEARTH`, on); see "The hearthstone". Not built: suggesting where to
   bind it, and other teleports.
 - **Death risk**: only the cutoff exists (mobs 4+ levels above wait for later).
 - **Town trips** (vendor, repair, trainer).
@@ -546,8 +546,8 @@ Limits and unknowns:
 
 ## The hearthstone (`Planner.HEARTH`)
 
-**Off by default** (`Planner.HEARTH = false`): benched "better", but not tried in the game. Turn it on with
-`/run LevelScout.Planner.HEARTH = true`. The planner, the bench and the tests take the stone as `state.hearth`; in
+**On by default** (`Planner.HEARTH = true`, since 2026-11-19): benched "better", not yet tried in the game. Turn it off
+with `/run LevelScout.Planner.HEARTH = false` (until `/reload`). The planner, the bench and the tests take the stone as `state.hearth`; in
 the game the Engine reads it (see "In the game" below). With the flag off nothing is read, kept or shown.
 
 Benched (2026-11-19, `ONLYSET=1 CHARS=all SALTS="0 1 2 3 4" SET="hearth:Planner.HEARTH=true"`; each character
