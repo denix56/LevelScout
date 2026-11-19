@@ -94,9 +94,12 @@ end
 ns.StepTitle = Format.StepTitle
 Format.MapName = nil -- set by the window: map id -> name (Format itself knows no names)
 
---- The second line: who or where, progress, and what it takes.
-function Format.StepDetail(step)
+--- The second line: who or where, progress, and what it takes. `current`: the row of the step being followed,
+--- whose way line (TripText) tells how to get there.
+function Format.StepDetail(step, current)
     local bits, lines = {}, nil
+    -- the route goes to this step by hearthstone (Planner.HEARTH); the current row's way line says it already
+    if step.hearth and not current then bits[#bits + 1] = "|cff8fd0ffhearth to " .. (step.hearth.name or "your inn") .. "|r" end
     if step.kind ~= "work" then
         if step.target then bits[#bits + 1] = step.target end
         if step.guessed then bits[#bits + 1] = "turn-in place is a guess" end
@@ -142,6 +145,7 @@ local SEP = "  |cff5f646e·|r  "
 -- "fly Lakeshire to Darkshire", "boat Menethil Harbor to Theramore Isle", "take the Freewind Post lift"
 -- (a flight master not known yet: "unlock Lakeshire and fly to Darkshire")
 local function rideText(leg)
+    if leg.kind == "hearth" then return "hearth to " .. (leg.to.name or "your inn") end
     if leg.kind == "fly" and leg.from.unlock then
         return string.format("unlock %s and fly to %s", leg.from.name or "?", leg.to.name or "?")
     end
@@ -162,16 +166,19 @@ function Format.TripText(trip)
     local bits, rides = {}, trip.rides or {}
     if trip.zone then bits[#bits + 1] = "In " .. trip.zone end
     for i, leg in ipairs(rides) do bits[#bits + 1] = (i > 1 and "then " or "") .. rideText(leg) end
+    if #bits > 0 and #rides > 0 and trip.seconds then bits[#bits + 1] = Format.Duration(trip.seconds) end
+    -- the route has the hearthstone here but it is not ready (Planner.HEARTH)
+    if trip.stoneWait then bits[#bits + 1] = "hearthstone ready in " .. Format.Duration(trip.stoneWait) end
     if #bits == 0 then return nil end
-    if #rides > 0 and trip.seconds then bits[#bits + 1] = Format.Duration(trip.seconds) end
     return table.concat(bits, SEP)
 end
 
 --- The waypoint's title while it points at where the way starts:
----   "Flight master: Lakeshire, fly to Darkshire", "Boat: Menethil Harbor, ride to Theramore Isle"
+---   "Flight master: Lakeshire, fly to Darkshire", "Boat: Menethil Harbor, ride to Theramore Isle", "Hearth to Lakeshire"
 function Format.TripTitle(trip)
     local leg = trip and trip.first
     if not leg then return nil end
+    if leg.kind == "hearth" then return "Hearth to " .. (leg.to.name or "your inn") end
     if leg.kind == "fly" then
         return string.format(leg.from.unlock and "New flight master: %s, fly to %s" or "Flight master: %s, fly to %s",
             leg.from.name or "?", leg.to.name or "?")

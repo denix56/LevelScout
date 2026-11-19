@@ -7,6 +7,7 @@
 --   travel:Route(a, b)    the same choice with its legs (walk, fly, boat; boats and other links
 --                         can follow one another, see `chain`), for telling the
 --                         player where to go; called for the current step only.
+--   travel:Route(a, b, stone)  with the hearthstone as one more way (see T:Route).
 
 local _, ns = ...
 
@@ -716,7 +717,7 @@ end
 --- to be unlocked; only where a flight starts) }: a flight point or a harbour, or
 --- only { loc } for a and b themselves. A walk leg can be zero seconds long (standing at the
 --- flight master). No known way (mode "unknown"): no legs, and Travel.NO_ROUTE seconds.
-function T:Route(a, b)
+local function routeOf(self, a, b)
     local legs = {}
     local from, to = { loc = a }, { loc = b }
     local seconds, mode, first, last = way(self, a, b)
@@ -738,4 +739,25 @@ function T:Route(a, b)
     end
     landLegs(self, legs, at, b, atPoint, to)
     return { seconds = seconds, mode = "boat", legs = legs }
+end
+
+--- The same with the hearthstone as one more way: stone = { loc (where it is bound), name, cast (seconds: the cast
+--- and the loading screen), min (seconds it must save; default 0) }, ready to be used now. When the way from the
+--- bind point, with the cast, is quicker than the plain way by `min` seconds, the way is a "hearth" leg
+--- ({ kind = "hearth", from = { loc = a }, to = { name, loc }, seconds = cast }) and the legs of the way on from there,
+--- with mode "hearth". Without a stone, or when it does not pay, the plain way as before.
+function T:Route(a, b, stone)
+    local plain = routeOf(self, a, b)
+    if type(stone) ~= "table" or not stone.loc then return plain end
+    local on = routeOf(self, stone.loc, b)
+    if on.mode == "unknown" or not on.seconds then return plain end
+    local secs = (stone.cast or 0) + on.seconds
+    if secs + (stone.min or 0) >= (plain.seconds or math.huge) then return plain end
+    local inn = { name = stone.name, loc = stone.loc }
+    local legs = { { kind = "hearth", from = { loc = a }, to = inn, seconds = stone.cast or 0 } }
+    for i, leg in ipairs(on.legs) do
+        if i == 1 then leg.from = inn end
+        legs[#legs + 1] = leg
+    end
+    return { seconds = secs, mode = "hearth", legs = legs }
 end

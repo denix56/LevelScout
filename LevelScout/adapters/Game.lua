@@ -151,6 +151,50 @@ function Game.OnTaxi()
     return safe(rawget(_G, "UnitOnTaxi"), "player") and true or false
 end
 
+-- The hearthstone (docs/planner.md, "The hearthstone"; docs/findings.md section 4). Unverified on Forever: every
+-- read goes through `safe`, so what the client does not give is nil.
+Game.HEARTH_ITEM, Game.HEARTH_SPELL = 6948, 8690
+Game.GLOBAL_COOLDOWN = 1.5 -- seconds: a cooldown this short is the global one, not the stone's own
+
+--- The hearthstone as the client shows it:
+--- { name = where it is bound (nil: not said), has = true|false|nil (is it in the bags),
+---   left = seconds until it can be used (0 now; nil: not said), duration = the cooldown's full length
+---   while it runs (nil otherwise), cast = the cast in seconds (nil: not said) }
+function Game.GetHearth()
+    local out = {}
+    local name = safe(rawget(_G, "GetBindLocation"))
+    if type(name) == "string" and name ~= "" then out.name = name end
+    local count = safe(api("C_Item", "GetItemCount") or rawget(_G, "GetItemCount"), Game.HEARTH_ITEM)
+    if type(count) == "number" then out.has = count > 0 end
+    local start, dur = safe(api("C_Container", "GetItemCooldown") or rawget(_G, "GetItemCooldown"), Game.HEARTH_ITEM)
+    if type(start) == "number" and type(dur) == "number" and not isSecret(start) and not isSecret(dur) then
+        if start > 0 and dur > Game.GLOBAL_COOLDOWN then
+            out.left, out.duration = math.max(0, start + dur - Game.Now()), dur
+        else
+            out.left = 0
+        end
+    end
+    local info = safe(api("C_Spell", "GetSpellInfo"), Game.HEARTH_SPELL)
+    local ms = type(info) == "table" and info.castTime or nil
+    if ms == nil then
+        local _, _, _, legacy = safe(rawget(_G, "GetSpellInfo"), Game.HEARTH_SPELL)
+        ms = legacy
+    end
+    if type(ms) == "number" and not isSecret(ms) and ms > 0 then out.cast = ms / 1000 end
+    return out
+end
+
+--- Is this spell cast event the player's hearthstone? (A secret unit or spell is not.)
+function Game.IsHearthCast(unit, spellId)
+    if isSecret(unit) or isSecret(spellId) then return false end
+    return unit == "player" and spellId == Game.HEARTH_SPELL
+end
+
+--- Is the player dead or a ghost? (false when the client does not say)
+function Game.IsDead()
+    return safe(rawget(_G, "UnitIsDeadOrGhost"), "player") and true or false
+end
+
 --- Set of completed quest IDs: { [questId] = true }
 function Game.GetCompletedQuests()
     local ids = safe(api("C_QuestLog", "GetAllCompletedQuestIDs"))

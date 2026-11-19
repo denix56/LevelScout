@@ -44,6 +44,51 @@ function Zones.HearthUses(plan, upto)
     return n, saved
 end
 
+local bindCache = {}
+local function bindKey(name)
+    return (tostring(name):lower():gsub("^the%s+", ""):gsub("%s+city$", ""):gsub("[^%w]", ""))
+end
+
+--- Where a hearthstone bound at `name` (the client's bind location, "Lakeshire", "Stormwind City") is, from the
+--- hubs of the side ("a" | "h"; a hub of both sides counts too): { map, x, y (0-1) }, or nil. Three passes over the
+--- hubs, maps in id order: the name as it is (any case); then with "The" and "City" left off and only letters and
+--- digits kept; then a hub whose key (5 letters at least) starts the name's ("Theramore Isle" for "Theramore").
+function Zones.BindSpot(name, side)
+    if type(name) ~= "string" or name == "" then return nil end
+    local key = name .. "|" .. tostring(side)
+    local hit = bindCache[key]
+    if hit == nil then
+        hit = false
+        local world = ns.Data.World()
+        local maps = {}
+        for map in pairs(world and world.zones or {}) do
+            if type(map) == "number" then maps[#maps + 1] = map end
+        end
+        table.sort(maps)
+        local wanted, wantedKey = name:lower(), bindKey(name)
+        for pass = 1, 3 do
+            for _, map in ipairs(maps) do
+                local info = Zones.Info(map, side)
+                for _, hub in ipairs(info and info.hubs or {}) do
+                    if hub.side == "b" or hub.side == side or not side then
+                        local hubKey = bindKey(hub.name)
+                        if (pass == 1 and hub.name:lower() == wanted) or (pass == 2 and hubKey == wantedKey)
+                            or (pass == 3 and #hubKey >= 5 and wantedKey:sub(1, #hubKey) == hubKey) then
+                            hit = { map = map, x = hub.x / 100, y = hub.y / 100 }
+                            break
+                        end
+                    end
+                end
+                if hit then break end
+            end
+            if hit then break end
+        end
+        bindCache[key] = hit
+    end
+    if hit then return { map = hit.map, x = hit.x, y = hit.y } end
+    return nil
+end
+
 --- The planning context from plain facts about the character.
 --- state = { level, restedPool (rested XP left, as the game reports it; or rested = true for
 ---           "always rested"), xpBonus (0.05 = +5% XP from buffs),
@@ -140,7 +185,7 @@ end
 
 local classInside = {} -- [class] = Zones.ClassInside's answer
 
-function Zones.Reset() zoneCache, dungeonCache, classInside = {}, nil, {} end
+function Zones.Reset() zoneCache, dungeonCache, classInside, bindCache = {}, nil, {}, {} end
 
 -- Where to start a zone when the character's own position is unknown or far away: its
 -- busiest hub for this side.
@@ -626,12 +671,15 @@ function Zones.FlightStops(plan, ctx, skip)
     if not nodes or not plan or not travel or not ctx.start or type(known) ~= "table" or not next(known) then return out end
     local points = { ctx.start }
     for i, step in ipairs(plan.steps) do points[i + 1] = step.loc or points[i] end
+    -- (a leg that goes by hearthstone starts at the inn: Planner.HEARTH)
+    local from = {}
+    for i, step in ipairs(plan.steps) do from[i] = step.hearth and step.hearth.loc or points[i] end
     for id, n in pairs(nodes) do
         if not known[id] and not (skip and skip[id]) and (n[7] == "n" or n[7] == ctx.side) and n[4] and n[5] and n[6] then
             local loc = { c = n[1], x = n[2], y = n[3], map = n[4], mx = n[5], my = n[6] }
             local best, detours = nil, {}
             for i = 1, #points do
-                local prev, nxt = points[i], points[i + 1]
+                local prev, nxt = from[i] or points[i], points[i + 1]
                 local there = travel:Walk(prev, loc)
                 if there and there <= Zones.FLIGHT_DETOUR then
                     local d = there

@@ -17,6 +17,8 @@
 --               extra    a quest was turned in that the route did not have ({ q })
 --               banner   the move-on banner came up, or named another zone ({ to, gain })
 --               moved    the path moved on to its next zone by itself ({ from, to })
+--               hearth   the hearthstone was used ({ planned = true when the shown route had it on its first
+--                        leg, to = where it is bound }); not "overruled": the plan may have it (Planner.HEARTH)
 --               zone, skip, order and extra are "overruled": they count against the forecasts
 --               open at that moment. Each event may carry snap = the id of the snapshot taken
 --               for it (ns.Snapshot).
@@ -205,7 +207,8 @@ end
 ---     whose path covered the window), followed = { n, promised, got } (those without an
 ---     overruling in the window), short = forecasts whose path ran out before the window's end } },
 ---     kinds = { [kind] = count }, zoneBanner (zone changes the banner had suggested), zoneBack
----     (zone changes back to a zone the path had just left), snapshots (events with a snapshot) }
+---     (zone changes back to a zone the path had just left), snapshots (events with a snapshot),
+---     hearthPlanned (hearth events where the route had the stone; only when there is one) }
 function Play.Summary(s)
     s = s or store
     local out = { forecasts = 0, events = 0, windows = {}, kinds = {}, zoneBanner = 0, zoneBack = 0, snapshots = 0 }
@@ -236,6 +239,7 @@ function Play.Summary(s)
         out.kinds[e.k] = (out.kinds[e.k] or 0) + 1
         if e.k == "zone" and e.banner then out.zoneBanner = out.zoneBanner + 1 end
         if e.k == "zone" and e.back then out.zoneBack = out.zoneBack + 1 end
+        if e.k == "hearth" and e.planned then out.hearthPlanned = (out.hearthPlanned or 0) + 1 end
         if e.snap then out.snapshots = out.snapshots + 1 end
     end
     return out
@@ -282,6 +286,9 @@ function Play.Describe(s)
     if (k.skip or 0) > 0 then parts[#parts + 1] = string.format("skipped %d quest%s", k.skip, k.skip == 1 and "" or "s") end
     if (k.order or 0) > 0 then parts[#parts + 1] = string.format("turned in %d out of order", k.order) end
     if (k.extra or 0) > 0 then parts[#parts + 1] = string.format("turned in %d the route did not have", k.extra) end
+    if (k.hearth or 0) > 0 then
+        parts[#parts + 1] = string.format("used the hearthstone %s (%d where the route had it)", times(k.hearth), sum.hearthPlanned or 0)
+    end
     if #parts > 0 then lines[#lines + 1] = "  You " .. table.concat(parts, ", ") .. "." end
     local auto = {}
     if (k.moved or 0) > 0 then auto[#auto + 1] = "the path moved on " .. times(k.moved) end
