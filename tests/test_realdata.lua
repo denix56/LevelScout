@@ -907,12 +907,13 @@ H.suite("Itinerary (real data)", function()
             if not k and P.steps[i].kind == "turnin" and P.steps[i].t < Z.HORIZON / 2 then k = P.order[i] end
         end
         ok(k, "a turn-in in the first half of the horizon")
-        local keep = Z.KEEP_ITINERARY
-        Z.KEEP_ITINERARY = 1e9
+        local keep, border, seam = Z.KEEP_ITINERARY, Z.BORDER, Z.SEAM
+        -- (the way across, planned together, may move the step the zone is left after)
+        Z.KEEP_ITINERARY, Z.BORDER, Z.SEAM = 1e9, false, false
         local fresh = Z.Itinerary(state, ctx, ranked, { shown = S, plan = P })
         local got = Z.Itinerary(state, ctx, ranked, { shown = S, plan = P,
             was = { segments = { { map = S, leaveKey = k }, { map = fresh.segments[2].map } } } })
-        Z.KEEP_ITINERARY = keep
+        Z.KEEP_ITINERARY, Z.BORDER, Z.SEAM = keep, border, seam
         ok(#got.segments >= 2)
         eq(got.segments[1].leaveKey, k)
     end)

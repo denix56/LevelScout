@@ -1029,7 +1029,7 @@ H.suite("Zones", function()
         eq(Z.Choose({ A, B, C }, alone, kept, refine), real[kept], "110 does not earn 5% more than 105")
         real[kept] = it(104, { 1, 5 })
         eq(Z.Choose({ A, B, C }, alone, kept, refine), real[B], "110 earns 5% more than 104")
-        eq(Z.Choose({ A }, it(95, { 1 }), nil, function(c) return c end).xp, 95, "an itinerary must beat the zone alone")
+        eq(Z.Choose({ A }, it(95, { 1 }), nil, refine).xp, 95, "an itinerary must beat the zone alone (A is 90 once planned again)")
     end)
 
     test("move-on with an itinerary: the zone the Zones tab lists first, by start rate", function()
