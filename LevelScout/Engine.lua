@@ -13,9 +13,9 @@ Engine.DEBOUNCE = 0.5        -- seconds: events arrive in bursts
 Engine.MIN_GAP = 2           -- seconds between plans: a kill quest updates the log on every kill
 Engine.RERANK_EVERY = 45     -- seconds between background re-rankings of the other zones
 Engine.KEEP_GOAL = true      -- a clearly better route for the shown zone is taken with the step in hand still first
-Engine.HOLD_ROUTE = true     -- the shown zone's route is held as it is until a quest of it drops out or the player acts (skip, options, re-plan)
+Engine.HOLD_ROUTE = true     -- the shown zone's route is held as it is until a quest of it drops out or the player acts (skip, options, re-plan); a step of it plans quietly (see run)
 Engine.AHEAD_LEVELS = 0.5    -- ... or the character is this many levels ahead of what the held route expected by now
-Engine.PROGRESS = true       -- say what the planner is doing while it runs (view.progress)
+Engine.PROGRESS = true       -- say what the planner is doing while it runs (view.progress); a quiet plan says nothing (see run)
 Engine.PROGRESS_EVERY = 0.15 -- seconds between two progress notices to the window, at least
 -- A full re-plan's bar: ranking the zones up to SHARE_RANK, checking the shown route up to
 -- SHARE_CHECK, then the next hours (its own job) to the end. Shares of measured time.
@@ -54,7 +54,7 @@ local xpBonus, xpBuffs = 0, {}   -- last XP buffs read out of combat
 local plannedRested = 0          -- rested pool the shown plan was made with
 local travel                     -- the ns.Travel object of the shown plan: the way to the current step (ns.Guide)
 local front                      -- keys of stops the player stands at, for the next plan to bring forward
-local rankAfter                  -- a plan made at once (Engine.ReplanNow): the zones are ranked right after it
+local rankOwed                   -- the next plan ranks the zones and does not put it off (see run): after a plan made at once (Engine.ReplanNow), or a quiet one that put the ranking off
 local quickNow                   -- the next plan is the shown route only, however old the ranking (Engine.ReplanNow)
 local freshWay                   -- the next plan's way to the current step is taken at once (Guide.Follow)
 local frontAsked = {}            -- [key] = the quest log and level it was last asked for with (asked once each)
@@ -422,8 +422,10 @@ end
 startItinerary = function(result)
     local view = Engine.view
     itineraryOwed = true
-    view.busy = true
-    view.progress = Engine.PROGRESS and (view.progress or { fraction = Engine.SHARE_CHECK, text = "Planning the next hours" }) or nil
+    if not result.quiet then -- (after a quiet plan, quietly too: see run)
+        view.busy = true
+        view.progress = Engine.PROGRESS and (view.progress or { fraction = Engine.SHARE_CHECK, text = "Planning the next hours" }) or nil
+    end
     local state, zone, plan, ranked = result.state, result.zone, result.base or result.plan, view.ranked
     local shownPlan, border = result.plan, Zones.BORDER and chardb.border or nil
     local seam, seamPlan = Zones.SEAM and chardb.seam or nil, Zones.SEAM and Zones.SeamLayer(result.plan) or nil
@@ -805,14 +807,32 @@ local function run()
     local view = Engine.view
     local now = Game.Now()
     -- (a plan made at once for the player looking at it is the shown route only: the zones follow)
-    if (not quickNow and now - lastRank > Engine.RERANK_EVERY) or #view.ranked == 0 then full = true end
+    -- (a ranking owed is made by this plan: see rankOwed)
+    if (not quickNow and (now - lastRank > Engine.RERANK_EVERY or rankOwed)) or #view.ranked == 0 then full = true end
     if quickNow then full = false end
     quickNow = false
-    if view.status ~= "ready" then setStatus("planning", "Planning") end
-    view.busy = true
-    view.progress = Engine.PROGRESS and { fraction = 0, text = "Planning" } or nil
-    scope, zoneSpan = nil, nil
-    publish()
+    -- A quiet plan: the route on screen is expected to be held (Engine.HOLD_ROUTE), so a step of it
+    -- (an accept, a turn-in, an objective done, the stone or a flight, a flight point learned, a level,
+    -- another zone walked into) shows no bar and no "Planning...". A ranking that is due is put off to a
+    -- plan of its own right after this one (rankOwed), so the step done is on screen at once. Should the
+    -- route not hold after all (a quest of it broke, the character is well ahead, it is used up), the bar
+    -- comes on from there (see the job). The first plan of a session, a zone picked by hand, the player's
+    -- asks (letGo), a class quest chain, a snapshot and a plan after a pause or an error show it as before.
+    local quiet = Engine.HOLD_ROUTE and letGo == letGoDone and not snap and not chardb.chain
+        and view.status == "ready" and view.plan ~= nil and not view.plan.chain and #view.plan.steps > 0
+        and view.zone ~= nil and view.zone == chardb.zone
+    if full and quiet and not rankOwed then full, rankOwed = false, true end
+    if quiet then
+        local was = view.busy
+        view.busy, view.progress, scope, zoneSpan = false, nil, nil, nil
+        if was then publish() end -- (the bar of the next hours stopped below goes at once)
+    else
+        if view.status ~= "ready" then setStatus("planning", "Planning") end
+        view.busy = true
+        view.progress = Engine.PROGRESS and { fraction = 0, text = "Planning" } or nil
+        scope, zoneSpan = nil, nil
+        publish()
+    end
 
     Async.Stop("itinerary") -- worked out again after this job, from its result
     Async.Run("plan", function(checkpoint)
@@ -917,9 +937,43 @@ local function run()
         -- way across planned together)
         local shown = (view.plan and not view.plan.chain) and Zones.Plain(view.plan) or nil
         local zone, fresh = chardb.zone, nil
+        -- The order to keep: the shown route's; before the first plan of a session (login,
+        -- /reload) the one saved with the character, so the route does not reshuffle over a relog.
+        local function keepOf(z)
+            if shown then return (shown.zone == z and #shown.steps > 0) and shown.order or nil end
+            local saved = chardb.route
+            return (saved and saved.zone == z) and saved.order or nil
+        end
+        -- The route held (Engine.HOLD_ROUTE): the shown route stays as it is, with only the quests
+        -- taken since added, until a quest of it drops out without being turned in (it became
+        -- impossible, was skipped or dropped from the log, or waits for a level now) or the
+        -- player asks (a skip, an option, re-plan). Then it is planned again as below. Tried first:
+        -- a held route needs no fresh plan of the zone, and a quiet plan learns at once whether it holds.
+        local held
+        local function hold(z)
+            local keep = keepOf(z)
+            if not (keep and Engine.HOLD_ROUTE and letGo == letGoDone) then return end
+            local h = Zones.PlanZone(z, ctx, keep, nil, { front = frontKeys, hold = true })
+            if #h.steps > 0 and not Zones.RouteBroken(keep, h, ctx.avail and ctx.avail.completed) then held = h end
+            -- (something major: the character is well ahead of the route, having done other things)
+            local route = chardb.route
+            local ahead = held and route and route.zone == z
+                and Zones.RouteAhead(route, held, state.level, state.xp, state.xpMax) or nil
+            if ahead and ahead >= Engine.AHEAD_LEVELS then held = nil end
+        end
+        if zone then hold(zone) end
+        -- A quiet plan whose route does not hold after all: it is planned again, with the bar from here.
+        -- (the phase of the bar is set already, above)
+        if quiet and not held then
+            quiet = false
+            view.busy = true
+            view.progress = Engine.PROGRESS and { fraction = 0, text = "Planning the route" } or nil
+            ctx.progress = view.progress and note or nil
+            publish()
+        end
         -- A quick re-plan that finds the shown zone's route used up: the zones are ranked at
         -- once, so the next zone follows without waiting for the next ranking.
-        if zone and not full then
+        if zone and not full and not held then
             fresh = Zones.PlanZone(zone, ctx, nil, nil, { warm = Zones.WARM_SHOWN and nil or false })
             if #fresh.steps == 0 and shown and shown.zone == zone and #shown.steps > 0 then
                 full, fresh = true, nil
@@ -977,35 +1031,17 @@ local function run()
         if not zone then
             zone = open(state.map) and state.map or (ranked[1] and ranked[1].map) or state.map
             fresh = nil
+            hold(zone) -- (the zone chosen just now: its shown or saved route may be held)
         end
-        if not fresh then
-            fresh = full and planOf(zone)
-                or Zones.PlanZone(zone, ctx, nil, nil, { warm = Zones.WARM_SHOWN and nil or false })
+        -- (a held route needs no fresh plan; a ranking's own plan of the zone is kept all the same, for the search view)
+        if not fresh and full then fresh = planOf(zone) end
+        if not fresh and not held then
+            fresh = Zones.PlanZone(zone, ctx, nil, nil, { warm = Zones.WARM_SHOWN and nil or false })
         end
-        local plan = fresh
+        local plan = held or fresh
         phase(full and Engine.SHARE_RANK or 0.7, full and Engine.SHARE_CHECK or 1, "Checking the shown route", true)
-        -- The order to keep: the shown route's; before the first plan of a session (login,
-        -- /reload) the one saved with the character, so the route does not reshuffle over a relog.
-        local keep = shown and shown.zone == zone and #shown.steps > 0 and shown.order or nil
-        local saved = chardb.route
-        if not shown and saved and saved.zone == zone then keep = saved.order end
-        -- The route held (Engine.HOLD_ROUTE): the shown route stays as it is, with only the quests
-        -- taken since added, until a quest of it drops out without being turned in (it became
-        -- impossible, was skipped or dropped from the log, or waits for a level now) or the
-        -- player asks (a skip, an option, re-plan). Then it is planned again as below.
-        local held
-        if keep and Engine.HOLD_ROUTE and letGo == letGoDone then
-            local h = Zones.PlanZone(zone, ctx, keep, nil, { front = frontKeys, hold = true })
-            if #h.steps > 0 and not Zones.RouteBroken(keep, h, ctx.avail and ctx.avail.completed) then held = h end
-            -- (something major: the character is well ahead of the route, having done other things)
-            local route = chardb.route
-            local ahead = held and route and route.zone == zone
-                and Zones.RouteAhead(route, held, state.level, state.xp, state.xpMax) or nil
-            if ahead and ahead >= Engine.AHEAD_LEVELS then held = nil end
-        end
-        if held then
-            plan = held
-        elseif keep then
+        local keep = keepOf(zone) -- (the route held is taken as it is; otherwise the keep rule below)
+        if not held and keep then
             -- stops we stand at, further down: the shown route with them brought forward wins
             local kept = Zones.PlanZone(zone, ctx, keep, nil, frontKeys and { front = frontKeys } or nil)
             if kept.fronted or not Zones.PreferFresh(kept, fresh) then
@@ -1043,13 +1079,14 @@ local function run()
         return { ranked = ranked, plan = plan, base = base, fresh = fresh, zone = zone, state = state, full = full, travel = ctx.travel,
             flightStops = Zones.FlightStops(plan, ctx, chardb.skippedNodes),
             offers = offersOf(chains, ctx, nil, plan, best), ended = ended, reached = reached,
-            held = held ~= nil or nil, letGo = letGo }
+            held = held ~= nil or nil, letGo = letGo, quiet = quiet or nil }
     end, function(ok, result)
         -- The zones and the route are shown now; the itinerary follows in a job of its own.
         -- (a class quest plan has no itinerary: it is followed to its end)
-        local more = ok and not result.chain and (result.full or itineraryOwed)
-        view.busy = more and true or false
-        if not more then view.progress, scope, zoneSpan = nil, nil, nil end
+        -- (while the zones are owed a ranking, the itinerary waits for the plan that makes it: it would only be stopped)
+        local more = ok and not result.chain and (result.full or (itineraryOwed and not rankOwed))
+        view.busy = (more and not result.quiet) and true or false -- (a quiet plan's next hours come quietly too)
+        if not view.busy then view.progress, scope, zoneSpan = nil, nil, nil end
         if not ok then
             setStatus("error", "Planning failed: " .. tostring(result))
             if snap then
@@ -1061,6 +1098,7 @@ local function run()
         if result.letGo and result.letGo > letGoDone then letGoDone = result.letGo end -- (the player's ask is answered)
         if result.full then
             lastRank = Game.Now()
+            rankOwed = false
             if ns.Planner.GOAL == "surplus" then -- the next plans' alternative: the best score of this ranking
                 local best
                 for _, z in ipairs(result.ranked) do
@@ -1160,19 +1198,17 @@ local function run()
             end
         end
         if more then startItinerary(result) end
-        -- a plan made at once for the shown route: the zones are ranked next
-        if rankAfter then
-            rankAfter = false
-            if not result.full then pendingFull = true end
-        end
+        -- a plan made at once (Engine.ReplanNow), or a quiet one that put the ranking off: the zones are ranked next
+        if rankOwed and not result.full then pendingFull = true end
         if pending then return end
         if pendingFull then Engine.Replan(true) end
     end)
 end
 
---- Ask for a new plan. `full` also re-ranks the other zones. `letGo`: the player asked for it (a
---- skip, an option, re-plan), so the held route is planned again (Engine.HOLD_ROUTE). Bursts of
---- calls run once.
+--- Ask for a new plan. `full` also re-ranks the other zones (while the route on screen is held, in a
+--- plan of its own right after the route's, quietly: see run). `letGo`: the player asked for it (a
+--- skip, an option, re-plan), so the held route is planned again (Engine.HOLD_ROUTE), with the bar.
+--- Bursts of calls run once.
 function Engine.Replan(full, letGo)
     if not started then return end
     if letGo then letGoAsked = letGoAsked + 1 end
@@ -1359,7 +1395,7 @@ end
 function Engine.ReplanNow()
     if not started then return end
     Async.Stop("plan")
-    pending, rankAfter, freshWay, quickNow = false, true, true, true
+    pending, rankOwed, freshWay, quickNow = false, true, true, true
     if #Engine.view.ranked == 0 then quickNow = false end -- (nothing ranked yet: the first plan ranks)
     run()
 end
