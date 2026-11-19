@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **On to a higher zone, when this one is done**: the plan for the next hours now goes on only to a zone of a higher level range (the middle of its range above this one's), and only when little is left here (three quests or fewer still to turn in), you are within a level of this zone's top, or you are at least two levels into the next zone's range by then. Dungeons are not held to it. When no zone qualifies, the plan stays in one zone and is worked out again as you play. When the zone you are in runs out, "Done here. Next:" names a higher zone when one has something to do, else the best one as before. Not benchmarked. (For developers: `Zones.HANDOFF`, off: as before; `Zones.HANDOFF_RISE`, `HANDOFF_QUESTS`, `HANDOFF_NEAR_CAP`, `HANDOFF_FIT`, `HANDOFF_LEVELS`; `Zones.Handoff`, `Zones.Higher`, `Zones.LevelAt`.)
 - **The route stays put**: the zone's route on screen is no longer reshuffled as you play. Quests no
   longer come and go between plans, and a slightly better route no longer replaces it. It changes only
   when a quest of it can no longer be done, when you skip or bring back a quest, change an option or

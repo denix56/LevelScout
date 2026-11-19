@@ -576,6 +576,10 @@ H.suite("Itinerary (real data)", function()
         local state = { level = 22, faction = "Alliance", class = "PALADIN", raceId = 1, map = 1433, x = 0.30, y = 0.44,
             log = {}, completed = completed, capacity = 40, knownNodes = known }
         local ctx = ns.Zones.Context(state)
+        -- (these tests are about how an itinerary is put together, and need one of two zones: the rule
+        -- for moving on, Zones.HANDOFF, keeps this level 22 paladin in one zone, so it is off here; its
+        -- own test below turns it on)
+        ns.Zones.HANDOFF = false
         return ns, state, ctx, ns.Zones.Rank(ctx)
     end
 
@@ -629,6 +633,29 @@ H.suite("Itinerary (real data)", function()
         ok(clock <= it.horizon + 1, "inside the horizon: " .. clock)
         ok(math.abs(xp - it.xp) <= #it.segments, "the zones' XP adds up to the total")
         H.near(it.rate, it.xp / (it.horizon / 3600), 1, "XP per hour over the horizon")
+    end)
+
+    test("moving on (Zones.HANDOFF): every zone after the first is higher than the zone before it", function()
+        local Z = ns.Zones
+        Z.HANDOFF = true
+        local on = Z.Itinerary(state, ctx, ranked)
+        local long
+        Z.HORIZON = 4 * 3600 -- (more room for a move)
+        long = Z.Itinerary(state, ctx, ranked)
+        Z.HANDOFF, Z.HORIZON = false, it.horizon
+        for _, got in ipairs({ on, long }) do
+            ok(got, "an itinerary")
+            local before
+            for _, seg in ipairs(got.segments) do
+                if not Z.Dungeon(seg.map) then
+                    if before then
+                        local a, b = Z.Info(before, ctx.side), Z.Info(seg.map, ctx.side)
+                        ok(Z.Higher(a.lo, a.hi, b.lo, b.hi), string.format("%d (%d-%d) after %d (%d-%d)", seg.map, b.lo, b.hi, before, a.lo, a.hi))
+                    end
+                    before = seg.map
+                end
+            end
+        end
     end)
 
     test("the trip from one zone to the next is corrected by the learned travel factor", function()
