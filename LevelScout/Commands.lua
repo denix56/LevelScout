@@ -140,6 +140,14 @@ SlashCmdList.LEVELSCOUT = function(msg)
         if v then
             ns.Print("planner: %s%s; waypoint: %s", tostring(v.status), v.message and (" (" .. v.message .. ")") or "", ns.Guide.mode)
         end
+        if ns.Planner.HEARTH and ns.Engine then -- the hearthstone (off by default)
+            local h = ns.Engine.HearthInfo()
+            local where = h.name and string.format("%s (%s)", h.name, h.source == "learned" and "learned" or (h.source == "data" and "from the data" or "place not known"))
+                or "not bound"
+            local state = h.has == false and "not in the bags" or (h.left == nil and "cooldown not known")
+                or (h.left <= 0 and "ready" or ("ready in " .. ns.Format.Duration(h.left)))
+            ns.Print("hearthstone: %s, %s", where, state)
+        end
     elseif cmd == "buffs" then
         local buffs = Game.ListBuffs()
         if not buffs then ns.Print("buffs cannot be read in combat or in an instance"); return end

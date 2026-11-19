@@ -1,5 +1,18 @@
 # LevelScout
 
+## Unreleased
+
+- **For developers: the hearthstone in the plan** (`Planner.HEARTH`, on): a route uses the
+  hearthstone on the first trip it shortens by 2 minutes or more, once the stone is ready, and the
+  next hours carry its cooldown from zone to zone. The route's order does not change; its times, the
+  zone ranking and the next hours see the time saved. The bench binds each character in its town
+  (`SET="hearth:Planner.HEARTH=true"`, `BIND=capital`, `HEARTH_READY=`). With the flag off plans
+  are unchanged.
+- **Hearthstone**: LevelScout reads where your hearthstone is bound and when it is ready. When it saves at
+  least 2 minutes, the route uses it: the current step says "hearth to Lakeshire", and so do later steps. When it
+  is not ready yet, the step says when it will be. In the benchmark this earned about 1% more XP over the next
+  2.5 hours. Not tried in the game yet: `/run LevelScout.Planner.HEARTH = false` turns it off until `/reload`.
+
 ## 0.2.0
 
 - **Quests that end in the next zone are taken along**: when the next hours go on to another

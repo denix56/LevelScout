@@ -55,6 +55,13 @@ Planner.GOAL = "rate"          -- what a route is worth: "rate" = its best XP-so
                                -- plus a small tail term); "surplus" = its XP over what the next-best option would have made
                                -- in the same time (max over leaving points of XP(k) - R * time(k); see ctx.altRate)
 Planner.ALT_SHARE = 1.0        -- surplus goal: R = ctx.altRate * ALT_SHARE (the share of the best zone's rate the player can get elsewhere)
+-- The hearthstone (describe; docs/planner.md, "The hearthstone"): off until benched.
+Planner.HEARTH = true          -- use the hearthstone on the route (ctx.stone, from state.hearth); benched "better"
+Planner.HEARTH_MIN_SAVE = 120  -- seconds: a leg goes by hearthstone only when that is at least this much quicker
+Planner.HEARTH_CAST = 10       -- seconds: its cast, when the game does not say
+Planner.HEARTH_LOAD = 20       -- seconds: the loading screen after it (the game does not say)
+Planner.HEARTH_COOLDOWN = 3600 -- seconds: its cooldown, until the game has shown it running
+Planner.HEARTH_READY_STEP = 30 -- seconds: the time until it is ready is rounded up to this (no new plan every second)
 
 ---------------------------------------------------------------------------------------------
 -- Route state
@@ -85,6 +92,7 @@ local function newRoute(ctx)
     self.level = ctx.level
     self.ups = ctx.levelUps or {}           -- route XP at which each next level is reached
     self.gated = false                      -- is any quest in play that needs a later level?
+    self.stone = Planner.HEARTH and ctx.stone or nil -- the hearthstone: only describe uses it
     -- What finished steps have taught about planned times (ns.Learn's step-time model): one
     -- factor for travel, one for accepting and turning in, one per kind of work (in `fix`).
     -- Every time the search looks at comes from tt, value, service or taskTotals, so the
@@ -188,6 +196,28 @@ function R:tt(a, b)
         self.memo[k] = v
     end
     return v
+end
+
+--- Seconds from anywhere to `node` by the hearthstone (self.stone): the cast and the loading screen, then the
+--- way from where it is bound. Remembered per stop.
+function R:hearthTo(node)
+    local memo = self.hearthMemo
+    if not memo then memo = {}; self.hearthMemo = memo end
+    local v = memo[node.n]
+    if v == nil then
+        local st = self.stone
+        v = st.cast + self.travel:Seconds(st.loc, node.loc) * self.travelFactor
+        memo[node.n] = v
+    end
+    return v
+end
+
+--- The hearthstone's rule for one leg: it starts at plan time `t`, the stone can be used from `ready`, the
+--- leg takes `leg` seconds without it and `hearth` with it. Returns the leg's seconds, when the stone can
+--- be used next, and whether it is used here.
+function Planner.StoneLeg(stone, t, ready, leg, hearth)
+    if t >= ready and leg - hearth >= Planner.HEARTH_MIN_SAVE then return hearth, t + stone.cd, true end
+    return leg, ready, false
 end
 
 -- Version: bumped whenever the route's order or any stop's reqs change.
@@ -1757,10 +1787,22 @@ local function describe(r, plan)
     local t, xp = plan.overhead, 0
     local pool = r.restedBonus
     local ups, d, nextUp = r.ups, 0, r.ups[1]
+    -- The hearthstone (Planner.HEARTH): on the first leg, once it is ready, that it makes at least
+    -- HEARTH_MIN_SAVE quicker; each use starts its cooldown again. Only the times change.
+    local stone = r.stone
+    local ready = stone and stone.ready or nil
     for i = 2, #route do
         local node = route[i]
         local travel = r:tt(route[i - 1], node)
-        local step = { loc = node.loc, travel = travel }
+        local hearth
+        if stone and t >= ready then
+            local plain, used = travel, false
+            travel, ready, used = Planner.StoneLeg(stone, t, ready, plain, r:hearthTo(node))
+            if used then
+                hearth = { name = stone.name, loc = stone.loc, cast = stone.cast, t = t, saved = plain - travel, plain = plain }
+            end
+        end
+        local step = { loc = node.loc, travel = travel, hearth = hearth }
         local lv = d > 0 and (r.level + d) or nil
         if node.kind == "W" then
             local seconds, killXP, kills, workAs = taskTotals(node, nil, lv, r.fix)
@@ -1806,6 +1848,7 @@ local function describe(r, plan)
         -- times as first planned stay on the step: the step-time model is fitted against those.
         if r.fix then
             local rawTravel = travel / r.travelFactor
+            if hearth then rawTravel = stone.cast + (travel - stone.cast) / r.travelFactor end -- (the cast is not travel)
             local rawSeconds = node.kind == "W" and (taskTotals(node, nil, lv)) or Cost.INTERACT_SECONDS
             if rawTravel + rawSeconds > 0 then
                 step.rawTravel, step.rawSeconds = rawTravel, rawSeconds
@@ -1825,12 +1868,22 @@ local function describe(r, plan)
         local s = steps[i]
         if s.kind == "turnin" and (s.keep or s.border) then
             local after = steps[i + 1]
-            if after then after.travel = after.travel + s.travel + s.seconds end
+            if after then
+                after.travel = after.travel + s.travel + s.seconds
+                if s.hearth and not after.hearth then after.hearth = s.hearth end
+            end
             remove(steps, i)
             remove(order, i)
         end
     end
     plan.steps, plan.order = steps, order
+    if stone then -- what Zones.Project and Zones.HearthLead read
+        local uses = {}
+        for i, s in ipairs(steps) do
+            if s.hearth then uses[#uses + 1] = { step = i, t = s.hearth.t, saved = s.hearth.saved } end
+        end
+        plan.hearth = { name = stone.name, ready = stone.ready, cd = stone.cd, from = route[1].loc, uses = uses }
+    end
     plan.seconds, plan.xp = t, xp
     -- Best moment to leave: the prefix with the highest XP per second, judged on at least
     -- MIN_HORIZON of play (time left over in a short zone earns nothing).
@@ -1889,6 +1942,8 @@ end
 --- ctx = { level, restedBonus, xpBonus, pace, stepModel (ns.Learn's step-time model; optional), start (location), startMap, travel (ns.Travel object),
 ---         log = { [questId] = entry }, logCount, capacity, avail (context for Data.IsAvailable),
 ---         ignored = { [questId] = true }, tagOf, checkpoint, near,
+---         stone = optional (Planner.HEARTH): the hearthstone, { kind = "hearth", name, loc, ready (seconds until
+---                 it can be used), cd, cast (the cast and the loading screen) } (Zones.Stone); describe uses it,
 ---         progress = optional function(stage, done, total): told "search" round of rounds and
 ---                    "order" (the tidy-up); it only listens,
 ---         chain = optional { quests = { ids } }: plan a class quest chain instead of the zone (see
@@ -1917,7 +1972,8 @@ end
 --- plan under the rate goal), searchSpent = work units of the warm start, the search and the
 --- tidy-up of its route (nil without a search),
 --- border = { [id] = { to, left = objectives left after this zone, gone = true when nothing of it
---- is done here } }, borderIds = those ids, sorted (only with opts.border) }.
+--- is done here } }, borderIds = those ids, sorted (only with opts.border),
+--- hearth = { name, ready, cd, from, uses = { { step, t, saved } } } (only with ctx.stone and Planner.HEARTH) }.
 function Planner.Plan(zoneMap, ctx, opts)
     opts = opts or {}
     local checkpoint = ctx.checkpoint
