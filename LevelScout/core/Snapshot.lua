@@ -13,6 +13,7 @@
 --   input     the planning state (Snapshot.Capture; Snapshot.State turns it back into a state):
 --             level, restedPool, xpBonus, xp, xpMax, maxLevel, raceId, faction, class, map, x, y,
 --             capacity, groupSize, routeElite, routeEscort, tram, now, altRate (plain values),
+--             hearth (the hearthstone: { name, map, x, y, ready, cd, cast }),
 --             log (the quest log, as the game gave it), bagQuests, pace, stepModel (plain copies),
 --             completed, knownNodes, ignored ("12,3,1,40": sorted ids as differences),
 --             drops ("item:npc:kills:drops;..."), tags and party ({ [questId] = answer } for the
@@ -179,6 +180,7 @@ function Snapshot.Capture(state)
     input.bagQuests = Snapshot.Copy(state.bagQuests)
     input.pace = Snapshot.Copy(state.pace)
     input.stepModel = Snapshot.Copy(state.stepModel)
+    if type(state.hearth) == "table" then input.hearth = Snapshot.Copy(state.hearth) end
     local tags, party = {}, {}
     for _, q in ipairs(input.log) do
         if type(state.tagOf) == "function" then
@@ -211,6 +213,7 @@ function Snapshot.State(input)
     state.bagQuests = Snapshot.Copy(input.bagQuests)
     state.pace = Snapshot.Copy(input.pace)
     state.stepModel = Snapshot.Copy(input.stepModel)
+    state.hearth = Snapshot.Copy(input.hearth)
     local inLog = {}
     for _, q in ipairs(state.log) do inLog[q.id] = true end
     local tags, party = Snapshot.Copy(input.tags) or {}, Snapshot.Copy(input.party) or {}
@@ -322,7 +325,7 @@ local function stepOf(plan, i)
     local loc = s.loc or {}
     return { key = plan.order and str(plan.order[i]), kind = str(s.kind), xp = num(s.xp), t = num(s.t),
         travel = num(s.travel), seconds = num(s.seconds), map = num(loc.map), mx = num(loc.mx), my = num(loc.my),
-        target = type(s.target) == "string" and s.target or nil }
+        target = type(s.target) == "string" and s.target or nil, hearth = s.hearth and true or nil }
 end
 
 local function planOf(plan, light)

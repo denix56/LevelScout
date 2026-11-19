@@ -174,6 +174,9 @@ local function stepTip(step, index)
             lines[#lines + 1] = { what }
         end
         lines[#lines + 1] = { "Travel", right = Format.Duration(step.travel) }
+        if step.hearth then -- (Planner.HEARTH)
+            lines[#lines + 1] = { "  by hearthstone to " .. (step.hearth.name or "your inn"), right = "saves " .. Format.Duration(step.hearth.saved), color = C.dim }
+        end
         -- the current step: the way from where we stand, leg by leg, when it is more than a walk
         local trip = index == 1 and Guide.Trip() or nil
         if onFootUnknown(trip) then
@@ -343,9 +346,11 @@ UI.AHEAD_STEPS = 20 -- rows per zone
 local function onwardRows(it, out, from)
     for n = 2, #it.segments do
         local seg = it.segments[n]
-        out[#out + 1] = { section = string.format("Then: %s  %s(%sabout %s there)|r", seg.name or "the next zone", hex(C.faint),
-            (seg.travel or 0) > 60 and (Format.Duration(seg.travel) .. " away, ") or "", Format.Duration(seg.seconds)), h = SECTION_H }
         local steps = seg.plan and seg.plan.steps or {}
+        local stone = steps[1] and steps[1].hearth -- (Planner.HEARTH: the way there is the stone)
+        out[#out + 1] = { section = string.format("Then: %s  %s(%s%sabout %s there)|r", seg.name or "the next zone", hex(C.faint),
+            stone and ("hearth to " .. (stone.name or "your inn") .. ", ") or "",
+            (seg.travel or 0) > 60 and (Format.Duration(seg.travel) .. " away, ") or "", Format.Duration(seg.seconds)), h = SECTION_H }
         local upto = math.min(seg.leave or #steps, #steps)
         local shown = 0
         for _, step in ipairs(grouped(steps)) do
@@ -440,7 +445,7 @@ local function routeRows(view)
             tailShown = true
             out[#out + 1] = { section = "Low value from here", h = SECTION_H, warn = true }
         end
-        local detail, lines = Format.StepDetail(step)
+        local detail, lines = Format.StepDetail(step, not guided and not step.fromBag) -- (the current row's way line has the hearthstone)
         local base, trip = detail, nil
         local here = step.loc
         -- (the zone the step is in, not the map its spots were recorded on: a camp can come
@@ -1214,12 +1219,22 @@ local function build()
         local plan = Engine.view.plan
         if not plan or #plan.steps == 0 then return nil end
         local short = plan.seconds < ns.Planner.MIN_HORIZON -- the route ends before the hour it is judged on
+        local hearth = Engine.view.hearth -- (Planner.HEARTH)
+        local uses, saved, wait = 0, 0, 0
+        if hearth then
+            uses, saved = ns.Zones.HearthUses(plan)
+            wait = (hearth.ready or 0) - (Game.Now() - (hearth.at or Game.Now())) -- (seconds from the plan, less those gone since)
+        end
         return { { "XP per hour" }, { "Following this route and leaving at the best moment. Travel, kills and quest rewards are counted." },
             { short and "The route is shorter than an hour: the time left over earns nothing here." or false },
             { short and "Pace while it lasts" or "Whole route", right = Format.Number(short and plan.rate or plan.fullRate) .. " XP/h" },
             { (Engine.view.xpBonus or 0) > 0 and "XP buffs" or false, right = Format.Bonus(Engine.view) },
             { (Engine.view.restedPool or 0) > 0 and "Rested" or false,
                 right = Format.Number((Engine.view.restedPool or 0) / 2) .. " bonus XP on kills" },
+            { hearth and ("Hearthstone: bound at " .. tostring(hearth.name)) or false,
+                right = wait > 0 and ("ready in " .. Format.Duration(wait)) or "ready" },
+            { uses > 0 and "Hearthstone in this route" or false,
+                right = string.format("%d %s, saves %s", uses, uses == 1 and "use" or "uses", Format.Duration(saved)) },
             { (Engine.view.groupSize or 1) > 1 and string.format("In a group of %d: kills are planned faster, their XP is shared, and quest drops are split between the members. Quest XP is unchanged.", Engine.view.groupSize) or false },
             { plan.logFull and "The quest log is too full for this route: turn something in or abandon a quest." or false, color = C.warn } }
     end)

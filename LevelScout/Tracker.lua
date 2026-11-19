@@ -46,6 +46,9 @@ Tracker.STILL_YARDS = 1     -- moved less than this between two looks: standing 
 Tracker.ARRIVE_WORK = 60    -- yards: a work step's place (a camp) is reached this close to it
 Tracker.ARRIVE_TALK = 25    -- yards: an accept's or a turn-in's NPC is reached this close
 Tracker.SPLIT_MIN = 5       -- seconds: both parts of a step must be planned at least this long to be learned apart
+Tracker.JUMP_YARDS = 250    -- a hop this long and ...
+Tracker.JUMP_SPEED = 60     -- ... this fast (yards per second) is a teleport, not travel (Planner.HEARTH: marks the step)
+Tracker.JUMP_WINDOW = 60    -- seconds: the two places are at most this far apart in time
 
 local paceStore, dropStore, stepStore, modelStore
 local current        -- the step being timed: { key, a0 (active clock at its start), loc, arrived (active
@@ -56,13 +59,14 @@ local kills = {}     -- recent kills, oldest first: { npc = id or false (unknown
 local move           -- the stretch of travel being measured: { t, loc, mounted, yards, seconds } or nil
 local idle = 0       -- seconds of standing still past IDLE_GRACE so far (not active)
 local look           -- the last look: { t, loc } (for the active clock)
+local placed         -- the last place seen: { t, loc } (to tell a jump of position: Planner.HEARTH)
 local stillFor = 0   -- seconds standing still up to the last look
 
 --- Start collecting into the saved tables (pace: per character; drops: per account).
 function Tracker.Start(pace, drops, steps, model)
     paceStore, dropStore, stepStore, modelStore = pace, drops, steps, model
     seen, wantedBy, kills, current, move = {}, {}, {}, nil, nil
-    idle, look, stillFor = 0, nil, 0
+    idle, look, stillFor, placed = 0, nil, 0, nil
 end
 
 --- The active clock at `now` (seconds, like Game.Now): the time so far less the time spent
@@ -209,6 +213,17 @@ end
 function Tracker.OnMove(info)
     if not paceStore or not info or not info.now then return nil end
     keepClock(info)
+    -- a jump of position (the hearthstone, any teleport) marks the step being timed (Planner.HEARTH)
+    if ns.Planner and ns.Planner.HEARTH and info.loc then
+        local was = placed
+        placed = { t = info.now, loc = info.loc }
+        if current and was then
+            local dt, hop = info.now - was.t, Geo.Dist(was.loc, info.loc)
+            if dt > 0 and dt <= Tracker.JUMP_WINDOW and hop and hop > Tracker.JUMP_YARDS and hop / dt > Tracker.JUMP_SPEED then
+                current.jumped = true
+            end
+        end
+    end
     -- the step being timed: its place reached for the first time ends its travel part
     if current and not current.arrived and current.loc and info.loc then
         local d = Geo.Dist(current.loc, info.loc)
@@ -251,6 +266,12 @@ function Tracker.Interrupt()
     current = nil
 end
 
+--- The player teleported (the hearthstone's cast went through): the step being timed is marked, so that its
+--- time is not taken for travel on foot. Only with Planner.HEARTH.
+function Tracker.Teleported()
+    if ns.Planner and ns.Planner.HEARTH and current then current.jumped = true end
+end
+
 -- Is the timed step done? An accept: the quest is in the log. A turn-in: the quest is completed.
 -- Work: every objective it was for is finished. Anything else (the route changed, the quest was
 -- skipped or dropped) is not a finished step and is not logged.
@@ -279,7 +300,8 @@ end
 ---     (active time), at, aw = of those, the travel until its place was first reached and the
 ---     rest (nil when it was not seen reached), lv = level, g = group size, e = true for a group
 ---     (elite) step, n = planned kills, d = mob level minus own level when the step started
----     (both may be nil) }
+---     (both may be nil), h = 1 when a teleport was in the step (Planner.HEARTH: the hearthstone, or a jump of
+---     position; its travel is not learned) }
 --- An escort step is not logged: its time is the script's, and a wait for its NPC is mostly
 --- standing still.
 --- info = { now, level, group, log = ns.Game.GetQuestLog(), completed = { [questId] = true } }.
@@ -297,6 +319,8 @@ function Tracker.OnPlan(plan, info)
                 line.at = math.floor(math.min(current.arrived, took) + 0.5)
                 line.aw = line.a - line.at
             end
+            -- h = 1: a teleport (a hearthstone, a jump of position) was in the step, or the plan had the stone for it
+            if current.jumped or current.hearth then line.h = 1 end
             stepStore[#stepStore + 1] = line
             Tracker.Learn(line) -- the step-time model learns from it
             while #stepStore > Tracker.KEEP_STEPS do table.remove(stepStore, 1) end
@@ -313,7 +337,8 @@ function Tracker.OnPlan(plan, info)
         current = { key = key, a0 = Tracker.Active(info.now), loc = step.loc, kind = step.kind, action = step.workAs or step.action,
             p = math.floor(travel + seconds + 0.5), pt = math.floor(travel + 0.5),
             elite = step.group and true or nil, escort = step.escort, quest = step.quests and step.quests[1] and step.quests[1].id, parts = parts,
-            n = step.kills, d = step.mobLevel and info.level and math.floor(step.mobLevel - info.level + 0.5) or nil }
+            n = step.kills, d = step.mobLevel and info.level and math.floor(step.mobLevel - info.level + 0.5) or nil,
+            hearth = step.hearth and true or nil }
     end
 end
 
@@ -325,6 +350,14 @@ end
 function Tracker.Learn(line)
     local p, pt = tonumber(line.p) or 0, tonumber(line.pt) or 0
     local at, aw = tonumber(line.at), tonumber(line.aw)
+    -- a line with h (a teleport in it): its travel says nothing about walking, only its work is learned
+    if line.h then
+        if at and aw and pt >= Tracker.SPLIT_MIN and p - pt >= Tracker.SPLIT_MIN and aw > 0 then
+            local stop = { k = line.k, w = line.w, p = p - pt, pt = 0, g = line.g, e = line.e, n = line.n, d = line.d }
+            return Learn.AddStep(modelStore, Learn.StepFeatures(stop), stop.p, aw)
+        end
+        return nil
+    end
     if at and aw and pt >= Tracker.SPLIT_MIN and p - pt >= Tracker.SPLIT_MIN then
         local travel = { k = line.k, w = line.w, p = pt, pt = pt, g = line.g, e = line.e, n = line.n, d = line.d }
         local stop = { k = line.k, w = line.w, p = p - pt, pt = 0, g = line.g, e = line.e, n = line.n, d = line.d }
@@ -351,7 +384,7 @@ function Tracker.StepStats()
     for _, s in ipairs(stepStore or {}) do
         if type(s) == "table" and (tonumber(s.p) or 0) > 0 and tonumber(s.a) then
             local pt = tonumber(s.pt) or 0
-            if tonumber(s.at) and pt >= Tracker.SPLIT_MIN then travel[#travel + 1] = s.at / pt end
+            if tonumber(s.at) and pt >= Tracker.SPLIT_MIN and not s.h then travel[#travel + 1] = s.at / pt end
             if tonumber(s.aw) and s.p - pt >= Tracker.SPLIT_MIN then stop[#stop + 1] = s.aw / (s.p - pt) end
             local ratio = s.a / s.p
             local name = s.k == "work" and tostring(s.w or "do") or "talk"

@@ -74,9 +74,19 @@ local function evaluate(step, travel)
     local map, x, y = Game.GetPosition(Geo.HasMap)
     if not map then return nil end
     local here = Geo.Loc(map, x * 100, y * 100)
-    local route = travel and travel:Route(here, step.loc) or nil
+    -- the plan has the hearthstone for this step (Planner.HEARTH): used now when it is ready, else its wait is said
+    local stone, wait
+    if step.hearth then
+        local h = Game.GetHearth()
+        if h.left == 0 and not Game.IsDead() then
+            stone = { loc = step.hearth.loc, name = step.hearth.name, cast = step.hearth.cast, min = 0 }
+        elseif (h.left or 0) > 0 then
+            wait = h.left
+        end
+    end
+    local route = travel and travel:Route(here, step.loc, stone) or nil
     local out = { seconds = route and route.seconds, legs = route and route.legs or {}, rides = {},
-        zone = nil }
+        zone = nil, stoneWait = wait }
     -- the step's zone when it is not the one we are in (zones, not the maps the points were
     -- recorded on: a camp's spots can be on the continent map)
     local zoneOf = ns.Zones and ns.Zones.ZoneAt
@@ -95,7 +105,8 @@ local function evaluate(step, travel)
         end
     end
     out.first = out.rides[1]
-    if out.first and out.first.from.loc.map and out.first.from.loc.mx then out.target = out.first.from end
+    -- (a hearth starts where we are: the waypoint stays on the step)
+    if out.first and out.first.kind ~= "hearth" and out.first.from.loc.map and out.first.from.loc.mx then out.target = out.first.from end
     out.key = table.concat(parts, "|")
     return out
 end
@@ -119,6 +130,10 @@ end
 local function pointAt(step, title, way)
     if way and way.target and not riding then
         return show({ loc = way.target.loc }, ns.Format and ns.Format.TripTitle(way) or title)
+    end
+    -- the way starts with the hearthstone: the arrow is at the step it takes us to, named for it
+    if way and way.first and way.first.kind == "hearth" and not riding and ns.Format then
+        return show(step, ns.Format.TripTitle(way) .. ": " .. tostring(title))
     end
     return show(step, title)
 end

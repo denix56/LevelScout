@@ -799,6 +799,184 @@ H.suite("XP bonuses", function()
     end)
 end)
 
+H.suite("Hearthstone", function()
+    -- The far leg to Far Giver (P:8) comes first from the corner; the leg after it, back to the hub, is the long one.
+    -- (The cast is 10 s, the loading screen is left out, and 30 s is enough to go by stone.)
+    local function setup(on, hearth, set)
+        local ns = load()
+        ns.Planner.HEARTH, ns.Planner.HEARTH_LOAD, ns.Planner.HEARTH_MIN_SAVE, ns.Planner.SEARCH_ITERATIONS = on, 0, 30, 0
+        for k, v in pairs(set or {}) do ns.Planner[k] = v end
+        local h = hearth
+        if h == nil then h = {} end
+        if h then
+            local full = { name = "Hub", map = 1, x = 0.5, y = 0.5, ready = 0, cast = 10 }
+            for k, v in pairs(h) do full[k] = v end
+            h = full
+        end
+        local s = state({ x = 0.95, y = 0.95, hearth = h or nil })
+        local ctx = ns.Zones.Context(s)
+        return ns, s, ctx, ns.Zones.PlanZone(1, ctx)
+    end
+    local function used(plan)
+        local out = {}
+        for i, st in ipairs(plan.steps) do if st.hearth then out[#out + 1] = i end end
+        return out
+    end
+
+    test("off: a bound stone changes nothing", function()
+        local _, _, ctxA, withIt = setup(false)
+        local _, _, ctxB, without = setup(false, false)
+        eq(ctxA.stone, nil)
+        eq(ctxB.stone, nil)
+        eq(withIt.order, without.order)
+        eq(withIt.score, without.score)
+        eq(#withIt.steps, #without.steps)
+        for i, st in ipairs(withIt.steps) do
+            eq(st.t, without.steps[i].t)
+            eq(st.travel, without.steps[i].travel)
+            eq(st.xp, without.steps[i].xp)
+            eq(st.hearth, nil)
+        end
+        eq(withIt.hearth, nil)
+    end)
+
+    test("on: the same order; the far leg goes by hearthstone", function()
+        local _, _, _, off = setup(false)
+        local _, _, _, on = setup(true)
+        eq(on.order, off.order)
+        local at = indexOf(on, "P:1")
+        eq(at, 2)
+        eq(used(on), { at }, "one use, at the long leg")
+        local h = on.steps[at].hearth
+        near(on.steps[at].travel, 10, 1e-6, "the cast, then the hub is where the stone is bound")
+        near(h.saved, off.steps[at].travel - 10, 1e-6)
+        eq(h.plain, off.steps[at].travel)
+        eq(h.name, "Hub")
+        for i, st in ipairs(on.steps) do
+            if i < at then
+                eq(st.t, off.steps[i].t)
+            else
+                near(st.t, off.steps[i].t - h.saved, 1e-6)
+            end
+        end
+        near(on.seconds, off.seconds - h.saved, 1e-6)
+        eq(on.hearth.uses, { { step = at, t = h.t, saved = h.saved } })
+        eq(on.hearth.from, ({ setup(true) })[3].start)
+        eq(on.hearth.ready, 0)
+    end)
+
+    test("not before it is ready", function()
+        local _, _, _, off = setup(false)
+        local _, _, _, late = setup(true, { ready = 1e6 })
+        eq(used(late), {})
+        eq(late.order, off.order)
+        for i, st in ipairs(late.steps) do eq(st.t, off.steps[i].t) end
+        -- (the time until ready is rounded up to 30 s: 100 is 120, and the leg to P:1 starts at 135)
+        local _, _, _, soon = setup(true, { ready = 100 })
+        eq(used(soon), { 2 })
+        near(soon.steps[2].hearth.t, 135, 0.5)
+        local _, _, _, never = setup(true, { ready = 200 })
+        eq(used(never), {})
+    end)
+
+    test("at most once per cooldown", function()
+        local _, _, _, once = setup(true, { cd = 1e6 }, { HEARTH_MIN_SAVE = 1 })
+        eq(#used(once), 1)
+        local _, _, _, again = setup(true, { cd = 200 }, { HEARTH_MIN_SAVE = 1 })
+        local list = used(again)
+        ok(#list >= #used(once), "a shorter cooldown allows as many uses")
+        ok(#list >= 2, "and here a second")
+        for i = 2, #list do
+            ok(again.steps[list[i]].hearth.t - again.steps[list[i - 1]].hearth.t >= 200, "the cooldown runs between uses")
+        end
+    end)
+
+    test("Zones.Stone: where it takes you, when it is ready, the cast", function()
+        local ns = load()
+        ns.Planner.HEARTH_LOAD = 20
+        ns.Geo.Init(ns.Data.World())
+        local st = ns.Zones.Stone({ name = "Hub", map = 1, x = 0.5, y = 0.25, ready = 31, cast = 8 })
+        eq(st.kind, "hearth")
+        eq(st.name, "Hub")
+        eq(st.ready, 60, "rounded up to 30 s")
+        eq(st.cast, 28, "the cast and the loading screen")
+        eq(st.cd, ns.Planner.HEARTH_COOLDOWN)
+        eq(st.loc, ns.Geo.Loc(1, 50, 25))
+        local plain = ns.Zones.Stone({ map = 1, x = 0.5, y = 0.5 })
+        eq(plain.ready, 0)
+        eq(plain.cast, ns.Planner.HEARTH_CAST + 20)
+        eq(ns.Zones.Stone({ name = "Nowhere" }), nil)
+        eq(ns.Zones.Stone(nil), nil)
+        eq(ns.Zones.Stone({ map = 1, x = 0.5 }), nil)
+    end)
+
+    test("Zones.Project carries the cooldown on", function()
+        local ns, s, ctx, plan = setup(true)
+        local at = used(plan)[1]
+        eq(at, 2)
+        local use = plan.steps[at].hearth.t
+        local after = ns.Zones.Project(s, ctx, plan, 5)
+        near(after.hearth.ready, use + ns.Planner.HEARTH_COOLDOWN - plan.steps[5].t, 1e-6)
+        eq(after.hearth.cd, ns.Planner.HEARTH_COOLDOWN)
+        eq(after.hearth.name, "Hub")
+        eq(s.hearth.ready, 0, "the character's own state is not changed")
+        -- left before the stone was used: it is as ready as it was
+        eq(ns.Zones.Project(s, ctx, plan, 1).hearth.ready, 0)
+        -- not ready at the start: the time left runs down with the route
+        local ns2, s2, ctx2, plan2 = setup(true, { ready = 30000 })
+        near(ns2.Zones.Project(s2, ctx2, plan2, 3).hearth.ready, 30000 - plan2.steps[3].t, 1e-6)
+    end)
+
+    test("Zones.HearthLead: the stone as the way into a zone planned again", function()
+        local ns = load()
+        ns.Planner.HEARTH, ns.Planner.HEARTH_LOAD, ns.Planner.HEARTH_MIN_SAVE, ns.Planner.SEARCH_ITERATIONS = true, 0, 30, 0
+        local s = state({ x = 0.05, y = 0.05, hearth = { name = "Hub", map = 1, x = 0.5, y = 0.5, ready = 0, cast = 10 } })
+        local ctx = ns.Zones.Context(s)
+        local plan = ns.Zones.PlanZone(1, ctx)
+        ok(plan.steps[1].hearth, "from the corner the first leg is the stone")
+        local lead = ns.Zones.HearthLead(ctx.start, plan)
+        near(lead, ns.Planner.SWITCH_OVERHEAD + plan.steps[1].t - plan.steps[1].seconds - (plan.overhead or 0), 1e-6)
+        near(lead, ns.Planner.SWITCH_OVERHEAD + plan.steps[1].travel, 1e-6)
+        eq(ns.Zones.HearthLead(ns.Geo.Loc(1, 80, 80), plan), nil, "another place: the way is worked out as before")
+        eq(ns.Zones.HearthLead(nil, plan), nil)
+        local _, _, _, far = setup(true)
+        eq(far.steps[1].hearth, nil)
+        eq(ns.Zones.HearthLead(far.hearth.from, far), nil, "a plan that does not start with the stone")
+        ns.Planner.HEARTH = false
+        local off = ns.Zones.PlanZone(1, ns.Zones.Context(s))
+        eq(ns.Zones.HearthLead(ctx.start, off), nil)
+    end)
+
+    test("the plan memory's key knows the stone", function()
+        local function key(on, hearth)
+            local ns = load()
+            ns.Planner.HEARTH = on
+            return ns.Memory.GlobalKey(ns.Zones.Context(state({ hearth = hearth }))), ns
+        end
+        local function stone(ready) return { name = "Hub", map = 1, x = 0.5, y = 0.5, ready = ready } end
+        local with, without = key(false, stone(0)), key(false, nil)
+        eq(with, without, "off: nothing of it in the key")
+        ok(not with:find("|h1:", 1, true))
+        local ready, ns = key(true, stone(0))
+        ok(ready:find("|h1:", 1, true), "on: where it is bound")
+        ok(ready ~= key(true, stone(600)), "ready now or in ten minutes")
+        eq(key(true, stone(30)), key(true, stone(250)), "the ready time counts in 5 minutes")
+        ok(key(true, nil) ~= ready, "no stone is another plan")
+        eq(ns.Memory.GlobalKey(ns.Zones.Context(state({ hearth = stone(0) }))), ready)
+    end)
+
+    test("a snapshot keeps the stone", function()
+        local ns = load()
+        local h = { name = "Hub", map = 1, x = 0.5, y = 0.25, ready = 120, cd = 1800, cast = 10 }
+        local s = state({ hearth = h })
+        local input = ns.Snapshot.Capture(s)
+        eq(input.hearth, h)
+        ok(input.hearth ~= h, "a copy")
+        eq(ns.Snapshot.State(input).hearth, h)
+        eq(ns.Snapshot.State(ns.Snapshot.Capture(state())).hearth, nil)
+    end)
+end)
+
 H.suite("Dungeons", function()
     test("a dungeon is planned like a zone: lead-up quests, every dungeon quest accepted, one run, turn-ins", function()
         local ns = load()

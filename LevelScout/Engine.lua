@@ -26,6 +26,8 @@ Engine.AUTO_SNAPSHOT = true  -- a snapshot is taken by itself when the player ov
 Engine.AUTO_SNAPSHOTS = 3    -- of those, this many are kept (next to the ones asked for)
 Engine.AUTO_SNAPSHOT_EVERY = 900 -- seconds between two of them at least
 Engine.BACK_WITHIN = 900     -- seconds of play: a zone chosen by hand this soon after the path left it is "back" (see ns.Play)
+Engine.HEARTH_ARRIVE = 60    -- seconds after the hearthstone's cast within which a far-off position is its arrival (Planner.HEARTH)
+Engine.HEARTH_MOVED = 200    -- yards from where it was cast that count as arrived
 
 local memory = ns.Memory.New()   -- plans kept between rankings (reused) and as warm starts (ns.Memory); never saved
 
@@ -58,6 +60,9 @@ local frontAsked = {}            -- [key] = the quest log and level it was last 
 local snap, saveSnapshot         -- the snapshot being taken (Engine.Snapshot), and what saves it (defined below)
 local playEvent, autoSnapshot    -- the play log (ns.Play): an event; a snapshot for one (defined below)
 local lastMoved                  -- { from = zone, a = active clock }: when the path last moved on by itself
+local hearthCast                 -- { at, loc }: the hearthstone was cast; its arrival is looked for (Planner.HEARTH)
+local plannedHearth              -- the stone's signature at the last plan (see hearthSig)
+local hearthKnown                -- where the last plan's bind spot came from: "learned" | "data"
 
 Engine.REMIND_SLEEPING_BAG = 600 -- seconds before the sleeping-bag buff ends
 Engine.REMIND_OTHER = 180        -- seconds before any other XP buff (food) ends
@@ -66,6 +71,14 @@ local reminded = {}              -- [spellId] = the expiry time we already remin
 --- Remind before an XP buff runs out: once per buff, in chat, on screen and in the window.
 --- Works from the last buffs read, so it also fires in combat. Returns the reminders shown.
 function Engine.CheckBuffs()
+    -- the hearthstone became ready, or was used without us seeing the cast: plan again (Planner.HEARTH)
+    if ns.Planner.HEARTH then
+        local sig = Engine.HearthSignature()
+        if sig ~= plannedHearth then
+            plannedHearth = sig
+            Engine.Replan()
+        end
+    end
     local now, shown, note = Game.Now(), {}, nil
     for _, b in ipairs(xpBuffs) do
         if b.expires and not (chardb and chardb.mutedBuffs[b.spellId]) then
@@ -304,6 +317,45 @@ local function bagKey(quests)
     return table.concat(ids, ",")
 end
 
+--- The hearthstone as far as the addon can tell now: { name (where it is bound), has, left (seconds until it can be
+--- used), duration, cast, spot = { map, x, y (0-1) } where that is, source = "learned" (seen when binding or
+--- arriving) | "data" (the hub of that name) | nil }.
+function Engine.HearthInfo()
+    local out = Game.GetHearth()
+    if out.name then
+        local spot = chardb and chardb.hearthSpot
+        if type(spot) == "table" and spot.name == out.name then
+            out.spot, out.source = spot, "learned"
+        else
+            out.spot = Zones.BindSpot(out.name, Game.GetPlayerContext().faction == "Alliance" and "a" or "h")
+            if out.spot then out.source = "data" end
+        end
+    end
+    return out
+end
+
+--- What makes a new plan worth it for the stone: is it in the bags, where is it bound, can it be used now.
+function Engine.HearthSignature(info)
+    info = info or Game.GetHearth()
+    return tostring(info.has) .. "|" .. tostring(info.name) .. "|" .. tostring(info.left ~= nil) .. tostring(info.left == 0)
+        .. "|" .. tostring(Game.IsDead())
+end
+
+-- The planner's view of the stone (state.hearth, Planner.HEARTH), or nil: not in the bags, not bound, no reading of
+-- its cooldown, the player is dead, or no place known for the bind. Where the game shows the cooldown running its
+-- full length is kept with the character.
+local function hearthState()
+    if not ns.Planner.HEARTH then return nil end
+    local info = Engine.HearthInfo()
+    plannedHearth = Engine.HearthSignature(info)
+    hearthKnown = nil
+    if info.has == false or not info.name or info.left == nil or Game.IsDead() or not info.spot then return nil end
+    if (info.duration or 0) > 60 then chardb.hearthCooldown = math.floor(info.duration + 0.5) end
+    hearthKnown = info.source
+    return { name = info.name, map = info.spot.map, x = info.spot.x, y = info.spot.y, ready = info.left,
+        cd = chardb.hearthCooldown, cast = info.cast }
+end
+
 local function gather()
     local player = Game.GetPlayer()
     local pctx = Game.GetPlayerContext()
@@ -334,6 +386,7 @@ local function gather()
         knownNodes = chardb.knownNodes, ignored = chardb.ignored,
         memory = memory, now = Game.Now(),
         bagQuests = bags,
+        hearth = hearthState(), -- the hearthstone (Planner.HEARTH; nil otherwise)
         -- learned from play (ns.Learn, ns.Tracker)
         pace = frozen(chardb.pace), drops = frozen(db.drops),
         stepModel = { v = chardb.stepModel.v, n = chardb.stepModel.n, w = frozen(chardb.stepModel.w) },
@@ -1019,6 +1072,8 @@ local function run()
         view.level, view.here = result.state.level, result.state.map
         view.logCount, view.capacity = #result.state.log, result.state.capacity
         view.groupSize = result.state.groupSize
+        local stone = result.state.hearth -- (Planner.HEARTH)
+        view.hearth = stone and { name = stone.name, ready = stone.ready, known = hearthKnown, at = result.state.now } or nil
         view.xpBonus, view.xpBuffs, view.restedPool = result.state.xpBonus, xpBuffs, result.state.restedPool
         plannedRested = result.state.restedPool
         if chain then
@@ -1436,6 +1491,20 @@ local function nearbyLater(loc, level)
     Engine.Replan()
 end
 
+-- After the hearthstone's cast: a position far from where it was cast, soon enough, is the arrival. The bind
+-- spot is learned there, and the route is planned from the inn. (A hearth without a loading screen fires no other
+-- event.) A cast not followed by an arrival in time is forgotten.
+function Engine.LookForHearth(info)
+    local cast = hearthCast
+    if info.now - cast.at > Engine.HEARTH_ARRIVE then hearthCast = nil return end
+    local d = cast.loc and info.loc and Geo.Dist(cast.loc, info.loc)
+    if not (d and d > Engine.HEARTH_MOVED) then return end
+    hearthCast = nil
+    local name = Game.GetHearth().name
+    if name then chardb.hearthSpot = { name = name, map = info.loc.map, x = info.loc.mx / 100, y = info.loc.my / 100 } end
+    Engine.Replan(true)
+end
+
 --- Tell the tracker where the player is (it learns the travel speed from steady stretches), and
 --- bring stops the player stands at forward in the route. Called about once a second. Returns
 --- the speed sample in yards per second when one was taken.
@@ -1447,6 +1516,7 @@ function Engine.TrackMove()
         if map then info.loc = Geo.Loc(map, x * 100, y * 100) end
     end
     if info.loc then nearbyLater(info.loc, info.level) end
+    if hearthCast and ns.Planner.HEARTH then Engine.LookForHearth(info) end
     local sample = Tracker.OnMove(info)
     Play.Tick(Tracker.Active(info.now)) -- the play log: forecasts whose time has passed
     return sample
@@ -1494,6 +1564,27 @@ function handlers.PLAYER_ENTERING_WORLD()
     completed = Game.GetCompletedQuests()
     Engine.ResetMemory()
     Engine.Replan(true)
+end
+-- The hearthstone was bound here: this is where it takes us (Planner.HEARTH). Looked at a moment later, when the
+-- client's bind location is the new one.
+function handlers.HEARTHSTONE_BOUND()
+    if not ns.Planner.HEARTH then return end
+    Game.After(0.5, function()
+        local name = Game.GetHearth().name
+        local map, x, y = Game.GetPosition(Geo.HasMap)
+        if name and map then chardb.hearthSpot = { name = name, map = map, x = x, y = y } end
+        Engine.Replan(true)
+    end)
+end
+-- The hearthstone's cast went through (Planner.HEARTH): the play log, the step being timed, and the arrival is
+-- looked for (Engine.LookForHearth).
+function handlers.UNIT_SPELLCAST_SUCCEEDED(unit, _, spellId)
+    if not ns.Planner.HEARTH or not Game.IsHearthCast(unit, spellId) then return end
+    local map, x, y = Game.GetPosition(Geo.HasMap)
+    hearthCast = { at = Game.Now(), loc = map and Geo.Loc(map, x * 100, y * 100) or nil }
+    local step = Engine.view.plan and Engine.view.plan.steps[1]
+    playEvent("hearth", { planned = step and step.hearth and true or false, to = Game.GetHearth().name })
+    Tracker.Teleported()
 end
 Engine.TAXI_LOOKS = 200   -- looks at the flight map's points while it is open, at most (a point just
                           -- discovered can be listed a moment late): every TAXI_EVERY seconds until it closes
@@ -1616,6 +1707,11 @@ function Engine.Start()
         and (sm.leaveB == nil or type(sm.leaveB) == "string")
     chardb.seam = smValid and sm or nil
     chardb.skippedNodes = type(chardb.skippedNodes) == "table" and chardb.skippedNodes or {}
+    -- the hearthstone's bind spot as learned ({ name, map, x, y }) and its cooldown's length (Planner.HEARTH)
+    local hs = chardb.hearthSpot
+    chardb.hearthSpot = (type(hs) == "table" and type(hs.name) == "string" and type(hs.map) == "number"
+        and type(hs.x) == "number" and type(hs.y) == "number") and hs or nil
+    chardb.hearthCooldown = (type(chardb.hearthCooldown) == "number" and chardb.hearthCooldown > 0) and chardb.hearthCooldown or nil
     -- the class quest chain being followed (its lowest quest id), and what was said about each
     chardb.chain = type(chardb.chain) == "number" and chardb.chain or nil
     chardb.chainName = type(chardb.chainName) == "string" and chardb.chainName or nil

@@ -127,7 +127,7 @@ function Memory.GlobalKey(ctx)
     for i, e in ipairs(c.vec) do names[i] = e[1] end
     local avail = ctx.avail or {}
     local rested = ctx.restedBonus == math.huge and "inf" or ((ctx.restedBonus or 0) > 0 and "r" or "0")
-    return table.concat({
+    local key = table.concat({
         "L" .. tostring(ctx.level), tostring(ctx.side), tostring(avail.class), tostring(avail.raceId), tostring(avail.faction),
         c.xp and "x" or "cap", rested,
         string.format("%.3f", ctx.xpBonus or 0), "g" .. tostring(ctx.group), tostring(ctx.routeElite), "esc" .. tostring(ctx.routeEscort), "tram" .. tostring(ctx.tram),
@@ -138,6 +138,15 @@ function Memory.GlobalKey(ctx)
         table.concat(names, ","),
         settingsKey(),
     }, "|")
+    -- The hearthstone (Planner.HEARTH): where it is bound (in cells of 2% of the map), when it is ready
+    -- (in 5 minutes) and its cooldown. The settings key already covers Planner.HEARTH*.
+    local st = ctx.stone
+    if st then
+        local loc = st.loc or {}
+        key = key .. "|h" .. tostring(loc.map) .. ":" .. floor((loc.mx or 0) / 2) .. ":" .. floor((loc.my or 0) / 2)
+            .. ":" .. (st.ready > 0 and floor(st.ready / 300) or "r") .. ":" .. tostring(st.cd)
+    end
+    return key
 end
 
 local function cell(loc)

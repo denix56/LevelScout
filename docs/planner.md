@@ -340,7 +340,8 @@ Each zone's route is planned for that zone alone, and the itinerary strings them
 - **Who is on the quest**: for a quest in your log, the game is asked which party members are on
   it, and drops are split between those only. For quests not yet accepted, every member is
   assumed to take them. Not available in a raid.
-- **Hearthstone** as a free return trip.
+- **Hearthstone**: built (`Planner.HEARTH`, on); see "The hearthstone". Not built: suggesting where to
+  bind it, and other teleports.
 - **Death risk**: only the cutoff exists (mobs 4+ levels above wait for later).
 - **Town trips** (vendor, repair, trainer).
 - **Mount speed** as a figure of its own: travel starts from ForeverDB's observed run speed for the
@@ -555,6 +556,61 @@ Limits and unknowns:
   cannot be missed: `/ls buffs` lists every buff with its id and description, to find out why.
 - The window's footer shows "Rested" and "+N% XP" when they apply; the XP-per-hour tooltip names
   the buffs.
+
+## The hearthstone (`Planner.HEARTH`)
+
+**On by default** (`Planner.HEARTH = true`, since 2026-11-19): benched "better", not yet tried in the game. Turn it off
+with `/run LevelScout.Planner.HEARTH = false` (until `/reload`). The planner, the bench and the tests take the stone as `state.hearth`; in
+the game the Engine reads it (see "In the game" below). With the flag off nothing is read, kept or shown.
+
+Benched (2026-11-19, `ONLYSET=1 CHARS=all SALTS="0 1 2 3 4" SET="hearth:Planner.HEARTH=true"`; each character
+bound in its own town, the stone ready): itinerary XP +0.86% (SE 0.29, bar 0.62), "better", no character harmed
+(worst -0.6%); top zone's first 120 minutes +2.1%; mean zone score +8.2% against +6.8% without. The stone is used in
+41 of 80 runs' itineraries (0.96 uses, 228 s saved per run) and 3.5 times per run over the ranked zones' plans
+(1,089 s). Work is unchanged (the search is the same), and with it off the step dumps of the 8 characters over 2
+salts are identical to before. The pairing is tight (base-to-hearth correlation +0.89), since the search is the
+same. Not measured: another bind point, a stone not ready at the start, the game's real cooldown and load time.
+
+The route is searched as before. When it is described, the stone is used on it: on the first leg, once the
+stone is ready, that it makes at least `Planner.HEARTH_MIN_SAVE` (2 minutes) shorter. Such a leg is the cast and
+the loading screen (`HEARTH_CAST`, 10 s, or what the game says; `HEARTH_LOAD`, 20 s), then the way from where
+the stone is bound. Each use starts the cooldown again (`HEARTH_COOLDOWN`, an hour, or what the game has shown).
+
+- **What it changes**: the times of the steps, so the score, the moment to leave, the slow tail, the zone
+  ranking, the next hours and the banner. Not the order of a route: the search, the insertion of stops and the
+  tidy-up do not see the stone. Without a search a zone's route is the same with and without it.
+- **Why not in the search**: a prototype used the same rule in every evaluation the search makes. The search then
+  took other paths, and the next hours earned no more (+0.3%, 5 of 16 characters lower).
+- **The stone's state** (`state.hearth`, `ctx.stone` from `Zones.Stone`): where it takes you, the seconds until it
+  is ready (rounded up to 30 s, `HEARTH_READY_STEP`), the cooldown, the cast. It is part of the plan memory's
+  key and of a snapshot. A plan with a use has `plan.hearth` (`uses`, `from`) and the step has `hearth`.
+- **Across zones**: `Zones.Project` carries the cooldown on to the next zone. A later zone planned again from where
+  the zone before is left, whose first leg is the stone, has that leg as its trip (`Zones.HearthLead`). The
+  choice of zones and their order is still made with trips on foot and by air.
+- **Measured** (prototype; bound in the character's town, ready; 16 characters, 2 salts): about one use per
+  itinerary, 200 s saved of 2.5 hours, itinerary XP +0.7% (SE 0.3). Bound in the side's capital: +1.8%. A
+  shorter cooldown, a later ready time or a longer cast gained less. Using the stone on the leg that saves most,
+  instead of the first, gained less too. The bench itself has not run it yet.
+- **Bench**: `SET="hearth:Planner.HEARTH=true"`; `BIND=town|capital|none` (default town: the hub of the side
+  nearest to the character), `HEARTH_READY=` (seconds), `HEARTH_CD=`. Every config gets the same `state.hearth`;
+  it is used only where the flag is on. A "HEARTH" line gives the uses and the seconds saved.
+- **In the game** (flag on): `Game.GetHearth` reads where it is bound (`GetBindLocation`), whether it is in the
+  bags, its cooldown (`C_Container.GetItemCooldown`; 1.5 s or less is the global cooldown and counts as ready) and
+  its cast. The Engine gives the planner `state.hearth` only when the stone is in the bags, bound, its cooldown read
+  and the player alive, and the place of the bind is known: learned (`chardb.hearthSpot`, from `HEARTHSTONE_BOUND`
+  or from where a cast of spell 8690 lands: a position over `Engine.HEARTH_MOVED` (200 yd) away within
+  `Engine.HEARTH_ARRIVE` (60 s)) or the hub of that name (`Zones.BindSpot`). The full cooldown seen is kept
+  (`chardb.hearthCooldown`). The five-second check (`Engine.CheckBuffs`) plans again when the stone becomes ready,
+  or is used without a cast seen. The way to the current step is worked out live (`Travel:Route(a, b, stone)`): the
+  current row reads "hearth to X" when the stone is ready, "hearthstone ready in N min" when the plan had it but it is
+  not; the waypoint is the step, titled "Hearth to X: ...". Later rows say "hearth to X" in blue; the
+  "XP per hour" tooltip names the bind and the route's uses. Flight points close to the route are judged from the inn
+  for a leg that goes by stone. A timed step with a teleport in it is logged with `h = 1` (a jump of over
+  `Tracker.JUMP_YARDS` and `JUMP_SPEED`, the cast, or a plan that had the stone), and only its work is learned;
+  without the flag an unplanned hearth teaches a travel speed that is too low. The play log has a "hearth"
+  event (not an overrule). `/ls status` names the bind and the stone's state.
+- **Limits**: the stone goes on the first leg that is good enough, not the best one. Where to bind is not
+  suggested. Other teleports (Astral Recall, mage teleports) are not used.
 
 ## Which zones are offered (`Zones.Shortlist`)
 
@@ -1148,6 +1204,26 @@ calls, which proves the code paths run, not that the client behaves as mocked.
    same route. When the next itinerary goes elsewhere the plain route is back at once. Compare
    "Planning the next hours" with and without it. `/ls snapshot`, then `tests/replay.lua`: no
    difference reported.
+18. The hearthstone (`Planner.HEARTH`; off by default: turn it on first with `/run LevelScout.Planner.HEARTH = true`).
+   Out of combat, `/dump` these and paste the results:
+   1. `GetBindLocation()` in a town inn and in a city. Do the names match the hubs ("Lakeshire", "Stormwind City")?
+   2. `C_Item and C_Item.GetItemCount(6948), GetItemCount and GetItemCount(6948)`.
+   3. `C_Container and C_Container.GetItemCooldown(6948)`, right after a hearth and again when it is ready. This
+      gives the cooldown's length on Forever: 3600 in vanilla, 1800 later, or something else. Is any value secret?
+   4. `C_Spell and C_Spell.GetSpellInfo(8690)` (`castTime` in ms; expect 10000) and `GetSpellInfo and GetSpellInfo(8690)`.
+   5. Do `HEARTHSTONE_BOUND` and `UNIT_SPELLCAST_SUCCEEDED` (unit, castGUID, spellID = 8690) fire?
+   6. Is there a loading screen for a hearth on the same continent? How many seconds pass from the end of the cast
+      to a readable position at the inn? That is the true `HEARTH_LOAD`.
+   7. Does the cooldown run while logged out? (`GetItemCooldown` after a relog.)
+   8. Where does the hearth land relative to the hub point?
+   9. What do items 282006 ("Crumbling Hearthstone") and 278162 ("Pouch of Chipped Hearthstones") do, and what is
+      Astral Recall's cooldown?
+
+   Then bind at an innkeeper: `/ls status` names the inn ("hearthstone: Lakeshire (learned), ready"). With a far
+   step and the stone ready, the current row reads "hearth to <inn>", the arrow stays on the step and is titled
+   "Hearth to <inn>: ...", and after the hearth the route goes on from the inn (`/ls play` counts the use). With the
+   stone on cooldown the row says "hearthstone ready in N min" where the route had it. Check that `/ls learn` is not
+   lowered by a hearth taken during a step.
 
 ### QuestieDB as a runtime dependency
 
