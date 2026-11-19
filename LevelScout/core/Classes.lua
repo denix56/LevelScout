@@ -200,6 +200,7 @@ end
 --- What to warn about before a chain is picked, from its plan:
 --- { eliteStep = the first step that is a group quest (routed), eliteName,
 ---   groupName = a quest of the chain left out because group quests are not routed,
+---   escortName = a quest of the chain left out because escort quests are not routed,
 ---   laterLevel = the level the rest of the chain waits for (nil: nothing waits) }
 function Classes.Facts(chain, plan)
     local f = {}
@@ -209,6 +210,9 @@ function Classes.Facts(chain, plan)
     local lists = plan and plan.lists or {}
     for _, e in ipairs(lists.group or {}) do
         if chain.set[e.id] and not f.groupName then f.groupName = e.name end
+    end
+    for _, e in ipairs(lists.escort or {}) do
+        if chain.set[e.id] and not f.escortName then f.escortName = e.name end
     end
     local later = chain.nextLevel
     for _, e in ipairs(lists.later or {}) do

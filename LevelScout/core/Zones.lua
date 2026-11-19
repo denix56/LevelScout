@@ -100,6 +100,7 @@ end
 ---           capacity, knownNodes = { [flightNodeId] = true }, ignored = { [id] = true },
 ---           groupSize (members including you; 1 or nil = solo),
 ---           routeElite (false: elite quests are listed, not routed),
+---           routeEscort (true: escort quests are routed; otherwise they are listed),
 ---           partyOn = function(questId) -> how many other members are on the quest, or nil,
 ---           pace, drops, stepModel (what ns.Learn has saved for this character and account; optional),
 ---           speed (yards per second; optional: overrides the typical run speed as adjusted by
@@ -135,6 +136,7 @@ function Zones.Context(state)
         levelUps = Cost.LevelUps(state.level, state.xp, state.xpMax, ns.Planner.LEVELS_AHEAD, state.maxLevel),
         group = math.max(1, state.groupSize or 1),
         routeElite = state.routeElite ~= false, partyOn = state.partyOn,
+        routeEscort = state.routeEscort == true,
         start = start, startMap = state.map,
         travel = Travel.New(world, { speed = state.speed or pace.r, ride = state.ride or pace.rm, side = side,
             knownNodes = state.knownNodes, tram = state.tram }),

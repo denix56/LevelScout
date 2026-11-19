@@ -380,6 +380,7 @@ local function gather()
         capacity = Game.GetQuestLogCapacity(),
         groupSize = Game.GetGroupSize(),
         routeElite = chardb.routeElite ~= false,
+        routeEscort = chardb.routeEscort == true,
         tram = chardb.tram, -- "on" | "off" | nil (auto): the Deeprun Tram (see Travel.New)
         partyOn = function(id) return Game.PartyOnQuest(id) end,
         knownNodes = chardb.knownNodes, ignored = chardb.ignored,
@@ -757,6 +758,8 @@ local function chainEnded(e, zoneName)
         ns.Print("|cffffd100%s|r: the rest of the chain opens at level %d. %s", name, e.level, back)
     elseif e.why == "group" then
         ns.Print("|cffffd100%s|r: the next part, %s, is a group quest. %s", name, e.groupName, back)
+    elseif e.why == "escort" then
+        ns.Print("|cffffd100%s|r: the next part, %s, is an escort quest. %s", name, e.escortName, back)
     else
         ns.Print("|cffffd100%s|r: nothing more of it can be planned for now. %s", name, back)
     end
@@ -855,8 +858,8 @@ local function run()
             if not chainPlan then
                 local facts = active and Classes.Facts(active, tried) or {}
                 ended = { id = chardb.chain, kind = chardb.chainKind, name = chardb.chainName or (active and active.name),
-                    why = (not active and "done") or (facts.groupName and "group") or (facts.laterLevel and "later") or "stuck",
-                    level = facts.laterLevel, groupName = facts.groupName }
+                    why = (not active and "done") or (facts.groupName and "group") or (facts.escortName and "escort") or (facts.laterLevel and "later") or "stuck",
+                    level = facts.laterLevel, groupName = facts.groupName, escortName = facts.escortName }
             elseif not view.plan then
                 view.plan, view.zone, view.chain = chainPlan, nil, chainView(active, chainPlan, chardb.zone)
                 view.zoneName = chainTitle(chainPlan)
@@ -1345,6 +1348,12 @@ function Engine.SetRouteElite(on)
     Engine.Replan(true)
 end
 
+--- Route escort quests, or only list them (the default). Saved with the character.
+function Engine.SetRouteEscort(on)
+    chardb.routeEscort = on and true or false
+    Engine.Replan(true)
+end
+
 --- The Deeprun Tram in routes: "on", "off" or "auto" (taken only while the flight between
 --- Stormwind and Ironforge is not known). Saved with the character.
 function Engine.SetTram(mode)
@@ -1365,6 +1374,7 @@ function Engine.SetTrace(on)
 end
 
 function Engine.RoutesElite() return chardb == nil or chardb.routeElite ~= false end
+function Engine.RoutesEscort() return chardb ~= nil and chardb.routeEscort == true end
 
 --- Leave a flight point out of the route (the player does not want the detour), or put it back.
 function Engine.SkipFlightPoint(nodeId, skip)

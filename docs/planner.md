@@ -116,7 +116,7 @@ Measured (5 salts, equal work, mean zone vs the old planner): at x0.5 / x1 / x2 
 
 (`core/Memory.lua`, `Zones.PlanZone/Rank/Itinerary`, the warm block in `Planner.Plan`.)
 
-Reuse: with a memory (Engine only), Rank hands out another zone's earlier plan while the discrete inputs are equal (level, side, class, race, flight paths, group, XP bonus, capacity, planner settings, start cell, quests the plan read incl. ignored), XP and rested pool moved under 10% of a level, learned figures under 2% (step-model weights 0.02), and the plan is under `Zones.REUSE_MAX_AGE` (300 s) old. The home zone is always planned. `Memory.Reusable` says why not (z.why).
+Reuse: with a memory (Engine only), Rank hands out another zone's earlier plan while the discrete inputs are equal (level, side, class, race, flight paths, group, XP bonus, capacity, the elite and escort options, planner settings, start cell, quests the plan read incl. ignored), XP and rested pool moved under 10% of a level, learned figures under 2% (step-model weights 0.02), and the plan is under `Zones.REUSE_MAX_AGE` (300 s) old. The home zone is always planned. `Memory.Reusable` says why not (z.why).
 
 Warm start: a zone's search starts from the route the previous search of it ended on (`plan.searchOrder`), rebuilt, repaired with the usual price floor, kept when worth >= the greedy route, then at most `Planner.WARM_ROUNDS` rounds. Every 5th plan of a zone is cold (`Zones.REFRESH_EVERY`). The itinerary re-plans later zones warm from their ranked plans (`Zones.ITINERARY_WARM`), with 40 rounds (`Zones.ITINERARY_ROUNDS`). A quick re-plan of the shown zone is cold (`Zones.WARM_SHOWN`). Without a memory nothing changes. Sequence bench: `tests/bench_replan.lua`.
 
@@ -325,6 +325,18 @@ Each zone's route is planned for that zone alone, and the itinerary strings them
   - no time is charged for finding a group;
   - the design's single "party block" (all elite quests routed as one unit) is not built: elite
     stops are placed like any other stop.
+- **Escort quests** (Data flag `escort`) are listed under "Escort quests", not routed (option
+  "Escort quests: in the route", off by default, saved as `chardb.routeEscort`). When routed:
+  - the escort takes `Cost.ESCORT_SECONDS` (300, an assumption) at the quest's event stop, else
+    its first stop; kills asked for there are counted inside it, not on top. The way from the
+    giver to the end is travel like any other;
+  - `Cost.ESCORT_WAIT` adds the wait for an NPC that must be caught on its way (5821 and 5943,
+    the Gizelton Caravan: half an hour on average);
+  - complete in the log, only its turn-in is left, and that is planned with the option off too;
+  - quests that follow an escort wait while escorts are off; a red escort is not taken along;
+  - an escort step is not written to the step log;
+  - known limit: the escort starts when the quest is accepted, but the planner may put other
+    stops between the accept and the escort stop.
 - **Who is on the quest**: for a quest in your log, the game is asked which party members are on
   it, and drops are split between those only. For quests not yet accepted, every member is
   assumed to take them. Not available in a raid.
@@ -440,7 +452,8 @@ each line as it is written.
   taken, `at` and `aw` the part of those until the step's place was first reached and the rest
   (60 yards of a camp, `ARRIVE_WORK`; 25 of an NPC, `ARRIVE_TALK`; nil when it was not seen
   reached), `lv` level, `g` group size, `e` elite step, `n` planned kills, `d` mob level minus
-  own level (when the step started). The newest 300 are kept.
+  own level (when the step started). The newest 300 are kept. An escort step is not logged: its
+  time is the script's, and a wait for its NPC is mostly standing still.
 - `/ls learn` shows the median of taken / planned, overall and by kind of step, and for the steps
   timed in two parts: getting there against the planned travel, and the time at the stop
   against the time planned there.
@@ -722,7 +735,8 @@ until it is done, then the zones take over again.
   - Item: the cheapest of its sources (drop, object, vendor). Kills needed for drops are the
     70th percentile for the drop rate. Without a rate, players' typical seconds per item.
   - Object: count x players' typical seconds per object.
-  - Event and other: only where Forever players saw it done.
+  - Event and other: only where Forever players saw it done. An escort is an event of its own
+    kind: see "Escort quests".
 - **XP**: quest XP scaled for the level (classic rule), plus XP from the kills (classic formula,
   doubled while rested).
 - **Not confirmed in Forever**: a quest that no ForeverDB player has seen and that has no reward
@@ -741,7 +755,7 @@ until it is done, then the zones take over again.
 - **Drops from several kinds of mob**: an item is taken from the kind another planned quest
   already has you killing, so both quests share one stop and one set of kills.
 - **Left out of zone plans**: dungeon and raid quests (dungeon quests are planned under their
-  dungeon, and a finished one gets its turn-in planned, see above), elite quests when the option is off, quests and mobs for a
+  dungeon, and a finished one gets its turn-in planned, see above), elite and escort quests when their options are off, quests and mobs for a
   higher level, repeatables and seasonal quests, quests that start from an item, quests with an
   objective no database can locate.
 

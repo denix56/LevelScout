@@ -684,6 +684,38 @@ H.suite("Planner", function()
         eq(listed(offPlan.lists.group), { 6 })
     end)
 
+    test("escort quests are listed, or routed with the escort's time at their stop", function()
+        local ns = load(function(data)
+            data.quests[40] = quest({ name = "Walk the Peddler", xp = 900, flags = "s", starts = "n100", ends = "n100", objectives = "e:1:Q" })
+            data.questSpots[40] = { [1] = S(1, 55, 55) }
+            data.quests[41] = quest({ name = "Guard the Cart", xp = 900, flags = "s", starts = "n100", ends = "n100", objectives = "c205:2:C" })
+        end)
+        local function build(id, extra) return ns.Model.Build(id, ns.Zones.Context(state(extra))) end
+        local function plan(extra) return ns.Zones.PlanZone(1, ns.Zones.Context(state(extra))) end
+        eq(build(40).status, "escort", "listed only by default")
+        local ids = listed(plan().lists.escort)
+        table.sort(ids)
+        eq(ids, { 40, 41 })
+        eq(indexOf(plan(), "P:40"), nil, "and not routed")
+        local on = build(40, { routeEscort = true })
+        eq(on.status, "ok")
+        eq(on.tasks[1].seconds, ns.Cost.ESCORT_SECONDS)
+        ok(on.tasks[1].escort)
+        eq(#plan({ routeEscort = true }).lists.escort, 0)
+        -- a quest whose NPC must be caught on its way adds the wait
+        ns.Cost.ESCORT_WAIT[40] = 600
+        eq(build(40, { routeEscort = true }).tasks[1].seconds, ns.Cost.ESCORT_SECONDS + 600)
+        eq(build(40).detail, "the NPC must be caught on its way: about 10 minutes' wait")
+        ns.Cost.ESCORT_WAIT[40] = nil
+        -- complete in the log: only the turn-in is left, planned with the option off
+        local done = plan({ log = { { id = 40, isComplete = true, objectives = { { have = 1, need = 1, finished = true } } } } })
+        ok(indexOf(done, "T:40"), "a finished escort is turned in")
+        -- kills asked for are fought during the escort: the stop takes its time, not that time plus the kills
+        local k = build(41, { routeEscort = true }).tasks[1]
+        ok(k.escort)
+        near(k.kills * k.cycle + k.wait, ns.Cost.ESCORT_SECONDS, 1e-6)
+    end)
+
     test("a skipped quest stays out, but once it is complete in the log its turn-in is planned", function()
         local ns = load()
         local function plan(log)
@@ -2101,6 +2133,13 @@ H.suite("Learning", function()
         T.OnPlan(turnin, { now = 20000, log = {} })
         T.OnPlan(nil, { now = 20050, log = {}, completed = {} })
         eq(#steps, 3)
+        -- an escort step is not logged
+        local escort = plan("W:p40:1", { kind = "work", action = "do", travel = 50, seconds = 300, escort = true,
+            parts = { { quest = 1, index = 1 } } })
+        T.OnPlan(escort, { now = 30000, level = 8, log = log(0) })
+        T.OnPlan(turnin, { now = 30300, level = 8, log = log(10) })
+        T.OnPlan(nil, { now = 30400, level = 8, log = {}, completed = {} })
+        eq(#steps, 3, "an escort step is not logged")
 
         local stats = T.StepStats()
         eq(stats.all.n, 3)

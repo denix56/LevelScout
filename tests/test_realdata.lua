@@ -272,6 +272,16 @@ H.suite("Generated data", function()
         eq({ Data.IsAvailable(7, { faction = "Horde", raceId = 2, class = "WARRIOR", completed = { [783] = true }, inLog = {} }) }, { false, "race" })
     end)
 
+    test("known facts: escort quests", function()
+        local Data = init()
+        for _, id in ipairs({ 219, 309, 5821, 5943, 1560, 6641 }) do
+            ok(Data.GetQuest(id).flags.escort, "quest " .. id .. " is an escort")
+        end
+        for _, id in ipairs({ 754, 1640, 4492, 1144 }) do
+            eq(Data.GetQuest(id).flags.escort, nil, "quest " .. id .. " is not")
+        end
+    end)
+
     test("world tables: pace, XP curve, travel, zones, enums", function()
         local Data = init()
         local w = Data.World()
@@ -601,7 +611,14 @@ H.suite("Itinerary (real data)", function()
         -- (without the credit for quests under way at the horizon: with it, a slower trip can
         -- tip a close call between two second zones, and this test is about the trip alone)
         ns.Zones.END_CREDIT = false
+        local horizon = ns.Zones.HORIZON
         local it = ns.Zones.Itinerary(state, ctx, ranked)
+        -- (when staying in one zone is best inside the horizon on this data build, a longer one
+        -- gives a trip to correct)
+        if not (it and #it.segments >= 2) then
+            ns.Zones.HORIZON = 4 * 3600
+            it = ns.Zones.Itinerary(state, ctx, ranked)
+        end
         local slow, factor
         for _, f in ipairs({ 1.5, 1.2, 1.05 }) do
             ctx.stepModel = { v = ns.Learn.STEP_VERSION, n = 5, w = { 0, 0, 0, 0, math.log(f), 0, 0, 0, 0 } }
@@ -609,7 +626,8 @@ H.suite("Itinerary (real data)", function()
             ctx.stepModel = nil
             if slow and #slow.segments >= 2 then break end
         end
-        ns.Zones.END_CREDIT = true
+        ns.Zones.END_CREDIT, ns.Zones.HORIZON = true, horizon
+        ok(it and #it.segments >= 2, "an itinerary with a trip")
         ok(slow and #slow.segments >= 2)
         eq({ slow.segments[1].map, slow.segments[2].map, slow.segments[1].leaveKey },
             { it.segments[1].map, it.segments[2].map, it.segments[1].leaveKey }, "the same way through the zones")
