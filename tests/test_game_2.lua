@@ -102,6 +102,61 @@ H.suite("Engine and window (real data)", function()
         end
     end)
 
+    test("taking a quest you skipped brings it back into the held route; a quest that fails re-plans", function()
+        local ns = start()
+        -- the quests of the log, and the ones accepted below
+        local n0, info0 = (C_QuestLog.GetNumQuestLogEntries()), C_QuestLog.GetInfo
+        local extra = {}
+        C_QuestLog.GetNumQuestLogEntries = function() return n0 + #extra end
+        C_QuestLog.GetInfo = function(i) return i <= n0 and info0(i) or extra[i - n0] end
+        -- a quest the route accepts and turns in on the zone shown, not in the log already
+        local function pick(not_)
+            local plan = ns.Engine.view.plan
+            for i, key in ipairs(plan.order) do
+                local id = tonumber(key:match("^P:(%d+)$"))
+                if id and id ~= 7 and id ~= 33 and id ~= not_ then
+                    for j, k2 in ipairs(plan.order) do
+                        local step = plan.steps[j]
+                        if k2 == "T:" .. id and step.loc and step.loc.map == ns.Engine.view.zone then return id end
+                    end
+                end
+            end
+        end
+        local function accept(id, ...)
+            extra[#extra + 1] = { title = "Accepted " .. id, questID = id, level = 5 }
+            M.clock = M.clock + 30000
+            M.fire("QUEST_ACCEPTED", ...)
+        end
+        local function inRoute(key)
+            for _, k in ipairs(ns.Engine.view.plan.order) do if k == key then return true end end
+            return false
+        end
+        local id = pick()
+        ok(id, "the route has a quest to accept and turn in here")
+        ns.Engine.Ignore(id, true)
+        ok(M.settle())
+        ok(not inRoute("P:" .. id) and not inRoute("T:" .. id), "skipped: not in the route")
+        accept(id, id)
+        ok(not ns.Engine.IsIgnored(id), "taking it is choosing it: no longer skipped")
+        ok(M.settle())
+        ok(inRoute("T:" .. id), "taken: its turn-in is in the route")
+        -- the client may send the log index first, then the quest id
+        local id2 = pick(id)
+        ok(id2, "another quest to take")
+        ns.Engine.Ignore(id2, true)
+        ok(M.settle())
+        accept(id2, 5, id2)
+        ok(not ns.Engine.IsIgnored(id2), "the quest id is the second argument")
+        ok(M.settle())
+        ok(inRoute("T:" .. id2))
+        -- a quest that fails changes the log: the plan is made again
+        M.clock = M.clock + 30000
+        C_QuestLog.IsFailed = function(q) return q == 7 end
+        M.fire("QUEST_LOG_UPDATE")
+        eq(#M.timers, 1, "a quest that failed re-plans")
+        ok(M.settle())
+    end)
+
     test("XP buffs are read from the game, applied to the plan, and announced before they end", function()
         local output = function() return table.concat(M.printed, "\n") end
         local ns = start()
