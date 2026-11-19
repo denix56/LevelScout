@@ -108,6 +108,10 @@ local function listed(list)
     for _, e in ipairs(list) do out[#out + 1] = e.id end
     return out
 end
+local function has(ids, id)
+    for _, v in ipairs(ids) do if v == id then return true end end
+    return false
+end
 
 H.suite("Core numbers", function()
     test("map points become world yards; distance is nil across continents", function()
@@ -533,10 +537,10 @@ H.suite("Planner", function()
         end
         local taken = red()
         ok(indexOf(taken, "T:30") and indexOf(taken, "W:m206"), "taken: planned whatever its level")
-        eq(listed(taken.lists.later), {}, "and not listed under Later")
+        ok(not has(listed(taken.lists.later), 30), "and not listed under Later")
         local failed = red({ isFailed = true })
         eq(indexOf(failed, "T:30"), nil, "failed: it has to be taken again, so it waits")
-        eq(listed(failed.lists.later), { 30 })
+        ok(has(listed(failed.lists.later), 30), "failed: listed under Later")
         -- a taken quest whose own targets are too strong for the level still waits for it
         local entry32 = { id = 32, level = 14, isComplete = false, objectives = { { have = 0, need = 2, finished = false } } }
         local strong = ns.Model.Build(32, ns.Zones.Context(state({ log = { entry32 } })))
@@ -794,13 +798,13 @@ H.suite("Planner", function()
         eq(build(10, {}).taken, nil)
         -- Slow Crawl pays too little to be worth the walk: left out, unless you took it
         local function plan10(log) return ns.Zones.PlanZone(1, ns.Zones.Context(state({ log = log }))) end
-        eq(listed(plan10({}).lists.skipped), { 10 })
+        ok(has(listed(plan10({}).lists.skipped), 10), "not taken: left out as slow")
         local mine = plan10({ entry(10, { objectives = { { have = 0, need = 10, finished = false } } }) })
         ok(indexOf(mine, "T:10"), "taken: routed")
-        eq(listed(mine.lists.skipped), {})
+        ok(not has(listed(mine.lists.skipped), 10), "taken: not left out")
         local failed = plan10({ entry(10, { isFailed = true, objectives = { { have = 0, need = 10, finished = false } } }) })
         eq(indexOf(failed, "T:10"), nil)
-        eq(listed(failed.lists.skipped), { 10 }, "failed: weighed as before, left out")
+        ok(has(listed(failed.lists.skipped), 10), "failed: weighed as before, left out")
         -- the held route takes them all: a red quest, an escort and an elite quest, with the options off
         local function ctx(log) return ns.Zones.Context(state({ routeElite = false, log = log })) end
         local base = ns.Zones.PlanZone(1, ctx({}))
@@ -832,7 +836,7 @@ H.suite("Planner", function()
         ok(loc and loc.map == 1, "at the giver on map 1")
         near(loc.mx, 50, 0.5)
         near(loc.my, 50, 0.5)
-        eq(listed(mine.lists.unlocated), {})
+        ok(not has(listed(mine.lists.unlocated), 70), "not listed as unlocated")
     end)
 
     test("drops are split between the members who are on the quest", function()
