@@ -24,6 +24,71 @@ Zones.ITINERARY_WARM = true  -- the itinerary plans its later zones again starti
 Zones.WARM_SHOWN = false   -- a quick re-plan of the shown zone starts from its last plan (measured worse: off)
 Zones.REFRESH_EVERY = 4     -- a zone's search starts from its last plan this many times in a row, then from scratch
 
+--- The hearthstone as the planner takes it (ctx.stone), from state.hearth, or nil:
+--- { kind = "hearth", name, loc, ready (rounded up to HEARTH_READY_STEP), cd, cast (cast + loading screen) }.
+function Zones.Stone(h)
+    if type(h) ~= "table" or not (h.map and h.x and h.y) then return nil end
+    local ready, step = math.max(0, tonumber(h.ready) or 0), Planner.HEARTH_READY_STEP
+    if step and step > 0 then ready = math.ceil(ready / step) * step end
+    return { kind = "hearth", name = h.name, loc = Geo.Loc(h.map, h.x * 100, h.y * 100), ready = ready,
+        cd = tonumber(h.cd) or Planner.HEARTH_COOLDOWN, cast = (tonumber(h.cast) or Planner.HEARTH_CAST) + Planner.HEARTH_LOAD }
+end
+
+--- The hearthstone's uses in `plan` up to step `upto` (nil: all): how many, the seconds they save.
+function Zones.HearthUses(plan, upto)
+    local n, saved = 0, 0
+    for i, s in ipairs(plan and plan.steps or {}) do
+        if upto and i > upto then break end
+        if s.hearth then n, saved = n + 1, saved + (s.hearth.saved or 0) end
+    end
+    return n, saved
+end
+
+local bindCache = {}
+local function bindKey(name)
+    return (tostring(name):lower():gsub("^the%s+", ""):gsub("%s+city$", ""):gsub("[^%w]", ""))
+end
+
+--- Where a hearthstone bound at `name` (the client's bind location, "Lakeshire", "Stormwind City") is, from the
+--- hubs of the side ("a" | "h"; a hub of both sides counts too): { map, x, y (0-1) }, or nil. Three passes over the
+--- hubs, maps in id order: the name as it is (any case); then with "The" and "City" left off and only letters and
+--- digits kept; then a hub whose key (5 letters at least) starts the name's ("Theramore Isle" for "Theramore").
+function Zones.BindSpot(name, side)
+    if type(name) ~= "string" or name == "" then return nil end
+    local key = name .. "|" .. tostring(side)
+    local hit = bindCache[key]
+    if hit == nil then
+        hit = false
+        local world = ns.Data.World()
+        local maps = {}
+        for map in pairs(world and world.zones or {}) do
+            if type(map) == "number" then maps[#maps + 1] = map end
+        end
+        table.sort(maps)
+        local wanted, wantedKey = name:lower(), bindKey(name)
+        for pass = 1, 3 do
+            for _, map in ipairs(maps) do
+                local info = Zones.Info(map, side)
+                for _, hub in ipairs(info and info.hubs or {}) do
+                    if hub.side == "b" or hub.side == side or not side then
+                        local hubKey = bindKey(hub.name)
+                        if (pass == 1 and hub.name:lower() == wanted) or (pass == 2 and hubKey == wantedKey)
+                            or (pass == 3 and #hubKey >= 5 and wantedKey:sub(1, #hubKey) == hubKey) then
+                            hit = { map = map, x = hub.x / 100, y = hub.y / 100 }
+                            break
+                        end
+                    end
+                end
+                if hit then break end
+            end
+            if hit then break end
+        end
+        bindCache[key] = hit
+    end
+    if hit then return { map = hit.map, x = hit.x, y = hit.y } end
+    return nil
+end
+
 --- The planning context from plain facts about the character.
 --- state = { level, restedPool (rested XP left, as the game reports it; or rested = true for
 ---           "always rested"), xpBonus (0.05 = +5% XP from buffs),
@@ -40,7 +105,9 @@ Zones.REFRESH_EVERY = 4     -- a zone's search starts from its last plan this ma
 ---           speed (yards per second; optional: overrides the typical run speed as adjusted by
 ---           the travel speed learned in `pace`), tagOf (optional), checkpoint (optional),
 ---           memory (ns.Memory.New(), optional: plans are reused and searches start warm),
----           now (seconds, the memory's clock; optional) }
+---           now (seconds, the memory's clock; optional),
+---           hearth = { name, map, x, y (0-1), ready (s, 0 now), cd, cast } (the hearthstone: where it is bound,
+---           the seconds until it can be used, its cooldown and cast; optional, used only with Planner.HEARTH) }
 function Zones.Context(state)
     local world = ns.Data.World() or {}
     Geo.Init(world)
@@ -85,6 +152,7 @@ function Zones.Context(state)
         -- parts). It only listens: plans are the same with and without it.
         progress = state.progress,
         trace = state.trace, -- a zone whose search is recorded for the debug view
+        stone = Planner.HEARTH and Zones.Stone(state.hearth) or nil, -- the hearthstone (Planner.HEARTH)
     }
 end
 
@@ -117,7 +185,7 @@ end
 
 local classInside = {} -- [class] = Zones.ClassInside's answer
 
-function Zones.Reset() zoneCache, dungeonCache, classInside = {}, nil, {} end
+function Zones.Reset() zoneCache, dungeonCache, classInside, bindCache = {}, nil, {}, {} end
 
 -- Where to start a zone when the character's own position is unknown or far away: its
 -- busiest hub for this side.
@@ -603,12 +671,15 @@ function Zones.FlightStops(plan, ctx, skip)
     if not nodes or not plan or not travel or not ctx.start or type(known) ~= "table" or not next(known) then return out end
     local points = { ctx.start }
     for i, step in ipairs(plan.steps) do points[i + 1] = step.loc or points[i] end
+    -- (a leg that goes by hearthstone starts at the inn: Planner.HEARTH)
+    local from = {}
+    for i, step in ipairs(plan.steps) do from[i] = step.hearth and step.hearth.loc or points[i] end
     for id, n in pairs(nodes) do
         if not known[id] and not (skip and skip[id]) and (n[7] == "n" or n[7] == ctx.side) and n[4] and n[5] and n[6] then
             local loc = { c = n[1], x = n[2], y = n[3], map = n[4], mx = n[5], my = n[6] }
             local best, detours = nil, {}
             for i = 1, #points do
-                local prev, nxt = points[i], points[i + 1]
+                local prev, nxt = from[i] or points[i], points[i + 1]
                 local there = travel:Walk(prev, loc)
                 if there and there <= Zones.FLIGHT_DETOUR then
                     local d = there
@@ -1139,6 +1210,16 @@ local function project(state, ctx, plan, leave, carried)
             out[id] = true
         end
     end
+    -- The hearthstone (Planner.HEARTH): its cooldown runs on from its last use up to the leave step.
+    local ph = plan.hearth
+    if ph and type(state.hearth) == "table" then
+        local readyAt = ph.ready
+        for _, u in ipairs(ph.uses) do if u.step <= leave then readyAt = u.t + ph.cd end end
+        local h = {}
+        for k, v in pairs(state.hearth) do h[k] = v end
+        h.ready, h.cd = math.max(0, readyAt - at.t), ph.cd
+        next_.hearth = h
+    end
     next_.trace = nil
     next_.carried = out
     return next_, out
@@ -1159,6 +1240,16 @@ function Zones.Choose(cands, alone, kept, refine)
     kept = kept and refine(kept)
     if kept and (not best or best.xp <= kept.xp * Zones.KEEP_ITINERARY) then best = kept end
     return best
+end
+
+--- A later zone planned again from `from` (where the zone before is left) whose first leg is the hearthstone:
+--- the trip there is that leg, with the zone switch. nil otherwise (then the trip is worked out as before).
+function Zones.HearthLead(from, plan)
+    local ph, first = plan.hearth, plan.steps[1]
+    if not (ph and ph.from and first and first.hearth and from) then return nil end
+    local d = Geo.Dist(ph.from, from)
+    if not d or d > 1 then return nil end
+    return Planner.SWITCH_OVERHEAD + (first.t - first.seconds - (plan.overhead or 0))
 end
 
 --- The best way through the next hours. `state` and `ctx` as for Zones.Context / Zones.Rank,
@@ -1272,7 +1363,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
                 if not used[z.map] and (not order or order[depth] == z.map) and (depth > 1 or not first or first == z.map) then
                     local plan = (depth == 1 and leadPlans and leadPlans[z.map]) or (swap and depth > 1 and swap[z.map]) or z.plan
                     local first = plan.steps[1]
-                    local lead = depth == 1 and (first.t - first.seconds) or trip(loc, plan)
+                    local lead = depth == 1 and (first.t - first.seconds) or Zones.HearthLead(loc, plan) or trip(loc, plan)
                     local start = time + lead
                     if start + Zones.MIN_STAY <= H or depth == 1 then
                         local gain, finish, last = untilHorizon(plan, start, H)

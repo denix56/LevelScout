@@ -760,3 +760,336 @@ H.suite("Engine and window (real data)", function()
         eq(ns.Engine.chardb.seam, nil, "choosing a zone forgets the way across")
     end)
 end)
+
+H.suite("Hearthstone in the game", function()
+    -- The client's side of the stone, mocked per test: what GetBindLocation, the item count, the item's cooldown, the
+    -- spell and UnitIsDeadOrGhost say. `env` is read at every call, so a test changes it as it goes.
+    local function newEnv() return { name = "Goldshire", count = 1, start = 0, dur = 0, info = { castTime = 10000 } } end
+    local function stoneClient(env)
+        M.set("GetBindLocation", function() return env.name end)
+        M.set("C_Item", { GetItemCount = function() return env.count end })
+        M.set("C_Container", { GetItemCooldown = function() return env.start, env.dur end })
+        M.set("C_Spell", { GetSpellInfo = function() return env.info end })
+        M.set("UnitIsDeadOrGhost", function() return env.dead end)
+        return env
+    end
+
+    -- A character in Westfall whose route is in Elwynn (the zone chosen), the stone bound at Goldshire and ready.
+    local function westfall()
+        local ns, travel, shown, current, stand = E.wayfinding()
+        local env = stoneClient(newEnv())
+        M.clock = M.clock + 1e7 -- (the client's clock is well past a cooldown's length)
+        ns.Planner.HEARTH = true
+        stand(1436, 0.5, 0.5)
+        M.fire("ZONE_CHANGED_NEW_AREA")
+        ok(M.settle(), "planning finishes")
+        eq(ns.Engine.view.zone, 1429)
+        return ns, env, shown, current, stand
+    end
+
+    test("Game.GetHearth: ready, running, the global cooldown, secret and missing values", function()
+        local ns = installGame()
+        local env = stoneClient(newEnv())
+        local G = ns.Game
+        M.clock = 1e7 -- (the client's clock is well past a cooldown's length)
+        eq(G.GetHearth(), { name = "Goldshire", has = true, left = 0, cast = 10 }, "ready")
+        env.start, env.dur = GetTime() - 100, 3600
+        local h = G.GetHearth()
+        near(h.left, 3500, 1e-6, "running: what is left")
+        eq(h.duration, 3600, "and its full length")
+        env.start, env.dur = GetTime(), 1.5
+        eq(G.GetHearth().left, 0, "the global cooldown is not the stone's")
+        eq(G.GetHearth().duration, nil)
+        env.start, env.dur = SECRET, 3600
+        eq(G.GetHearth().left, nil, "a secret start: not said")
+        env.start, env.dur = 5, SECRET
+        eq(G.GetHearth().left, nil, "a secret length: not said")
+        env.start, env.dur = 0, 0
+        env.name, env.info = SECRET, { castTime = SECRET }
+        h = G.GetHearth()
+        eq({ h.name, h.cast, h.left }, { nil, nil, 0 }, "a secret name and cast: not said")
+        env.name, env.count = "", 0
+        h = G.GetHearth()
+        eq({ h.name, h.has }, { nil, false }, "no name; none in the bags")
+        -- no such APIs: nothing is said, and nothing fails
+        M.set("C_Item", nil)
+        M.set("C_Container", nil)
+        M.set("C_Spell", nil)
+        M.set("GetSpellInfo", function() return "Hearthstone", nil, nil, 12000 end)
+        h = G.GetHearth()
+        eq({ h.has, h.left, h.cast }, { nil, nil, 12 }, "the older spell call gives the cast")
+        M.set("GetBindLocation", nil)
+        M.set("GetSpellInfo", nil)
+        eq(G.GetHearth(), {}, "no API at all")
+        ok(G.IsHearthCast("player", 8690))
+        ok(not G.IsHearthCast("party1", 8690) and not G.IsHearthCast("player", 1) and not G.IsHearthCast(SECRET, 8690)
+            and not G.IsHearthCast("player", SECRET))
+        ok(not G.IsDead())
+        env.dead = true
+        ok(G.IsDead())
+    end)
+
+    test("the planner gets the stone only with the flag on, a stone in the bags, its cooldown read and a place for it", function()
+        local ns = start()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
+        local env = stoneClient(newEnv())
+        M.clock = M.clock + 1e7 -- (the client's clock is well past a cooldown's length)
+        local state
+        local context = ns.Zones.Context
+        ns.Zones.Context = function(s) state = state or s; return context(s) end -- (the first: the shown zone's own)
+        local function replan()
+            state = nil
+            ns.Engine.Replan(true)
+            ok(M.settle(), "planning finishes")
+            ok(state, "the planner was given a state")
+            return state.hearth
+        end
+        local chardb, view = ns.Engine.chardb, ns.Engine.view
+        eq(replan(), nil, "flag off")
+        eq({ view.hearth, chardb.hearthSpot, chardb.hearthCooldown }, {}, "nothing is kept for it")
+        ns.Planner.HEARTH = true
+        local h = replan()
+        ok(h, "flag on")
+        eq({ h.name, h.map, h.ready, h.cast, h.cd }, { "Goldshire", 1429, 0, 10, nil })
+        near(h.x, 0.438, 1e-9)
+        near(h.y, 0.659, 1e-9)
+        eq({ view.hearth.name, view.hearth.ready, view.hearth.known }, { "Goldshire", 0, "data" })
+        -- the cooldown running: the time left, and the length is kept with the character
+        env.start, env.dur = GetTime() - 3000, 3600
+        h = replan()
+        near(h.ready, 600, 30)
+        eq({ h.cd, chardb.hearthCooldown }, { 3600, 3600 })
+        -- a place learned for this name is the one used; for another name it is not
+        chardb.hearthSpot = { name = "Goldshire", map = 1429, x = 0.5, y = 0.5 }
+        h = replan()
+        eq({ h.x, h.y, view.hearth.known }, { 0.5, 0.5, "learned" })
+        env.name = "Sentinel Hill"
+        h = replan()
+        eq({ h.map, view.hearth.known }, { 1436, "data" })
+        -- no reading, no plan with it
+        env.name = "Nowhere Land"
+        eq(replan(), nil, "no place known for the bind")
+        eq(view.hearth, nil)
+        env.name, env.count = "Goldshire", 0
+        eq(replan(), nil, "not in the bags")
+        env.count, env.dead = 1, true
+        eq(replan(), nil, "dead")
+        env.dead, env.start, env.dur = false, SECRET, 3600
+        eq(replan(), nil, "its cooldown is secret")
+        env.start, env.dur = 0, 0
+        ok(replan(), "and back")
+    end)
+
+    test("HEARTHSTONE_BOUND learns where it is bound (flag on)", function()
+        local ns = start()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
+        local env = stoneClient(newEnv())
+        local chardb = ns.Engine.chardb
+        for _, name in ipairs({ "HEARTHSTONE_BOUND", "UNIT_SPELLCAST_SUCCEEDED" }) do
+            local seen = false
+            for _, f in ipairs(M.frames) do if f.events[name] then seen = true end end
+            ok(seen, name .. " is listened to")
+        end
+        M.fire("HEARTHSTONE_BOUND")
+        ok(M.settle())
+        eq(chardb.hearthSpot, nil, "flag off: nothing")
+        ns.Planner.HEARTH = true
+        env.name = "Lakeshire"
+        M.fire("HEARTHSTONE_BOUND")
+        ok(M.settle())
+        eq(chardb.hearthSpot, { name = "Lakeshire", map = 1429, x = 0.42, y = 0.65 })
+        eq({ ns.Engine.view.hearth.name, ns.Engine.view.hearth.known }, { "Lakeshire", "learned" }, "and planned with")
+    end)
+
+    test("the current row reads 'hearth to <inn>' when the stone is ready, and when it will be if it is not", function()
+        local ns, env, _, current = westfall()
+        local first = ns.Engine.view.plan.steps[1]
+        ok(first.hearth, "the route goes to its first step by hearthstone")
+        eq(first.hearth.name, "Goldshire")
+        ns.UI.Refresh()
+        contains(current().model.trip, "hearth to Goldshire")
+        ok(not current().model.detail:find("hearthstone ready in", 1, true))
+        -- not ready: the plan is the old one (the next look at the stone makes a new one); the way says when
+        env.start, env.dur = GetTime() - 3000, 3600
+        ns.Guide.Tick(); ns.Guide.Tick()
+        ns.UI.Tick()
+        local trip = current().model.trip
+        contains(trip, "hearthstone ready in 10 min")
+        ok(not trip:find("hearth to", 1, true), "no hearth leg")
+        -- ready again
+        env.start, env.dur = 0, 0
+        ns.Guide.Tick(); ns.Guide.Tick()
+        ns.UI.Tick()
+        contains(current().model.trip, "hearth to Goldshire")
+        -- the stone's own step in a later row says it too (a row that is not the current one)
+        local text = ns.Format.StepDetail(first)
+        contains(text, "hearth to Goldshire")
+        ok(not ns.Format.StepDetail(first, true):find("hearth to", 1, true), "not on the current row: its way line has it")
+    end)
+
+    test("the waypoint's title starts with 'Hearth to' and the arrow stays on the step", function()
+        local ns, _, shown = westfall()
+        local last = shown[#shown]
+        ok(last and last.title:find("^Hearth to Goldshire: "), "titled for the hearth: " .. tostring(last and last.title))
+        local step = ns.Engine.view.plan.steps[1]
+        eq(last.map, step.loc.map, "at the step, not at the player")
+        near(last.x, step.loc.mx / 100, 1e-6)
+        eq(ns.Guide.Trip().first.kind, "hearth")
+        eq(ns.Guide.Trip().target, nil)
+    end)
+
+    test("a cast of the hearthstone is written to the play log; where it lands is learned", function()
+        local ns, _, _, _, stand = E.wayfinding()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
+        local env = stoneClient(newEnv())
+        local chardb = ns.Engine.chardb
+        local events = chardb.play.events
+        local n = #events
+        M.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "guid", 8690)
+        eq(#events, n, "flag off: nothing")
+        ns.Planner.HEARTH = true
+        M.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "guid", 1)
+        M.fire("UNIT_SPELLCAST_SUCCEEDED", "party1", "guid", 8690)
+        eq(#events, n, "another spell, another unit: nothing")
+        stand(1436, 0.5, 0.5)
+        M.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "guid", 8690)
+        eq(#events, n + 1)
+        eq({ events[n + 1].k, events[n + 1].planned, events[n + 1].to }, { "hearth", false, "Goldshire" })
+        ns.Engine.TrackMove()
+        eq(chardb.hearthSpot, nil, "not moved yet")
+        stand(1429, 0.4, 0.6)
+        ns.Engine.TrackMove()
+        local spot = chardb.hearthSpot
+        ok(spot and spot.name == "Goldshire" and spot.map == 1429, "where it landed")
+        near(spot.x, 0.4, 1e-9)
+        near(spot.y, 0.6, 1e-9)
+        ok(M.settle())
+        eq(ns.Engine.view.hearth.known, "learned", "planned again from there")
+        -- an arrival too late is not one
+        chardb.hearthSpot = nil
+        stand(1436, 0.5, 0.5)
+        M.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "guid", 8690)
+        M.clock = M.clock + 61000
+        stand(1429, 0.4, 0.6)
+        ns.Engine.TrackMove()
+        eq(chardb.hearthSpot, nil)
+        -- the summary counts the casts, and those the route had
+        local sum = ns.Play.Summary(chardb.play)
+        eq({ sum.kinds.hearth, sum.hearthPlanned }, { 2, nil })
+        events[#events].planned = true
+        sum = ns.Play.Summary(chardb.play)
+        eq(sum.hearthPlanned, 1)
+        local said = table.concat(ns.Play.Describe(chardb.play), "\n")
+        contains(said, "used the hearthstone 2 times (1 where the route had it)")
+        ok(not ns.Play.OVERRULED.hearth, "using the stone is not overruling the plan")
+    end)
+
+    test("a teleport in a timed step is logged with h and leaves the travel factor alone", function()
+        local ns = start()
+        ns.Planner.HEARTH = false -- (on by default: the flag-off half first)
+        local Tracker, Geo, Learn = ns.Tracker, ns.Geo, ns.Learn
+        local inn = Geo.Loc(1429, 43.8, 65.9)
+        local function step(key, loc, extra)
+            local s = { kind = "accept", action = "accept", loc = loc, travel = 100, seconds = 20, quests = { { id = key } } }
+            for k, v in pairs(extra or {}) do s[k] = v end
+            return { order = { "P:" .. key }, steps = { s } }
+        end
+        -- the first step is at the inn; the player is first in Westfall and jumps there
+        local function play(opts)
+            local store, model = {}, {}
+            Tracker.Start({}, {}, store, model)
+            Tracker.OnPlan(step(7, inn, opts.step), { now = 100, level = 12, group = 1, log = {}, completed = {} })
+            Tracker.OnMove({ now = 100, level = 12, loc = Geo.Loc(1436, 50, 50) })
+            if opts.cast then Tracker.Teleported() end
+            Tracker.OnMove({ now = 101, level = 12, loc = inn })
+            Tracker.OnMove({ now = 110, level = 12, loc = inn })
+            Tracker.OnPlan(step(8, inn), { now = 120, level = 12, group = 1, log = { { id = 7, objectives = {} } }, completed = {} })
+            return store, model
+        end
+        -- (flag off: the jump is not looked for, and a long walk of a second teaches a very fast walker)
+        local store, model = play({})
+        eq(#store, 1)
+        eq(store[1].h, nil, "flag off: no h")
+        ok(Learn.TravelFactor(model) < 0.95, "the unplanned hearth taught a too-low travel factor: " .. Learn.TravelFactor(model))
+        ns.Planner.HEARTH = true
+        store, model = play({})
+        eq(store[1].h, 1, "a jump of position marks the step")
+        near(Learn.TravelFactor(model), 1, 1e-9, "its travel is not learned")
+        ok(model.n and model.n >= 1, "its work is")
+        -- the cast marks it as well; so does a plan that had the stone for it
+        store, model = play({ cast = true })
+        eq(store[1].h, 1)
+        local still = {}
+        Tracker.Start({}, {}, still, {})
+        Tracker.OnPlan(step(7, inn, { hearth = { name = "Goldshire" } }), { now = 100, level = 12, group = 1, log = {}, completed = {} })
+        Tracker.OnPlan(step(8, inn), { now = 120, level = 12, group = 1, log = { { id = 7, objectives = {} } }, completed = {} })
+        eq(still[1].h, 1, "the plan had the stone")
+        -- the step log's travel figure leaves h lines out
+        eq(Tracker.StepStats().travel.n, 0)
+        Tracker.Start({}, {}, { { k = "accept", p = 120, pt = 100, a = 20, at = 1, aw = 19 } }, {})
+        eq(Tracker.StepStats().travel.n, 1)
+        Tracker.Start({}, {}, { { k = "accept", p = 120, pt = 100, a = 20, at = 1, aw = 19, h = 1 } }, {})
+        eq(Tracker.StepStats().travel.n, 0, "an h line is not in the travel ratio")
+        -- flag off: Teleported does nothing
+        ns.Planner.HEARTH = false
+        still = {}
+        Tracker.Start({}, {}, still, {})
+        Tracker.OnPlan(step(7, inn), { now = 100, level = 12, group = 1, log = {}, completed = {} })
+        Tracker.Teleported()
+        Tracker.OnPlan(step(8, inn), { now = 120, level = 12, group = 1, log = { { id = 7, objectives = {} } }, completed = {} })
+        eq(still[1].h, nil)
+    end)
+
+    test("Travel:Route with a stone has a hearth leg when it is quicker, and none otherwise", function()
+        local ns = start()
+        local Geo = ns.Geo
+        local travel = ns.Travel.New(ns.Data.World(), { speed = 7, side = "a", knownNodes = {} })
+        local a, b = Geo.Loc(1436, 50, 50), Geo.Loc(1429, 40, 60)
+        local plain = travel:Route(a, b)
+        local inn = Geo.Loc(1429, 43.8, 65.9)
+        local stone = { loc = inn, name = "Goldshire", cast = 30, min = 0 }
+        eq(travel:Route(a, b, nil), plain, "no stone: as before")
+        local fast = travel:Route(a, b, stone)
+        local from = travel:Route(inn, b)
+        ok(plain.seconds > 30 + from.seconds + 60, "the stone is quicker here")
+        eq(fast.mode, "hearth")
+        near(fast.seconds, 30 + from.seconds, 1e-9)
+        eq({ fast.legs[1].kind, fast.legs[1].seconds, fast.legs[1].to.name, fast.legs[1].from.loc }, { "hearth", 30, "Goldshire", a })
+        eq(fast.legs[2].from.name, "Goldshire", "and the way goes on from the inn")
+        eq(#fast.legs, #from.legs + 1)
+        -- a stone that must save more than it does, one next to where we are, and a way it cannot take
+        eq(travel:Route(a, b, { loc = inn, name = "Goldshire", cast = 30, min = 1e6 }), plain)
+        eq(travel:Route(b, b, stone).mode, plain.mode)
+        eq(travel:Route(a, b, {}), plain, "a stone with no place")
+        -- the words
+        local trip = { first = fast.legs[1], rides = { fast.legs[1] }, legs = fast.legs, seconds = fast.seconds }
+        eq(ns.Format.TripTitle(trip), "Hearth to Goldshire")
+        eq(ns.Format.TripLegs(trip)[1].text, "Hearth to Goldshire")
+        contains(ns.Format.TripText(trip), "hearth to Goldshire")
+        eq(ns.Format.TripText({ rides = {}, legs = {}, stoneWait = 600 }), "hearthstone ready in 10 min")
+        eq(ns.Format.TripText({ rides = {}, legs = {} }), nil)
+    end)
+
+    test("Zones.BindSpot: the client's bind name to a hub of the side", function()
+        local ns = start()
+        local Z = ns.Zones
+        local function at(name, side, map, x, y)
+            local s = Z.BindSpot(name, side)
+            ok(s, name .. " is found")
+            eq(s.map, map, name)
+            if x then near(s.x, x, 1e-9, name .. " x"); near(s.y, y, 1e-9, name .. " y") end
+        end
+        at("The Crossroads", "h", 1413, 0.517, 0.309)
+        at("Stormwind City", "a", 1453, 0.712, 0.723)
+        at("Undercity", "h", 1458, 0.578, 0.654)
+        at("Theramore Isle", "a", 1445, 0.661, 0.46)
+        at("goldshire", "a", 1429, 0.438, 0.659)
+        eq(Z.BindSpot("Brill", "a"), nil, "a hub of the other side")
+        eq(Z.BindSpot("Nowhere Land", "a"), nil)
+        eq(Z.BindSpot("", "a"), nil)
+        eq(Z.BindSpot(nil, "a"), nil)
+        local s = Z.BindSpot("Goldshire", "a")
+        s.map = 0
+        eq(Z.BindSpot("Goldshire", "a").map, 1429, "the answer is a copy")
+    end)
+end)

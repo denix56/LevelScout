@@ -49,6 +49,11 @@
 --   POWER_DELTA=0.5   the difference in points the power line is worked out for (80% power)
 --   RAW=file      every run's figures as tab-separated text (config, character, salt, XP, work, CPU)
 --   RACE_DRY=1    what Zones.RACE would skip, from base's own runs (RACE_Q="0.2 0.3 0.5 0.75 1", RACE_KEEP)
+--   HEARTH_READY=0   seconds until the hearthstone is ready at the start (state.hearth.ready; used with Planner.HEARTH)
+--   HEARTH_CD=...    its cooldown in seconds (default: Planner.HEARTH_COOLDOWN)
+--   BIND=town|capital|none   where it is bound: the hub of the character's side nearest to it (default), the side's
+--        capital (the first hub of map 1453 / 1454), or nowhere (no state.hearth). Every config gets the same
+--        state; the stone is used only where Planner.HEARTH is on, e.g. SET="hearth:Planner.HEARTH=true"
 --   ARMS=1        per removal and regret strength (ranked zones' searches): rounds, outcomes, work, quests
 --                 taken out (Search.ARM_STATS), and a prior to paste into Search.BANDIT_PRIORS
 -- Columns: "work k" = thousand work units (plan.work, summed over zones, deterministic);
@@ -185,6 +190,11 @@ local REPEAT = math.max(1, tonumber(os.getenv("REPEAT")) or 1)
 local ITIN = os.getenv("ITIN") ~= "0" and os.getenv("ITIN") ~= ""
 local DUMP = os.getenv("DUMP") and os.getenv("DUMP") ~= "" and os.getenv("DUMP") ~= "0"
 local JUDGED = ITIN and "itinXP" or "xp120"
+local HEARTH_READY = tonumber(os.getenv("HEARTH_READY")) or 0
+local HEARTH_CD = tonumber(os.getenv("HEARTH_CD"))
+local BIND = os.getenv("BIND")
+if not BIND or BIND == "" then BIND = "town" end
+assert(BIND == "town" or BIND == "capital" or BIND == "none", "BIND: town, capital or none")
 
 -- XP earned in the first `limit` seconds of a plan: its steps in order (the zone switch included in
 -- their times), the step under way when time runs out counting its share; nothing after the route's end.
@@ -230,6 +240,29 @@ local function run(char, overrides, salt, budget)
     for id, n in pairs(ns.data.world.travel.nodes) do
         if n[7] == "n" or n[7] == (faction == "Alliance" and "a" or "h") then state.knownNodes[id] = true end
     end
+    -- The hearthstone, bound as BIND says (the planner uses it only with Planner.HEARTH on).
+    if BIND ~= "none" then
+        ns.Geo.Init(ns.Data.World())
+        local side = faction == "Alliance" and "a" or "h"
+        local hub, hubMap
+        if BIND == "capital" then
+            hubMap = faction == "Alliance" and 1453 or 1454
+            local info = ns.Zones.Info(hubMap, side)
+            hub = info and info.hubs[1]
+        else
+            hubMap = map
+            local info, here, bestD = ns.Zones.Info(map, side), ns.Geo.Loc(map, x, y), nil
+            for _, h in ipairs(info and info.hubs or {}) do
+                if h.side == side or h.side == "b" then
+                    local d = ns.Geo.Dist(here, ns.Geo.Loc(map, h.x, h.y))
+                    if d and (not bestD or d < bestD) then hub, bestD = h, d end
+                end
+            end
+        end
+        if hub then
+            state.hearth = { name = hub.name, map = hubMap, x = hub.x / 100, y = hub.y / 100, ready = HEARTH_READY, cd = HEARTH_CD }
+        end
+    end
     local last, longest = os.clock(), 0
     state.checkpoint = function()
         local now = os.clock()
@@ -268,6 +301,8 @@ local function run(char, overrides, salt, budget)
         out.zones[z.map] = { score = z.plan.score, full = z.plan.fullRate, quests = z.plan.quests, steps = #z.plan.steps }
         out.order[#out.order + 1] = z.map
         out.work = out.work + (z.plan.work or 0)
+        local hn, hs = ns.Zones.HearthUses(z.plan)
+        out.hearthN, out.hearthSaved = (out.hearthN or 0) + hn, (out.hearthSaved or 0) + hs
         if z.plan.search then out.searchWork[z.map] = z.plan.search.work end
     end
     if ARMS then
@@ -315,6 +350,11 @@ local function run(char, overrides, salt, budget)
         out.itinXP = it and it.xp or 0
         out.itinWork = itinWork
         out.border = it and it.border
+        out.itinHearthN, out.itinHearthSaved = 0, 0
+        for _, seg in ipairs(it and it.segments or {}) do
+            local hn, hs = ns.Zones.HearthUses(seg.plan, seg.leave or seg.last)
+            out.itinHearthN, out.itinHearthSaved = out.itinHearthN + hn, out.itinHearthSaved + hs
+        end
         out.seam, out.seamInfo = it and it.seam, it and it.seamInfo
         if DUMP and it then
             local maps, keys = {}, {}
@@ -324,13 +364,16 @@ local function run(char, overrides, salt, budget)
             if it.seam then
                 out.dumpItin = out.dumpItin .. "  seam " .. table.concat(it.seam.keys, ",") .. " | " .. table.concat(it.seam.head, ",")
             end
+            if out.itinHearthN > 0 then out.dumpItin = out.dumpItin .. string.format("  hearth %d/%.0f", out.itinHearthN, out.itinHearthSaved) end
         end
     end
     if DUMP then
         out.dump = {}
         for _, z in ipairs(ranked) do
-            out.dump[#out.dump + 1] = string.format("zone %d  score %.2f  xp %.2f  seconds %.1f  %s", z.map, z.plan.score or 0,
-                z.plan.xp or 0, z.plan.seconds or 0, table.concat(z.plan.order or {}, " "))
+            local hn, hs = ns.Zones.HearthUses(z.plan)
+            out.dump[#out.dump + 1] = string.format("zone %d  score %.2f  xp %.2f  seconds %.1f  %s%s", z.map, z.plan.score or 0,
+                z.plan.xp or 0, z.plan.seconds or 0, table.concat(z.plan.order or {}, " "),
+                hn > 0 and string.format("  hearth %d/%.0f", hn, hs) or "")
         end
     end
     return out
@@ -602,6 +645,30 @@ if ITIN then
                 config[1], took, runsN, took > 0 and quests / took or 0, took > 0 and gainXP / took or 0,
                 gainBase > 0 and gainXP / gainBase * 100 or 0, runsN > 0 and workMine / runsN / 1000 or 0,
                 workBase > 0 and (workMine / workBase - 1) * 100 or 0))
+        end
+    end
+end
+-- The hearthstone (Planner.HEARTH): in how many itineraries it is used, how often, the seconds it saves.
+if ITIN then
+    for ci, config in ipairs(CONFIGS) do
+        local t = totals[ci]
+        if t and ci ~= 1 then
+            local runsN, used, uses, saved, rankedN, rankedSaved = 0, 0, 0, 0, 0, 0
+            for i in ipairs(CHARACTERS) do
+                for si = 1, #SALTS do
+                    local r = results[ci][i] and results[ci][i][si]
+                    if r then
+                        runsN = runsN + 1
+                        if (r.itinHearthN or 0) > 0 then used = used + 1 end
+                        uses, saved = uses + (r.itinHearthN or 0), saved + (r.itinHearthSaved or 0)
+                        rankedN, rankedSaved = rankedN + (r.hearthN or 0), rankedSaved + (r.hearthSaved or 0)
+                    end
+                end
+            end
+            if runsN > 0 and rankedN + uses > 0 then
+                print(string.format("HEARTH %s: the stone used in %d of %d runs' itineraries (%.2f uses, %.0f s saved per run); ranked plans %.1f uses per run (%.0f s)",
+                    config[1], used, runsN, uses / runsN, saved / runsN, rankedN / runsN, rankedSaved / runsN))
+            end
         end
     end
 end

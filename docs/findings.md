@@ -310,6 +310,7 @@ Forever branches and QuestieTrace's trackers, which record these calls live on F
 | Map waypoint without TomTom | `C_Map.SetUserWaypoint` / `C_SuperTrack.SetSuperTrackedUserWaypoint`. Questie's super-tracking support is behind `QuestieCompat.IsSuperTrackingSupported()`. **To verify in game.** | QuestieCompat.lua:860-885 |
 | Rested XP | `GetXPExhaustion()`. Forever also has a **sleeping-bag "Well-Rested" buff** worth +1% XP per stack. Auras are secret in combat and in instances, so read them only out of combat. | QuestieXP.lua:130-154 |
 | Flight paths | **Not verified.** Known nodes are only exposed at a flight master (`C_TaxiMap.GetAllTaxiNodes`), so we must record them when the taxi map opens. OpenMap ships `Data/Forever/FlightData.lua` with node positions. | — |
+| Hearthstone | `GetBindLocation()`, `C_Item.GetItemCount(6948)`, `C_Container.GetItemCooldown(6948)` (start, duration; 1.5 s or less is the global cooldown), `C_Spell.GetSpellInfo(8690).castTime`, events `HEARTHSTONE_BOUND` and `UNIT_SPELLCAST_SUCCEEDED` (8690). **Not verified.** | ForeverDB 0.60.4 PlannerCalib.lua:316-450 (not run) |
 
 ---
 
