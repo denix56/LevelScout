@@ -46,7 +46,7 @@ H.suite("Engine and window (real data)", function()
         local before = view.ranked
         local realClock = debugprofilestop
         M.set("debugprofilestop", function() M.clock = M.clock + 1; return M.clock end)
-        ns.Engine.Replan(true)
+        ns.Engine.Replan(true, true) -- (asked for: a step of the route would plan quietly, without the bar)
         local early
         for _ = 1, 200000 do
             if #M.timers > 0 then
@@ -68,7 +68,7 @@ H.suite("Engine and window (real data)", function()
         ok(early.fraction and early.fraction >= ns.Engine.SHARE_RANK, "the bar is past the ranking")
         ok(not view.busy and view.itinerary, "then the itinerary arrives and planning ends")
         -- a new plan job stops the itinerary, which is worked out again after it from the new result
-        ns.Engine.Replan(true)
+        ns.Engine.Replan(true) -- (a step's plan: quiet; the ranking follows in a plan of its own, then its itinerary)
         for _ = 1, 200000 do
             if #M.timers > 0 then
                 local fns = M.timers
@@ -109,7 +109,7 @@ H.suite("Engine and window (real data)", function()
             eq(frame.progress.fraction, v.progress.fraction, "the bar follows")
         end)
         local function replan(watch)
-            ns.Engine.Replan(true)
+            ns.Engine.Replan(true, true) -- (asked for: shows the bar)
             local frames, last, texts = 0, 0, {}
             for _ = 1, 200000 do
                 if #M.timers > 0 then
@@ -183,11 +183,89 @@ H.suite("Engine and window (real data)", function()
         LevelScoutDB.window.collapsed = false
         local rank = ns.Zones.Rank
         ns.Zones.Rank = function() error("boom") end
-        ns.Engine.Replan(true)
+        ns.Engine.Replan(true, true)
         ok(M.settle())
         ns.Zones.Rank = rank
         eq(view.status, "error")
         ok(view.progress == nil and not frame.progress:IsShown(), "cleared after an error")
+    end)
+
+    test("a step of the plan plans quietly: no bar, the route held, the zones ranked right after it", function()
+        local ns = start()
+        local view, frame = ns.Engine.view, LevelScoutFrame
+        local seen = {} -- what the window was told
+        ns.Engine.OnChange(function(v)
+            if v.busy then seen.busy = true end
+            if v.status ~= "ready" then seen.status = v.status end
+        end)
+        ns.Engine.OnProgress(function() seen.progress = true end)
+        local realRank, ranks, rankedOver = ns.Zones.Rank, 0, nil
+        ns.Zones.Rank = function(...)
+            ranks = ranks + 1
+            rankedOver = rankedOver or view.plan -- (the plan on screen when the ranking starts)
+            return realRank(...)
+        end
+        local function order() return table.concat(view.plan.order, " ") end
+        local before, plan0, ranked0 = order(), view.plan, view.ranked
+        -- a quest accepted more than RERANK_EVERY after the last ranking: a ranking is due
+        M.clock = M.clock + (ns.Engine.RERANK_EVERY + 1) * 1000
+        M.fire("QUEST_ACCEPTED", 7)
+        ok(M.settle(), "planning settles: no loop of plans")
+        ok(not (seen.busy or seen.progress or seen.status), "no bar, no Planning..., the status stays ready")
+        ok(not frame.progress:IsShown(), "the bar is hidden")
+        ok(not frame.status.text:find("Planning", 1, true), "the footer: " .. tostring(frame.status.text))
+        eq(order(), before, "the route is held")
+        eq(ranks, 1, "the zones are ranked once")
+        ok(view.ranked ~= ranked0, "and shown")
+        ok(rankedOver and rankedOver ~= plan0, "after the step's own plan was on screen")
+        ok(view.itinerary and not ns.Async.IsRunning("itinerary"), "the next hours are worked out too")
+        -- an event that asks for a ranking (a level, another zone walked into): the same
+        ranks, rankedOver = 0, nil
+        ns.Engine.Replan(true)
+        ok(M.settle())
+        ok(not seen.busy, "still no bar")
+        eq({ order(), ranks }, { before, 1 })
+        -- a flight point learned (Engine.ReplanNow): the route at once, then one ranking: two plans in all
+        local plans, onPlan = 0, ns.Tracker.OnPlan
+        ns.Tracker.OnPlan = function(...) plans = plans + 1; return onPlan(...) end
+        ranks = 0
+        ns.Engine.ReplanNow()
+        ok(M.settle())
+        ns.Tracker.OnPlan = onPlan
+        eq({ ranks, plans }, { 1, 2 }, "the route, then the zones")
+        ok(not seen.busy, "quiet")
+        -- the route broken: planned again, with the bar
+        local broken = ns.Zones.RouteBroken
+        ns.Zones.RouteBroken = function() return 7 end
+        ns.Engine.Replan()
+        ok(M.settle())
+        ns.Zones.RouteBroken = broken
+        ok(seen.busy, "a broken route is planned again with the bar")
+        ok(not view.busy and not frame.progress:IsShown(), "cleared when done")
+        -- asked for (re-plan): the bar, up for the next hours; a step's quiet plan that stops them takes it away
+        local realClock = debugprofilestop
+        M.set("debugprofilestop", function() M.clock = M.clock + 1; return M.clock end)
+        ns.Engine.Replan(true, true)
+        for _ = 1, 200000 do
+            if #M.timers > 0 then
+                local fns = M.timers
+                M.timers = {}
+                for _, fn in ipairs(fns) do fn() end
+            end
+            local f = M.asyncFrame()
+            if f then f.scripts.OnUpdate(f, 0.02) end
+            if ns.Async.IsRunning("itinerary") and view.busy then break end
+        end
+        M.set("debugprofilestop", realClock)
+        ok(ns.Async.IsRunning("itinerary") and frame.progress:IsShown(), "asked for: the bar, still up for the next hours")
+        ns.Engine.Replan()
+        local fns = M.timers -- (the step's plan starts, nothing more)
+        M.timers = {}
+        for _, fn in ipairs(fns) do fn() end
+        ok(not view.busy and not frame.progress:IsShown(), "a step's quiet plan takes the bar away at once")
+        ok(M.settle())
+        ok(not view.busy and not frame.progress:IsShown() and view.itinerary, "and the next hours come quietly")
+        ns.Zones.Rank = realRank
     end)
 
     test("collapse, hide and /ls, options menu", function()

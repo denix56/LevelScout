@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Following the plan no longer re-plans**: accepting or turning in a quest, finishing an objective, using
+  the hearthstone or a flight, learning a flight point, a level-up or walking into another zone no longer
+  shows "Planning..." and the progress bar, and the next step shows at once. The other zones are still
+  ranked from time to time, quietly behind it. The bar shows when the route is really planned again: a
+  quest of it can no longer be done, you skip a quest, change an option or click re-plan, you are half a
+  level or more ahead of it, it runs out, or you pick another zone.
 - **On to a higher zone, when this one is done**: the plan for the next hours now goes on only to a zone of a higher level range (the middle of its range above this one's), and only when little is left here (three quests or fewer still to turn in), you are within a level of this zone's top, or you are at least two levels into the next zone's range by then. Dungeons are not held to it. When no zone qualifies, the plan stays in one zone and is worked out again as you play. When the zone you are in runs out, "Done here. Next:" names a higher zone when one has something to do, else the best one as before. Not benchmarked. (For developers: `Zones.HANDOFF`, off: as before; `Zones.HANDOFF_RISE`, `HANDOFF_QUESTS`, `HANDOFF_NEAR_CAP`, `HANDOFF_FIT`, `HANDOFF_LEVELS`; `Zones.Handoff`, `Zones.Higher`, `Zones.LevelAt`.)
 - **The route stays put**: the zone's route on screen is no longer reshuffled as you play. Quests no
   longer come and go between plans, and a slightly better route no longer replaces it. It changes only
