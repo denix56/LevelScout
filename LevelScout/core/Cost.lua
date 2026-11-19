@@ -45,6 +45,7 @@ function Cost.EscortSeconds(questId)
     local wait = Cost.ESCORT_WAIT[questId] or 0
     return Cost.ESCORT_SECONDS + wait, wait
 end
+
 Cost.DEFAULT_COUNT = { kill = 8, item = 6, object = 4, event = 1, other = 1 }
 Cost.DEFAULT_PACE = { c = 30, i = 25, o = 25, e = 120, x = 60, r = 7 }
 
