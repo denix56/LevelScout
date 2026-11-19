@@ -292,6 +292,15 @@ tripLines = function(text)
     return math.max(1, math.ceil(#plain * TRIP_CHAR_W / math.max(width, 60)))
 end
 
+-- The height of a heading row: one line, or as many as a long heading ("Then: Swamp of
+-- Sorrows  (hearth to Stormwind City, 11 min away, about 45 min there)") wraps into at the
+-- window's width, so it never runs past the window's edge.
+local function sectionH(text)
+    local plain = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    local lines = math.max(1, math.ceil(#plain * TRIP_CHAR_W / math.max(WIDTH - 2 * PAD, 60)))
+    return SECTION_H + (lines - 1) * LINE_H
+end
+
 ---------------------------------------------------------------------------------------------
 -- Class quest chains (Engine.view.chains: on offer; Engine.view.chain: the one followed)
 ---------------------------------------------------------------------------------------------
@@ -348,9 +357,10 @@ local function onwardRows(it, out, from)
         local seg = it.segments[n]
         local steps = seg.plan and seg.plan.steps or {}
         local stone = steps[1] and steps[1].hearth -- (Planner.HEARTH: the way there is the stone)
-        out[#out + 1] = { section = string.format("Then: %s  %s(%s%sabout %s there)|r", seg.name or "the next zone", hex(C.faint),
+        local heading = string.format("Then: %s  %s(%s%sabout %s there)|r", seg.name or "the next zone", hex(C.faint),
             stone and ("hearth to " .. (stone.name or "your inn") .. ", ") or "",
-            (seg.travel or 0) > 60 and (Format.Duration(seg.travel) .. " away, ") or "", Format.Duration(seg.seconds)), h = SECTION_H }
+            (seg.travel or 0) > 60 and (Format.Duration(seg.travel) .. " away, ") or "", Format.Duration(seg.seconds))
+        out[#out + 1] = { section = heading, h = sectionH(heading) }
         local upto = math.min(seg.leave or #steps, #steps)
         local shown = 0
         for _, step in ipairs(grouped(steps)) do
@@ -515,8 +525,9 @@ local function routeRows(view)
         if chain.laterLevel then
             out[#out + 1] = { section = string.format("Rest of the chain at level %d", chain.laterLevel), h = SECTION_H, warn = true }
         end
-        out[#out + 1] = { section = string.format("%sThen: back to leveling%s|r", hex(C.faint),
-            chain.afterName and (" in " .. chain.afterName) or ""), h = SECTION_H }
+        local heading = string.format("%sThen: back to leveling%s|r", hex(C.faint),
+            chain.afterName and (" in " .. chain.afterName) or "")
+        out[#out + 1] = { section = heading, h = sectionH(heading) }
     end
     return out
 end
@@ -895,6 +906,7 @@ local function newRow(parent)
     r.bar:SetHeight(3)
     r.section = text(r, "GameFontNormalSmall", C.accent)
     r.section:SetPoint("BOTTOMLEFT", PAD, 5)
+    r.section:SetWordWrap(true) -- a long heading wraps (its row is made tall enough: sectionH)
     -- "Skip" on the current step: the same as right-clicking any step
     r.skip = CreateFrame("Button", nil, r)
     r.skip:SetSize(34, 16)
@@ -929,6 +941,7 @@ local function drawRow(r, m)
     r:EnableMouse(not isSection)
     if isSection then
         local c = m.warn and C.warn or C.accent
+        r.section:SetWidth(WIDTH - 2 * PAD)
         r.section:SetText(m.section)
         r.section:SetTextColor(c[1], c[2], c[3])
         r.section:Show()
