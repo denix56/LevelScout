@@ -1259,7 +1259,7 @@ function Zones.Itinerary(state, ctx, ranked, opts)
     end
 
     -- Try every order (or only `order`, a list of maps; or only those starting in `first`),
-    -- every leave point (or only `fixed[n]` for the n-th zone), with `swap[map]` in place of
+    -- every leave point (or only `fixed[n]` for the n-th zone: then at least two zones), with `swap[map]` in place of
     -- that zone's plan when it is not the first zone, and `leadPlans[map]` in place of that zone's
     -- plan when it is the first zone.
     -- With `top` ({ by = {}, list = {} }) the best itinerary for each pair of first two zones is
@@ -1277,7 +1277,9 @@ function Zones.Itinerary(state, ctx, ranked, opts)
                     if start + Zones.MIN_STAY <= H or depth == 1 then
                         local gain, finish, last = untilHorizon(plan, start, H)
                         segs[depth] = { map = z.map, plan = plan, travel = lead, seconds = finish - start, xp = gain, last = last }
-                        if not best or xp + gain > best.xp then
+                        -- (with the first zone's leave step fixed, the answer goes on to a next
+                        -- zone: staying put instead is not what was asked)
+                        if (not best or xp + gain > best.xp) and not (fixed and fixed[1] and depth < 2) then
                             best = { xp = xp + gain, segments = {} }
                             for i = 1, depth do best.segments[i] = segs[i] end
                         end
