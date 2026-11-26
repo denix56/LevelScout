@@ -19,6 +19,7 @@ end
 if os.getenv("LIST_FILES") then io.write(table.concat(FILES, " "), "\n"); os.exit(0) end
 
 for _, file in ipairs(FILES) do
+    H.beginFile(file)
     local chunk = assert(loadfile(root .. "/tests/" .. file .. ".lua"))
     chunk(H, M)
 end

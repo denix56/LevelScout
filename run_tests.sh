@@ -7,6 +7,8 @@
 #   ./run_tests.sh "planner"     only tests whose name contains "planner"
 #   SERIAL=1 ./run_tests.sh      everything in one process
 #   TIMES=1 ./run_tests.sh       also list the slowest tests
+# While it runs it shows each file's progress (tests/progress.lua): a status line redrawn in place on
+# a terminal; plain lines elsewhere (CI logs), with a status line every TEST_HEARTBEAT=30 seconds.
 cd "$(dirname "$0")" || exit 1
 LUA="${LUA:-./.tools/bin/lua5.1}"
 
@@ -23,27 +25,11 @@ files="${TEST_FILES:-$(LIST_FILES=1 "$LUA" tests/run.lua)}"
 out="$(mktemp -d "${TMPDIR:-/tmp}/levelscout-tests.XXXXXX")" || exit 1
 trap 'rm -rf "$out"' EXIT
 
-export LUA OUT="$out" FILTER="${1:-}"
+# Each file's process writes its progress events to fd 3, the pipe into tests/progress.lua, which
+# shows the progress as they come and at the end prints the failures from the logs and the total.
+# Its exit code is the run's: 1 if a test failed or a file did not finish.
+export LUA OUT="$out" FILTER="${1:-}" TEST_JOBS="$jobs"
 printf '%s\n' $files | xargs -P "$jobs" -I{} sh -c \
-    'TEST_FILES="$1" "$LUA" tests/run.lua ${FILTER:+"$FILTER"} > "$OUT/$1.log" 2>&1' _ {}
-
-passed=0 failed=0 broken=""
-for f in $files; do
-    log="$out/$f.log"
-    summary="$(tail -1 "$log" 2>/dev/null)"
-    p="$(printf '%s' "$summary" | sed -n 's/^\([0-9]*\) passed, \([0-9]*\) failed$/\1/p')"
-    x="$(printf '%s' "$summary" | sed -n 's/^\([0-9]*\) passed, \([0-9]*\) failed$/\2/p')"
-    if [ -z "$p" ]; then
-        broken="$broken $f"
-        printf '== %s did not finish:\n' "$f"; tail -20 "$log" 2>/dev/null
-        continue
-    fi
-    passed=$((passed + p)); failed=$((failed + x))
-    # Failures and the TIMES=1 table; the per-file summary is replaced by the total below.
-    if [ "$x" -gt 0 ] || [ -n "${TIMES:-}" ]; then
-        printf '== %s\n' "$f"; sed '$d' "$log"
-    fi
-done
-
-printf '%d passed, %d failed\n' "$passed" "$failed"
-[ -z "$broken" ] && [ "$failed" -eq 0 ]
+    'TEST_FILES="$1" TEST_EVENTS=/dev/fd/3 "$LUA" tests/run.lua ${FILTER:+"$FILTER"} 3>&1 > "$OUT/$1.log" 2>&1
+     printf "exit\t%s\t%s\n" "$1" "$?"' _ {} |
+    "$LUA" tests/progress.lua $files
