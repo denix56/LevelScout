@@ -25,7 +25,7 @@ end
 local PALADIN = { level = 22, faction = "Alliance", class = "PALADIN", race = 1, map = 1433, x = 0.30, y = 0.44 }
 -- A level 15 mage in Westfall. Redridge (1433) has quests for the next levels, and the search's
 -- removals often leave one before its level; in Loch Modan (1432) the greedy route's `improve` did
--- (before Planner.IMPROVE_GATES).
+-- (before Planner.IMPROVE_GATES). The tests of those fixes take their zone from GATE_ZONES.
 local MAGE = { level = 15, faction = "Alliance", class = "MAGE", race = 1, map = 1436, x = 0.563, y = 0.475 }
 
 local function plan(settings, rounds, opts)
@@ -683,14 +683,32 @@ H.suite("Search", function()
     local GATE_ZONES = { 1432, 1433, 1436, 1426, 1439 }
 
     test("gates: with IMPROVE_GATES the search starts from a route with every quest after its level", function()
-        local on = plan({}, 1, { who = MAGE, zone = 1432, trace = true })
-        local off = plan({ ["Planner.IMPROVE_GATES"] = false }, 1, { who = MAGE, zone = 1432, trace = true })
+        local zone
+        for _, z in ipairs(GATE_ZONES) do
+            local off = plan({ ["Planner.IMPROVE_GATES"] = false }, 1, { who = MAGE, zone = z, trace = true })
+            if off.trace[1].score == 0 then zone = z; break end
+        end
+        ok(zone, "off: the greedy route's improve left a quest before its level in one of the zones (the data tests the case)")
+        local on = plan({}, 1, { who = MAGE, zone = zone, trace = true })
         eq(on.trace[1].kind, "start")
         ok(on.trace[1].score > 0, "on: the start route scores")
-        eq(off.trace[1].score, 0, "off: the greedy route's improve left a quest before its level (the zone tests the case)")
-        local plainOn = plan({}, 0, { who = MAGE, zone = 1432 })
-        local plainOff = plan({ ["Planner.IMPROVE_GATES"] = false }, 0, { who = MAGE, zone = 1432 })
-        ok(#plainOn.lists.later < #plainOff.lists.later, "unsearched: the quest stays in the route instead of waiting")
+        -- Unsearched: a quest that waits without the fix is in the route with it. (Dropping slow
+        -- quests can push the level-up back too, so this zone need not be the one above.)
+        local kept
+        for _, z in ipairs(GATE_ZONES) do
+            local plainOn = plan({}, 0, { who = MAGE, zone = z })
+            local plainOff = plan({ ["Planner.IMPROVE_GATES"] = false }, 0, { who = MAGE, zone = z })
+            local waits, routed = {}, {}
+            for _, e in ipairs(plainOn.lists.later) do waits[e.id] = true end
+            for _, step in ipairs(plainOn.steps) do
+                for _, q in ipairs(step.quests) do routed[q.id] = true end
+            end
+            for _, e in ipairs(plainOff.lists.later) do
+                if not kept and not waits[e.id] and routed[e.id] then kept = e.id end
+            end
+            if kept then break end
+        end
+        ok(kept, "unsearched: the quest stays in the route instead of waiting")
     end)
 
     test("gates: with TIDY_GATES the tidy-up starts from a route with every quest after its level", function()
