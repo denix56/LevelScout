@@ -161,7 +161,10 @@ H.suite("Objective", function()
 
     test("worth mode gives today's worth; a broken gate gives today's worth too", function()
         local ns = data()
-        local sc = captured(state("goldshire"), 1429)
+        -- (on the route the search ended on: the tidy-up lets a quest for a later level wait when
+        -- dropping slow quests leaves it before its level, so the plan's own route may have none)
+        local sc, _, best = captured(state("goldshire"), 1429)
+        sc.restore(best)
         local r = sc.r
         local ev = ns.Objective.New(r, sc.overhead)
         local obj, worth = ev:eval()
