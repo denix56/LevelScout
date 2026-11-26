@@ -15,6 +15,14 @@ on:
   schedule:
     - cron: "17 5 * * *" # 05:17 UTC daily
   workflow_dispatch:
+    inputs:
+      max_drop:
+        # tools/update.sh refuses an update when a coverage count falls by more than this. Raise
+        # it for one hand-started run after checking that a fall is ForeverDB's own choice; the
+        # pull request says the limit was raised. Scheduled runs always use the default.
+        description: "Largest allowed fall of a coverage count, in percent (empty: the default, 5)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -58,8 +66,15 @@ jobs:
 
       - name: Update the data
         id: update
+        env:
+          MAX_DROP: ${{ inputs.max_drop }}
         run: |
           set -o pipefail
+          case "$MAX_DROP" in
+            "") ;;
+            *[!0-9]*) echo "::error::max_drop must be a whole number of percent, got: $MAX_DROP"; exit 1 ;;
+            *) echo "::warning::count check limit raised to $MAX_DROP% for this run" ;;
+          esac
           tools/update.sh 2>&1 | tee "$RUNNER_TEMP/update.out"
           if [ -n "$(git status --porcelain -- LevelScout/data tools/import/last_report.txt)" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -80,6 +95,7 @@ jobs:
         if: steps.update.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          MAX_DROP: ${{ inputs.max_drop }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -109,6 +125,10 @@ jobs:
             echo "${counts:-  (none)}"
             echo '```'
             echo
+            if [ -n "$MAX_DROP" ]; then
+              echo "**The count check was relaxed for this run:** counts could fall by up to $MAX_DROP% (default 5%). Check the falls above before merging."
+              echo
+            fi
             echo "The import, the count check and the full test suite (QuestieDB pinned in .github/actions/setup) passed in that run."
             echo "That run also started the \`test\` workflow on \`$BRANCH\`; pushing to this branch, or closing and reopening this pull request, runs it again."
           } > "$RUNNER_TEMP/body.md"
