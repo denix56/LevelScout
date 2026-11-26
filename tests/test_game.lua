@@ -281,22 +281,38 @@ H.suite("Engine and window (real data)", function()
         local ns = start()
         local view = ns.Engine.view
         eq(view.plan.lists.elsewhere, nil, "quests whose giver is elsewhere are planned or left out like any other")
-        -- find a ranked zone whose route has a step on another map, and show it
-        local zone, outside
+        -- Show a ranked zone whose route has a step on another map. The ranked route is planned
+        -- lighter than the shown one, which can keep every step inside the zone, so the zones
+        -- are tried in turn until the window has a later step outside (the data picks the case).
+        local function outsideRows(zone)
+            local n = 0
+            for _, m in ipairs(ns.UI.state.models) do
+                if m.step and m.step.loc and not m.guided then
+                    local at = ns.Zones.ZoneAt(m.step.loc, { zone, ns.Engine.view.here }) or m.step.loc.map
+                    if at ~= zone then n = n + 1 end
+                end
+            end
+            return n
+        end
+        local candidates = {}
         for _, z in ipairs(view.ranked) do
             if z.map > 0 then
                 for _, st in ipairs(z.plan.steps) do
                     local at = st.loc and (ns.Zones.ZoneAt(st.loc, { z.map, view.here }) or st.loc.map)
-                    if at and at ~= z.map then zone, outside = z.map, at; break end
+                    if at and at ~= z.map then candidates[#candidates + 1] = z.map; break end
                 end
             end
-            if zone then break end
         end
-        ok(zone, "a ranked zone's route steps outside it")
-        ns.Engine.SetZone(zone)
-        ok(M.settle())
-        ns.UI.state.tab, ns.UI.state.scroll = "route", 0
-        ns.UI.Refresh()
+        ok(#candidates > 0, "a ranked zone's route steps outside it")
+        local zone
+        for _, z in ipairs(candidates) do
+            ns.Engine.SetZone(z)
+            ok(M.settle())
+            ns.UI.state.tab, ns.UI.state.scroll = "route", 0
+            ns.UI.Refresh()
+            if outsideRows(z) > 0 then zone = z; break end
+        end
+        ok(zone, "a shown route has a later step outside its zone (in one of " .. #candidates .. " zones)")
         local warn, plain = 0, 0
         for _, m in ipairs(ns.UI.state.models) do
             ok(m.section ~= "Get before you go" and m.pill ~= "PICK UP", "no pick-up rows")
