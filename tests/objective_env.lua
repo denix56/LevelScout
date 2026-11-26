@@ -57,16 +57,17 @@ return function(H, M)
         if not okay then error(err, 0) end
     end
 
-    -- Plan a zone and keep the search's route (left at the best one found) and its settings.
+    -- Plan a zone and keep the search's route and its settings. The route is left as the plan's
+    -- tidy-up left it; the third value is the route the search ended on (for sc.restore).
     local function captured(st, map)
         local ns = data()
-        local got
+        local got, best
         local run = ns.Search.Run
-        ns.Search.Run = function(sc) local res = run(sc); got = sc; return res end
+        ns.Search.Run = function(sc) local res = run(sc); got, best = sc, sc.r:snapshot(); return res end
         local okay, plan = pcall(ns.Zones.PlanZone, map, ns.Zones.Context(st))
         ns.Search.Run = run
         if not okay then error(plan, 0) end
-        return got, plan
+        return got, plan, best
     end
 
     local function order(plan) return table.concat(plan.order, " ") end

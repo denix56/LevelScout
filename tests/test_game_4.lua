@@ -192,6 +192,9 @@ H.suite("Engine and window (real data)", function()
 
     test("a step of the plan plans quietly: no bar, the route held, the zones ranked right after it", function()
         local ns = start()
+        -- (the first held plan brings a finished quest's turn-in past the window inside it once,
+        -- Planner.HOLD_WINDOW: here T:33 moves a few steps; this test is about the quiet plan)
+        ns.Planner.HOLD_WINDOW = 0
         local view, frame = ns.Engine.view, LevelScoutFrame
         local seen = {} -- what the window was told
         ns.Engine.OnChange(function(v)
@@ -843,6 +846,14 @@ H.suite("Engine and window (real data)", function()
 end)
 
 H.suite("Hearthstone in the game", function()
+    -- Where ForeverDB puts a hub (zone data, 0..1 map units). Read from the data, as it moves a
+    -- little whenever ForeverDB sees more players there.
+    local function hubXY(ns, map, name)
+        for _, hub in ipairs(ns.Zones.Info(map).hubs) do
+            if hub.name == name then return hub.x / 100, hub.y / 100 end
+        end
+        error("no hub " .. name .. " in map " .. map, 2)
+    end
     -- The client's side of the stone, mocked per test: what GetBindLocation, the item count, the item's cooldown, the
     -- spell and UnitIsDeadOrGhost say. `env` is read at every call, so a test changes it as it goes.
     local function newEnv() return { name = "Goldshire", count = 1, start = 0, dur = 0, info = { castTime = 10000 } } end
@@ -932,8 +943,9 @@ H.suite("Hearthstone in the game", function()
         local h = replan()
         ok(h, "flag on")
         eq({ h.name, h.map, h.ready, h.cast, h.cd }, { "Goldshire", 1429, 0, 10, nil })
-        near(h.x, 0.438, 1e-9)
-        near(h.y, 0.659, 1e-9)
+        local gx, gy = hubXY(ns, 1429, "Goldshire")
+        near(h.x, gx, 1e-9)
+        near(h.y, gy, 1e-9)
         eq({ view.hearth.name, view.hearth.ready, view.hearth.known }, { "Goldshire", 0, "data" })
         -- the cooldown running: the time left, and the length is kept with the character
         env.start, env.dur = GetTime() - 3000, 3600
@@ -1154,17 +1166,21 @@ H.suite("Hearthstone in the game", function()
     test("Zones.BindSpot: the client's bind name to a hub of the side", function()
         local ns = start()
         local Z = ns.Zones
-        local function at(name, side, map, x, y)
+        -- `hub`: the zone data's hub the client's name should land on (its spot is checked)
+        local function at(name, side, map, hub)
             local s = Z.BindSpot(name, side)
             ok(s, name .. " is found")
             eq(s.map, map, name)
-            if x then near(s.x, x, 1e-9, name .. " x"); near(s.y, y, 1e-9, name .. " y") end
+            if hub then
+                local x, y = hubXY(ns, map, hub)
+                near(s.x, x, 1e-9, name .. " x"); near(s.y, y, 1e-9, name .. " y")
+            end
         end
-        at("The Crossroads", "h", 1413, 0.517, 0.309)
-        at("Stormwind City", "a", 1453, 0.712, 0.723)
-        at("Undercity", "h", 1458, 0.578, 0.654)
-        at("Theramore Isle", "a", 1445, 0.661, 0.46)
-        at("goldshire", "a", 1429, 0.438, 0.659)
+        at("The Crossroads", "h", 1413, "Crossroads")
+        at("Stormwind City", "a", 1453, "Stormwind")
+        at("Undercity", "h", 1458, "Undercity")
+        at("Theramore Isle", "a", 1445, "Theramore")
+        at("goldshire", "a", 1429, "Goldshire")
         eq(Z.BindSpot("Brill", "a"), nil, "a hub of the other side")
         eq(Z.BindSpot("Nowhere Land", "a"), nil)
         eq(Z.BindSpot("", "a"), nil)

@@ -33,6 +33,8 @@ Planner.SWITCH_OVERHEAD = 120  -- seconds lost when changing zone (bags, orienta
 Planner.IMPROVE_PASSES = 3
 Planner.IMPROVE_GATES = true   -- `improve` without a guard takes back a move that leaves a quest before the level it
                                -- needs (a stop paying XP moved past it); false = as before
+Planner.TIDY_GATES = true      -- the tidy-up starts from a route with every quest after its level: one that dropping slow
+                               -- quests left before it waits first (see `finish`); false = as before
 Planner.SCORE_GIVE = 0.05      -- a shorter route may cost up to this share of the peak XP per hour
 Planner.SEGMENT_MOVES = 3      -- longest run of consecutive stops moved together when improving
 Planner.SAME_PLACE_YARDS = 40  -- stops this close are one place: accept everything there at once
@@ -2713,6 +2715,23 @@ function Planner.Plan(zoneMap, ctx, opts)
         -- failed, its work or turn-in here).
         local nRouted = 0
         for _ in pairs(r.routed) do nRouted = nRouted + 1 end
+        local function waitForLevels()
+            while true do
+                local m = r:brokenGate()
+                if not m then break end
+                local function out(q)
+                    local after = {}
+                    for _, d in ipairs(q.dependents or {}) do after[#after + 1] = d end
+                    for _, d in ipairs(after) do out(d) end
+                    if r.routed[q] then
+                        r:removeQuest(q)
+                        nRouted = nRouted - 1
+                        lists.later[#lists.later + 1] = listEntry(q, q.gate and nil or "follows a quest that waits for a level")
+                    end
+                end
+                out(m)
+            end
+        end
         -- (an exact seed keeps every quest it has, and so does a held route)
         while nRouted > 1 and not exact and not hold do
             local t0, x0 = r:totals()
@@ -2741,6 +2760,11 @@ function Planner.Plan(zoneMap, ctx, opts)
             nRouted = nRouted - 1
         end
 
+        -- A quest the drops left before the level it needs waits before the tidy-up: the tidy-up's
+        -- guard holds on to today's score, and a route with such a quest scores 0, so nothing
+        -- the tidy-up did to it would be held back.
+        if Planner.TIDY_GATES then waitForLevels() end
+
         if not opts.seed then
             if ctx.progress then ctx.progress("order") end
                 r:batchPickups()
@@ -2765,21 +2789,7 @@ function Planner.Plan(zoneMap, ctx, opts)
 
         -- Dropping and moving stops can push a level-up back: a quest left before the level it
         -- needs comes out again (with what follows from it) and waits.
-        while true do
-            local m = r:brokenGate()
-            if not m then break end
-            local function out(q)
-                local after = {}
-                for _, d in ipairs(q.dependents or {}) do after[#after + 1] = d end
-                for _, d in ipairs(after) do out(d) end
-                if r.routed[q] then
-                    r:removeQuest(q)
-                    nRouted = nRouted - 1
-                    lists.later[#lists.later + 1] = listEntry(q, q.gate and nil or "follows a quest that waits for a level")
-                end
-            end
-            out(m)
-        end
+        waitForLevels()
 
         local plan = { zone = zoneMap, lists = lists, overhead = opts.overhead or 0, quests = nRouted }
         describe(r, plan)
