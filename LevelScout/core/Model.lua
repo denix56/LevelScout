@@ -58,6 +58,23 @@ end
 local function isElite(npc) return npc ~= nil and npc.rank >= 1 and npc.rank <= 3 end
 Model.MobLevel, Model.IsElite = mobLevel, isElite
 
+-- An event or other objective that only a player capture lists (QuestieDB and CMaNGOS list
+-- none for the quest) and that nobody saw done. On Forever it is nearly always the talk or the
+-- delivery at the turn-in ("Deliver X to Y", "Speak with Y"), now and then an escort that ends
+-- there: it is taken as part of the turn-in, and the quest is planned as a talk.
+local function partOfTurnin(q, o)
+    return #o.ids == 0 and o.countSource == "ForeverDB" and (o.kind == "event" or o.kind == "other")
+        and #(q.spots[o.index] or {}) == 0
+end
+
+-- Nothing to do but walk and talk: no objectives, or only ones that are part of the turn-in.
+local function talkOnly(q)
+    for _, o in ipairs(q.objectives) do
+        if not partOfTurnin(q, o) then return false end
+    end
+    return true
+end
+
 Model.CONFIRM_DEPTH = 8 -- how many follow-ups on a quest is confirmed by the one after it
 
 local function unseen(q) return q.flags.unseen == true and q.xp == nil end
@@ -135,7 +152,7 @@ function Model.Build(questId, ctx)
         -- like any other. It is planned wherever the turn-in is (`leftover`).
         if entry and entry.isComplete then
             m.leftover, tag = true, nil
-        elseif tag == "dungeon" and #q.objectives == 0 then
+        elseif tag == "dungeon" and talkOnly(q) then
             -- Nothing in it is done inside: a talk on the way (the paladins' Test of
             -- Righteousness starts with one in Ironforge, filed as a dungeon quest). Planned
             -- like any other.
@@ -404,6 +421,7 @@ function Model.Task(q, o, need, ctx, pace, near)
     local Data = ns.Data
     local observed = q.spots[o.index] or {}
     local kind = o.kind
+    if partOfTurnin(q, o) then return { kind = kind, label = q.name, skip = true } end
     if kind == "kill" then
         local spots, first = {}, nil
         for _, id in ipairs(o.ids) do

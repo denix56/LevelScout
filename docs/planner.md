@@ -766,7 +766,13 @@ until it is done, then the zones take over again.
     70th percentile for the drop rate. Without a rate, players' typical seconds per item.
   - Object: count x players' typical seconds per object.
   - Event and other: only where Forever players saw it done. An escort is an event of its own
-    kind: see "Escort quests".
+    kind: see "Escort quests". One that only a player capture lists (QuestieDB and CMaNGOS list
+    none for the quest) and that nobody saw done is taken as part of the turn-in, so the quest is
+    planned as a talk. On Forever it is nearly always the talk or the delivery at the turn-in
+    ("Deliver X to Y", "Speak with Y"), now and then an escort that ends there. 163 quests on
+    ForeverDB 0.77.1 are like this; one is the paladin chain A Strange Artifact (78088), whose
+    ForeverDB capture "x:1" made it unplannable. A dungeon-tagged quest with only such objectives
+    is a talk on the way.
 - **XP**: quest XP scaled for the level (classic rule), plus XP from the kills (classic formula,
   doubled while rested).
 - **Not confirmed in Forever**: a quest that no ForeverDB player has seen and that has no reward

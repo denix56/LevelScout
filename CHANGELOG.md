@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Delivery and talk quests are planned again**: quests that ForeverDB now records with an objective
+  nobody was seen doing (often "speak with" or "deliver to" the turn-in NPC) were left out. They are planned
+  as a talk to the turn-in NPC, and the paladin chain starting with A Strange Artifact is offered on the
+  Class tab again.
 - **Following the plan no longer re-plans**: accepting or turning in a quest, finishing an objective, using
   the hearthstone or a flight, learning a flight point, a level-up or walking into another zone no longer
   shows "Planning..." and the progress bar, and the next step shows at once. The other zones are still
