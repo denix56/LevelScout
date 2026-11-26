@@ -676,6 +676,12 @@ H.suite("Search", function()
         ok(mended > 0, "some rounds took a quest out for its level")
     end)
 
+    -- The mage's zones with quests for the next levels. A test of a fix for quests before their
+    -- level takes the first of them that shows its case, so a data update that moves the case to
+    -- another zone does not break it (on ForeverDB 0.60.4 Loch Modan showed every case; on 0.77.1,
+    -- before LevelScout planned delivery quests again, only Redridge showed the unsearched one).
+    local GATE_ZONES = { 1432, 1433, 1436, 1426, 1439 }
+
     test("gates: with IMPROVE_GATES the search starts from a route with every quest after its level", function()
         local on = plan({}, 1, { who = MAGE, zone = 1432, trace = true })
         local off = plan({ ["Planner.IMPROVE_GATES"] = false }, 1, { who = MAGE, zone = 1432, trace = true })
@@ -685,6 +691,33 @@ H.suite("Search", function()
         local plainOn = plan({}, 0, { who = MAGE, zone = 1432 })
         local plainOff = plan({ ["Planner.IMPROVE_GATES"] = false }, 0, { who = MAGE, zone = 1432 })
         ok(#plainOn.lists.later < #plainOff.lists.later, "unsearched: the quest stays in the route instead of waiting")
+    end)
+
+    test("gates: with TIDY_GATES the tidy-up starts from a route with every quest after its level", function()
+        local R = data().Planner.Route
+        local improve, broken = R.improve, nil
+        -- (the tidy-up's `improve` is the one with a guard)
+        R.improve = function(self, passes, checkpoint, maxLen, guard)
+            if guard and not broken then
+                local m = self:brokenGate()
+                broken = m and m.id
+            end
+            return improve(self, passes, checkpoint, maxLen, guard)
+        end
+        local zone
+        local fine, err = pcall(function()
+            for _, z in ipairs(GATE_ZONES) do
+                broken = nil
+                plan({ ["Planner.TIDY_GATES"] = false }, 0, { who = MAGE, zone = z })
+                if broken then zone = z; break end
+            end
+            broken = nil
+            if zone then plan({}, 0, { who = MAGE, zone = zone }) end
+        end)
+        R.improve = improve
+        ok(fine, tostring(err))
+        ok(zone, "off: dropping slow quests left a quest before its level in one of the zones (the data tests the case)")
+        eq(broken, nil, "on: that quest waits before the tidy-up")
     end)
 
     test("gates: a zone without quests for a later level is planned exactly as without the fixes", function()
