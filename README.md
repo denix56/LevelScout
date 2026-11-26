@@ -50,6 +50,14 @@ TIMES=1 ./run_tests.sh               # each file also lists its 25 slowest tests
 SERIAL=1 ./run_tests.sh              # everything in one process, one file after another
 ```
 
+While the tests run, the output shows each file starting, its suites, failures as they happen and
+each file's time with a running tally (`230/416 tests, 1 failed, 12/17 files, 1m10s`). On a
+terminal that is one status line redrawn in place; elsewhere, such as the CI log, it is plain
+lines, with a status line naming the files still running every 30 seconds (`TEST_HEARTBEAT=<s>`,
+`0` for none; `TEST_TTY=1` or `0` picks either form). At the end come the failures in full, the
+time per file and the total. `tests/progress.lua` does this; a run of `tests/run.lua` on its own
+shows the same progress.
+
 The real-data tests load the installed QuestieDB addon through the import tools' sandbox, so
 they test what players get: by default from
 `/Applications/World of Warcraft/_forever_/Interface/AddOns/QuestieDB`, or from
