@@ -999,7 +999,7 @@ end
 -- A zone after the first is a higher one, entered when little is left of the zone before, that zone is
 -- nearly outgrown or the next one fits (Zones.HANDOFF, Zones.Handoff).
 
-Zones.HORIZON = 9000           -- seconds an itinerary covers (two and a half hours)
+Zones.HORIZON = 9000           -- seconds an itinerary covers (two and a half hours; Planner.HOLD_WINDOW is the same figure)
 Zones.ITINERARY_ZONES = 5      -- best-ranked zones that may appear in it
 Zones.ITINERARY_STOPS = 3      -- zones in a row at most
 Zones.LEAVE_EVERY = 900        -- a zone may be left at the first turn-in after each quarter of an hour

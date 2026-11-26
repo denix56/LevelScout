@@ -55,6 +55,12 @@ Planner.GOAL = "rate"          -- what a route is worth: "rate" = its best XP-so
                                -- plus a small tail term); "surplus" = its XP over what the next-best option would have made
                                -- in the same time (max over leaving points of XP(k) - R * time(k); see ctx.altRate)
 Planner.ALT_SHARE = 1.0        -- surplus goal: R = ctx.altRate * ALT_SHARE (the share of the best zone's rate the player can get elsewhere)
+Planner.HOLD_WINDOW = 9000     -- seconds of a held route (opts.hold) inside which a quest complete in the log is turned in
+                               -- (Zones.HORIZON: XP later than this counts in no ranking or itinerary); 0 = off (its
+                               -- turn-in at its cheapest place anywhere, as before)
+Planner.HOLD_EARLY = 1         -- held route: the share of such a turn-in's XP counted as lost by waiting the whole window
+                               -- (in proportion for less), so a near place that costs a little more wins; 0 = the cheapest
+                               -- place inside the window
 -- The hearthstone (describe; docs/planner.md, "The hearthstone"): off until benched.
 Planner.HEARTH = true          -- use the hearthstone on the route (ctx.stone, from state.hearth); benched "better"
 Planner.HEARTH_MIN_SAVE = 120  -- seconds: a leg goes by hearthstone only when that is at least this much quicker
@@ -722,6 +728,22 @@ function R:best(node, lo, hi)
     -- regret: what this stop loses when its best place is gone (capped; a stop with one
     -- possible place loses the most)
     return bestP, bestD, min(second - bestD, Planner.REGRET_CAP)
+end
+
+-- The place for a stop within lo..hi when sooner is worth something (a held route's turn-in of a
+-- quest complete in the log, see Planner.Plan): the least added travel seconds plus `worth` seconds
+-- for each whole `window` of route time before it (in proportion). Returns the index to insert after.
+function R:bestSoon(node, lo, hi, overhead, window, worth)
+    local route, T = self.route, self:prefix(overhead).T
+    local bestP, bestCost = nil, huge
+    for p = lo, hi do
+        local a, b = route[p], route[p + 1]
+        local d = self:tt(a, node)
+        if b then d = d + self:tt(node, b) - self:tt(a, b) end
+        local cost = d + worth * min(T[p], window) / window
+        if cost < bestCost then bestP, bestCost = p, cost end
+    end
+    return bestP
 end
 
 function R:place(node, p)
@@ -1991,7 +2013,9 @@ end
 ---                 its order, nothing is dropped as slow, and the only quests added are ones taken
 ---                 since (`held`: taken, in the log and not failed, their work or turn-in here) or started by an item in
 ---                 the bags; each goes to its cheapest place. A stop the player stands at is still
----                 brought forward (`front`). A quest of the seed that cannot be rebuilt is left out,
+---                 brought forward (`front`). The turn-in of a quest complete in the log that is new
+---                 to the route or after the first Planner.HOLD_WINDOW seconds goes inside that
+---                 window (see `soon`). A quest of the seed that cannot be rebuilt is left out,
 ---                 as always (the Engine then plans again),
 ---          seam = the way across a zone border planned together (Zones.PlanSeam; no seed): see
 ---                 seamSearch below. The result is then { zone, seam = (seamSearch's result or nil),
@@ -2468,6 +2492,41 @@ function Planner.Plan(zoneMap, ctx, opts)
         return { zone = zoneMap, seam = seamSearch(), work = r.work }
     end
 
+    -- The held route's turn-ins of quests complete in the log (opts.hold, Planner.HOLD_WINDOW): one new
+    -- to the route (`new`) or after the window goes to the place inside the window worth most
+    -- (R:bestSoon). One the order rules keep after the window stays where it is.
+    local function soon(new)
+        local W = Planner.HOLD_WINDOW
+        local function inside() -- the last route index reached within the window
+            local T, k = r:prefix(opts.overhead).T, 1
+            for i = 2, #r.route do
+                if T[i] <= W then k = i else break end
+            end
+            return k
+        end
+        for _, m in ipairs(candidates) do
+            local e = ctx.log[m.id]
+            if r.routed[m] and m.T and e and e.isComplete and #m.tasks == 0 and not m.border then
+                local from = r.pos[m.T]
+                if new[m] or from - 1 > inside() then
+                    r:unplace(m.T)
+                    local lo, hi = r:bounds(m.T)
+                    local top = inside()
+                    if top < hi then hi = top end
+                    if lo > hi then
+                        r:place(m.T, from - 1)
+                    else
+                        local c = r:prefix(opts.overhead)
+                        local rate = c.X[top] / max(c.T[top], 1)
+                        local worth = rate > 0 and (Planner.HOLD_EARLY or 0) * (m.xp or 0) / rate or 0
+                        local p = r:bestSoon(m.T, lo, hi, opts.overhead, W, worth)
+                        r:place(m.T, p)
+                    end
+                end
+            end
+        end
+    end
+
     if opts.seed then rebuild(opts.seed) end
 
     if exact then
@@ -2479,6 +2538,8 @@ function Planner.Plan(zoneMap, ctx, opts)
             if remaining[m] and (m.held or m.fromBag) then new[m] = true end
         end
         if next(new) then fill(0, nil, false, nil, new) end
+        -- (a quest complete in the log: its turn-in inside the window, soon; see `soon`)
+        if (Planner.HOLD_WINDOW or 0) > 0 then soon(new) end
     elseif ctx.chain then
         fillChain()
     elseif border then

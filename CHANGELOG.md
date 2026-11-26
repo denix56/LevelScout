@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A finished quest is turned in soon**: the route on screen now takes you to the turn-in of a quest
+  complete in your log within its next 2 h 30, early when that costs little. Before, it went wherever it
+  was cheapest, which could be the end of the route: a level 36 Colonel Kurzen two minutes from
+  Lieutenant Doren was step 95 of 95, over six hours out; it is now step 1. Not benchmarked. (For
+  developers: `Planner.HOLD_WINDOW`, 0: as before; `Planner.HOLD_EARLY`, 0: the cheapest place inside the
+  window.)
 - **Following the plan no longer re-plans**: accepting or turning in a quest, finishing an objective, using
   the hearthstone or a flight, learning a flight point, a level-up or walking into another zone no longer
   shows "Planning..." and the progress bar, and the next step shows at once. The other zones are still
