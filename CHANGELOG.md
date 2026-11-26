@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A finished quest is turned in soon**: the route on screen now takes you to the turn-in of a quest
+  complete in your log within its next 2 h 30, early when that costs little. Before, it went wherever it
+  was cheapest, which could be the end of the route: a level 36 Colonel Kurzen two minutes from
+  Lieutenant Doren was step 95 of 95, over six hours out; it is now step 1. Not benchmarked. (For
+  developers: `Planner.HOLD_WINDOW`, 0: as before; `Planner.HOLD_EARLY`, 0: the cheapest place inside the
+  window.)
 - **Delivery and talk quests are planned again**: quests that ForeverDB now records with an objective
   nobody was seen doing (often "speak with" or "deliver to" the turn-in NPC) were left out. They are planned
   as a talk to the turn-in NPC, and the paladin chain starting with A Strange Artifact is offered on the

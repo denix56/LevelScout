@@ -822,6 +822,56 @@ H.suite("Planner", function()
         ok(indexOf(ns.Zones.PlanZone(2, ns.Zones.Context(state({ log = other, map = 2 }))), "T:20"))
     end)
 
+    test("a held route turns in a quest complete in the log inside the planning window, soon", function()
+        local ns = load(function(data)
+            data.npcs[120] = "Scout|10|10|0|2|A|" .. S(1, 88, 88)
+            data.quests[50] = quest({ name = "Report", xp = 3000, starts = "n100", ends = "n120" })
+            data.quests[51] = quest({ name = "Snail Shells", xp = 700, starts = "n100", ends = "n120", objectives = "c205:2:C" })
+        end)
+        local P = ns.Planner -- a fresh namespace per load: the constants set here reach no other test
+        local function plan(seed)
+            local ctx = ns.Zones.Context(state({ x = 0.85, y = 0.85, log = { { id = 50, isComplete = true, objectives = {} } } }))
+            return ns.Zones.PlanZone(1, ctx, seed, nil, { hold = true })
+        end
+        local function lastT(p) return p.steps[#p.steps].t end
+        local function order(p, only) -- the keys of `only`, in the plan's order
+            local out = {}
+            for _, k in ipairs(p.order) do if only[k] then out[#out + 1] = k end end
+            return out
+        end
+        local seedA = { "P:1", "P:4", "P:6", "P:51", "W:m200", "W:o400", "T:1", "T:4", "W:m202", "T:6", "W:m205", "T:51" }
+        local inSeed = {}
+        for _, k in ipairs(seedA) do inSeed[k] = true end
+        P.HOLD_WINDOW = 0
+        local off = plan(seedA)
+        eq(indexOf(off, "T:50"), indexOf(off, "T:6") + 1, "window 0: its turn-in at its cheapest place, as before")
+        P.HOLD_WINDOW = math.floor(lastT(off) / 2)
+        for _, early in ipairs({ 1, 0 }) do
+            P.HOLD_EARLY = early
+            local p = plan(seedA)
+            eq(indexOf(p, "T:50"), 1, "new to the route: first, HOLD_EARLY " .. early)
+            eq(order(p, inSeed), seedA, "the seed's steps keep their order, HOLD_EARLY " .. early)
+        end
+        P.HOLD_EARLY = 1
+        -- already in the held order, last (the route on screen as the game has it): brought inside the window
+        local last = {}
+        for i, k in ipairs(seedA) do last[i] = k end
+        last[#last + 1] = "T:50"
+        eq(indexOf(plan(last), "T:50"), 1, "in the seed after the window: brought forward")
+        -- inside the window already: where it is
+        local third = { "P:1", "P:4", "T:50", "P:6", "P:51", "W:m200", "W:o400", "T:1", "T:4", "W:m202", "T:6", "W:m205", "T:51" }
+        eq(indexOf(plan(third), "T:50"), 3, "in the seed inside the window: stays")
+        -- the route passes the Scout early: a place a little dearer but sooner wins with HOLD_EARLY, not without
+        local seedE = { "P:1", "P:4", "P:6", "P:51", "W:m205", "T:51", "W:m200", "W:o400", "T:1", "T:4", "W:m202", "T:6" }
+        P.HOLD_WINDOW = 0
+        P.HOLD_WINDOW = math.floor(lastT(plan(seedE)) / 2)
+        P.HOLD_EARLY = 1
+        eq(indexOf(plan(seedE), "T:50"), 1, "HOLD_EARLY 1: the sooner place")
+        P.HOLD_EARLY = 0
+        local cheapest = plan(seedE)
+        eq(indexOf(cheapest, "T:50"), indexOf(cheapest, "P:51") + 1, "HOLD_EARLY 0: the cheapest place inside the window")
+    end)
+
     test("a taken quest whose turn-in no database knows is turned in at its giver", function()
         local ns = load(function(data)
             data.quests[70] = quest({ name = "Lost Letter", xp = 700, starts = "n100", ends = "", objectives = "c200:3:C" })

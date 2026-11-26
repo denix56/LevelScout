@@ -192,6 +192,9 @@ H.suite("Engine and window (real data)", function()
 
     test("a step of the plan plans quietly: no bar, the route held, the zones ranked right after it", function()
         local ns = start()
+        -- (the first held plan brings a finished quest's turn-in past the window inside it once,
+        -- Planner.HOLD_WINDOW: here T:33 moves a few steps; this test is about the quiet plan)
+        ns.Planner.HOLD_WINDOW = 0
         local view, frame = ns.Engine.view, LevelScoutFrame
         local seen = {} -- what the window was told
         ns.Engine.OnChange(function(v)
