@@ -1,6 +1,6 @@
 # LevelScout
 
-## Unreleased
+## 0.3.0
 
 - **The next stop shows the moment you finish a step**: accepting the quest the route asks for, turning it
   in, finishing the objectives of a stop or learning a flight point on the way now moves the route and the
