@@ -790,7 +790,11 @@ until it is done, then the zones take over again.
   the kill times, and if they are 4 or more levels above you it waits for that level. Once
   complete, its turn-in is planned. Exception: a red quest is taken along when at least half of its objectives are in
   camps another planned quest visits anyway (the same mobs, or within 80 yards), unless its own
-  targets are 4 or more levels above you.
+  targets are 4 or more levels above you, or the game will not give it to you yet: its required
+  level is above yours. Where the data has no required level (most Forever-only quests), it is
+  taken to be 4 below the quest's level, or the lowest level a player was seen completing it at
+  when that is lower (`Model.MinLevel`; Forever's "WANTED: Ghostmaw", level 42, shows a grey "!"
+  at 36).
 - **Drops from several kinds of mob**: an item is taken from the kind another planned quest
   already has you killing, so both quests share one stop and one set of kills.
 - **Left out of zone plans**: dungeon and raid quests (dungeon quests are planned under their

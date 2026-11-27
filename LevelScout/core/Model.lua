@@ -114,6 +114,18 @@ function Model.Unconfirmed(q)
     return unseen(q) and not shownByFollowUp(q, 0)
 end
 
+--- The level the quest can be taken at. Most Forever-only quests have none in the data (0):
+--- then it is taken to be 4 below the quest's own level, so a red quest (Cost.RED_QUEST or
+--- more above us) cannot be taken yet, as the game's grey "!" says; or the lowest level a
+--- player was seen completing it at, when that is lower.
+function Model.MinLevel(q)
+    if (q.minLevel or 0) > 0 or (q.level or 0) <= 0 then return q.minLevel or 0 end
+    local guess = max(1, q.level - Cost.RED_QUEST + 1)
+    local low = q.lowestLevelSeen
+    if low and low > 0 and low < guess then guess = low end
+    return guess
+end
+
 --- Build the model of one quest for this character.
 --- ctx = { level, xpBonus (0.05 = +5% from buffs), pace, drops, dropBias (own drop counts and what they say about each data source, see ns.Learn; optional), near (location), log = { [questId] = log entry },
 ---         tagOf = function(questId) -> "dungeon"|"raid"|"elite"|nil (optional) }
@@ -199,8 +211,9 @@ function Model.Build(questId, ctx)
     if not entry then
         if q.flags.repeatable or q.flags.daily or q.flags.weekly or q.flags.event then m.status = "excluded"; return m end
         if Model.Unconfirmed(q) and not (inDungeon and D.confirmed[questId]) then m.status = "unconfirmed"; return m end
-        if q.minLevel > ctx.level then
-            m.status, m.needLevel = "later", max(m.needLevel or 0, q.minLevel)
+        local minLevel = Model.MinLevel(q)
+        if minLevel > ctx.level then
+            m.status, m.needLevel = "later", max(m.needLevel or 0, minLevel)
             m.blocked = true -- cannot be accepted yet
         end
     end

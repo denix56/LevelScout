@@ -14,7 +14,7 @@ end
 local function quest(t)
     return table.concat({ t.name or "Q", t.level or 8, t.min or 5, 0, t.side or "", 0, 0, t.zone or 1, 0, t.flags or "",
         t.xp or "", t.xp and "f" or "", t.starts or "", t.ends or "", t.objectives or "", t.preAll or "", t.preAny or "",
-        t.exclusive or "", "", "", "", "", "", "", "", "", "", "", "", 0 }, "|")
+        t.exclusive or "", "", "", "", "", "", "", "", "", "", "", t.lowest or "", 0 }, "|")
 end
 
 local function camp(map, x, y, n)
@@ -592,6 +592,32 @@ H.suite("Planner", function()
         -- its own mobs are too strong: it waits whatever else is there
         local strong = world("c200:6:C;c203:2:C")
         eq(indexOf(strong.Zones.PlanZone(1, strong.Zones.Context(state())), "P:31"), nil)
+    end)
+
+    test("a red quest with no required level in the data is not taken along: the game won't give it yet", function()
+        -- Forever's WANTED: Ghostmaw: quest level 42, no required level known, a player finished it at 38
+        local function world(q)
+            return load(function(data)
+                q.name, q.xp, q.starts, q.ends, q.objectives = "Red Unknown Min", 4000, "n100", "n100", "c200:6:C"
+                data.quests[31] = quest(q)
+            end)
+        end
+        local function build(ns, level)
+            return ns.Model.Build(31, ns.Zones.Context(state({ level = level })))
+        end
+        local ns = world({ level = 14, min = 0 })
+        eq(ns.Model.MinLevel(ns.Data.GetQuest(31)), 10, "4 below its level")
+        local m = build(ns)
+        eq({ m.status, m.blocked, m.needLevel }, { "later", true, 10 })
+        eq(indexOf(ns.Zones.PlanZone(1, ns.Zones.Context(state())), "P:31"), nil, "same mobs, but not taken along")
+        ok(build(ns, 10).status ~= "later", "orange at 10: planned")
+        -- a player finished it lower: it can be taken that low
+        local seen = world({ level = 14, min = 0, lowest = 8 })
+        eq(seen.Model.MinLevel(seen.Data.GetQuest(31)), 8)
+        ok(indexOf(seen.Zones.PlanZone(1, seen.Zones.Context(state())), "P:31"), "taken along as before")
+        -- a known required level is the data's
+        local known = world({ level = 14, min = 6 })
+        eq(known.Model.MinLevel(known.Data.GetQuest(31)), 6)
     end)
 
     test("a finished quest in the log is only turned in; a finished objective is not worked", function()
