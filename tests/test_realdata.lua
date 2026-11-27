@@ -538,6 +538,23 @@ H.suite("Planner levels (real data)", function()
         ok(gated >= 1, "at least one quest that needs a later level is planned")
     end)
 
+    test("a quest taken out for its own level waits for it; only what needs it is said to follow it", function()
+        -- (at level 7 the route's tidy-up takes Report to Gryan Stoutmantle out for level 9)
+        local p = plan()
+        local Data = data().Data
+        local waiting, follows = {}, {}
+        for _, e in ipairs(p.lists.later) do
+            waiting[e.id] = true
+            if e.reason == "follows a quest that waits for a level" then follows[#follows + 1] = e end
+        end
+        for _, e in ipairs(follows) do
+            local q, before = Data.GetQuest(e.id), false
+            for _, id in ipairs(q.preAll or {}) do before = before or waiting[id] == true end
+            for _, id in ipairs(q.preAny or {}) do before = before or waiting[id] == true end
+            ok(before, e.name .. " follows a quest that waits")
+        end
+    end)
+
     test("almost at the next level: the first XP levels us up", function()
         local p = plan({ xp = 4490, xpMax = 4500 })
         local first

@@ -2726,7 +2726,8 @@ function Planner.Plan(zoneMap, ctx, opts)
                     if r.routed[q] then
                         r:removeQuest(q)
                         nRouted = nRouted - 1
-                        lists.later[#lists.later + 1] = listEntry(q, q.gate and nil or "follows a quest that waits for a level")
+                        -- (the quest before its level waits for it; what needs that quest follows it)
+                        lists.later[#lists.later + 1] = listEntry(q, q ~= m and "follows a quest that waits for a level" or nil)
                     end
                 end
                 out(m)
