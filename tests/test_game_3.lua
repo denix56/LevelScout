@@ -297,7 +297,10 @@ H.suite("Engine and window (real data)", function()
             if m.section and m.section:find("^Then: Elsewhere") then headings[#headings + 1] = i end
             if m.step then lastStep = i end
         end
-        eq(headings, { lastStep + 1 }, "one heading, after the last step")
+        -- (after the last step's own "Level N from here" when it levels us up)
+        local after = lastStep + 1
+        if models[after].section and models[after].section:find("^Level %d+ from here") then after = after + 1 end
+        eq(headings, { after }, "one heading, after the last step")
         -- an itinerary that starts elsewhere shows no heading
         view.itinerary.segments[1].map = -2
         ns.UI.Refresh()
@@ -331,7 +334,9 @@ H.suite("Engine and window (real data)", function()
         eq(#ahead, ns.UI.AHEAD_STEPS, "its first steps")
         eq(ahead[1], at + 1); eq(ahead[#ahead], at + #ahead, "in a row")
         for i = at, #models do ok(not models[i].step, "no step of the shown zone after them") end
-        ok(models[at - 1].step and not models[at - 1].dim or at - 1 == 1 or models[at - 1].step.tail, "the route above is as it was")
+        local above = at - 1 -- (the last step's "Level N from here" when it levels us up)
+        if models[above].section and models[above].section:find("^Level %d+ from here") then above = above - 1 end
+        ok(models[above].step and not models[above].dim or above == 1 or models[above].step.tail, "the route above is as it was")
         local first = other.plan.steps[1]
         eq(models[at + 1].ahead.loc, first.loc, "starting with its first stop")
         contains(models[at + 1].detail, "In Map " .. first.loc.map, "the first of them names its zone")

@@ -519,19 +519,21 @@ H.suite("Planner levels (real data)", function()
 
     local leveled
     test("the route marks where it levels us up, and plans next-level quests after that", function()
-        leveled = plan()
+        -- (at level 6: at 7, Elwynn's one quest for levels 8 to 10, Report to Gryan Stoutmantle,
+        -- waits for its level since the Forever quest that brought level 9 early got its level 20)
+        leveled = plan({ level = 6 })
         local up, firstUp, gated = {}, nil, 0
         for i, step in ipairs(leveled.steps) do
             if step.levelUp then up[#up + 1] = step.levelUp; firstUp = firstUp or i end
             if step.needLevel then
                 gated = gated + 1
                 ok(firstUp and i > firstUp, "a quest for level " .. step.needLevel .. " comes after a level-up")
-                local reached = 7
+                local reached = 6
                 for j = 1, i - 1 do reached = leveled.steps[j].levelUp or reached end
                 ok(reached >= step.needLevel, "and after the right one")
             end
         end
-        ok(#up >= 1 and up[1] == 8, "level 8 is reached along the route")
+        ok(#up >= 1 and up[1] == 7, "level 7 is reached along the route")
         for i = 2, #up do ok(up[i] == up[i - 1] + 1, "one level at a time") end
         ok(gated >= 1, "at least one quest that needs a later level is planned")
     end)
