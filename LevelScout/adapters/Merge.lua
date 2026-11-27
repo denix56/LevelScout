@@ -543,9 +543,10 @@ local function pair(p) return type(p) == "table" and p[1] and (p[1] .. ":" .. to
 
 -- The fields the index also needs, computed the same way for a full record (Merge.Quest) and
 -- for the index's short read (Merge.QuestIndex).
+-- ForeverDB's rows say "0" where they don't know: that is not a level, so the next source is asked.
 local function levelsOf(q, qc, qf)
-    local level = tonumber(qf and nz(qf[QF.level])) or (q and nz(q.questLevel)) or tonumber(qc and qc[QC.level]) or 0
-    local min = tonumber(qf and nz(qf[QF.min])) or (q and nz(q.requiredLevel)) or tonumber(qc and qc[QC.min]) or 0
+    local level = nz(tonumber(qf and qf[QF.level])) or (q and nz(q.questLevel)) or tonumber(qc and qc[QC.level]) or 0
+    local min = nz(tonumber(qf and qf[QF.min])) or (q and nz(q.requiredLevel)) or tonumber(qc and qc[QC.min]) or 0
     return level, min
 end
 

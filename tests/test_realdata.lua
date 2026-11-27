@@ -519,21 +519,40 @@ H.suite("Planner levels (real data)", function()
 
     local leveled
     test("the route marks where it levels us up, and plans next-level quests after that", function()
-        leveled = plan()
+        -- (at level 6: at 7, Elwynn's one quest for levels 8 to 10, Report to Gryan Stoutmantle,
+        -- waits for its level since the Forever quest that brought level 9 early got its level 20)
+        leveled = plan({ level = 6 })
         local up, firstUp, gated = {}, nil, 0
         for i, step in ipairs(leveled.steps) do
             if step.levelUp then up[#up + 1] = step.levelUp; firstUp = firstUp or i end
             if step.needLevel then
                 gated = gated + 1
                 ok(firstUp and i > firstUp, "a quest for level " .. step.needLevel .. " comes after a level-up")
-                local reached = 7
+                local reached = 6
                 for j = 1, i - 1 do reached = leveled.steps[j].levelUp or reached end
                 ok(reached >= step.needLevel, "and after the right one")
             end
         end
-        ok(#up >= 1 and up[1] == 8, "level 8 is reached along the route")
+        ok(#up >= 1 and up[1] == 7, "level 7 is reached along the route")
         for i = 2, #up do ok(up[i] == up[i - 1] + 1, "one level at a time") end
         ok(gated >= 1, "at least one quest that needs a later level is planned")
+    end)
+
+    test("a quest taken out for its own level waits for it; only what needs it is said to follow it", function()
+        -- (at level 7 the route's tidy-up takes Report to Gryan Stoutmantle out for level 9)
+        local p = plan()
+        local Data = data().Data
+        local waiting, follows = {}, {}
+        for _, e in ipairs(p.lists.later) do
+            waiting[e.id] = true
+            if e.reason == "follows a quest that waits for a level" then follows[#follows + 1] = e end
+        end
+        for _, e in ipairs(follows) do
+            local q, before = Data.GetQuest(e.id), false
+            for _, id in ipairs(q.preAll or {}) do before = before or waiting[id] == true end
+            for _, id in ipairs(q.preAny or {}) do before = before or waiting[id] == true end
+            ok(before, e.name .. " follows a quest that waits")
+        end
     end)
 
     test("almost at the next level: the first XP levels us up", function()

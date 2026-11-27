@@ -23,10 +23,12 @@ end
 -- records the search's frames; opts.warm marks the search as warm. Returns the plan and what the
 -- wrapper saw.
 local PALADIN = { level = 22, faction = "Alliance", class = "PALADIN", race = 1, map = 1433, x = 0.30, y = 0.44 }
--- A level 15 mage in Westfall. Redridge (1433) has quests for the next levels, and the search's
+-- A level 17 mage in Westfall. Redridge (1433) has quests for the next levels, and the search's
 -- removals often leave one before its level; in Loch Modan (1432) the greedy route's `improve` did
--- (before Planner.IMPROVE_GATES). The tests of those fixes take their zone from GATE_ZONES.
-local MAGE = { level = 15, faction = "Alliance", class = "MAGE", race = 1, map = 1436, x = 0.563, y = 0.475 }
+-- (before Planner.IMPROVE_GATES). The tests of those fixes take their zone from GATE_ZONES. (Level
+-- 15 until Classic quests with a Forever row got their required level back: at 15, Redridge's
+-- quests for later levels then waited for them with or without the fixes.)
+local MAGE = { level = 17, faction = "Alliance", class = "MAGE", race = 1, map = 1436, x = 0.563, y = 0.475 }
 
 local function plan(settings, rounds, opts)
     opts = opts or {}
