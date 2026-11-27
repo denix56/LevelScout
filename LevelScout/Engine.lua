@@ -64,6 +64,7 @@ local playEvent, autoSnapshot    -- the play log (ns.Play): an event; a snapshot
 local lastActive                 -- the active clock at the last look at where the player is (TrackMove): the commitment's play time
 local hearthCast                 -- { at, loc }: the hearthstone was cast; its arrival is looked for (Planner.HEARTH)
 local plannedHearth              -- the stone's signature at the last plan (see hearthSig)
+local deadOwed                   -- a plan was asked for while dead or a ghost: made once alive again
 local hearthKnown                -- where the last plan's bind spot came from: "learned" | "data"
 
 Engine.REMIND_SLEEPING_BAG = 600 -- seconds before the sleeping-bag buff ends
@@ -1353,11 +1354,15 @@ function Engine.Replan(full, letGo)
     if not started then return end
     if letGo then letGoAsked = letGoAsked + 1 end
     if full then pendingFull = true end
+    -- Dead or a ghost: the route stays as it was (a plan from the graveyard would take another
+    -- way); what was asked for is planned once alive again (handlers.PLAYER_ALIVE).
+    if Game.IsDead() then deadOwed = true return end
     if pending then return end
     pending = true
     local wait = math.max(Engine.DEBOUNCE, lastRun + Engine.MIN_GAP - Game.Now())
     Game.After(wait, function()
         if not pending then return end -- (Engine.ReplanNow ran it already)
+        if Game.IsDead() then pending, deadOwed = false, true return end
         if Async.IsRunning("plan") then
             pending = false
             Game.After(Engine.DEBOUNCE, function() Engine.Replan() end)
@@ -1534,6 +1539,7 @@ end
 --- now: flight points read off an open flight map.
 function Engine.ReplanNow()
     if not started then return end
+    if Game.IsDead() then return Engine.Replan(true) end -- (put off until alive again)
     Async.Stop("plan")
     pending, rankOwed, freshWay, quickNow = false, true, true, true
     if #Engine.view.ranked == 0 then quickNow = false end -- (nothing ranked yet: the first plan ranks)
@@ -1823,6 +1829,15 @@ function handlers.GROUP_ROSTER_UPDATE()
     if Game.GetGroupSize() ~= (Engine.view.groupSize or 1) then Engine.Replan(true) end
 end
 function handlers.ZONE_CHANGED_NEW_AREA() Engine.Replan(true) end
+-- Alive again (taken back to the corpse, a spirit healer, a resurrection): the plans put off
+-- while dead are made now. (PLAYER_ALIVE also comes on release, still a ghost: nothing then.)
+function handlers.PLAYER_ALIVE()
+    if deadOwed and not Game.IsDead() then
+        deadOwed = false
+        Engine.Replan()
+    end
+end
+handlers.PLAYER_UNGHOST = handlers.PLAYER_ALIVE
 function handlers.PLAYER_ENTERING_WORLD()
     completed = Game.GetCompletedQuests()
     Engine.ResetMemory()
