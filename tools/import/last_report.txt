@@ -1,6 +1,6 @@
 LevelScout data import report (the baked ForeverDB layer)
 
-client build 1.60.1.71139, generated 2026-11-26
+client build 1.60.1.71139, generated 2026-11-27
 source: ForeverDB 0.77.1 (data 2026-11-26.7e15bcf4)
 QuestieDB is read by the addon at runtime and is not part of this report.
 
@@ -12,6 +12,8 @@ counts:
   classic quests (CMaNGOS, client-filtered)     3387
   classic quests never offered in Forever       199
   dungeons                                      23
+  flight masters                                71
+  flight masters with no flight path (left out) 3
   items (Forever names)                         2271
   items with classic drop rates                 1286
   items with measured drop rates                1054

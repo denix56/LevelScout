@@ -113,12 +113,27 @@ function M.Build(F)
         qfItems = F.qfItems, qdrop = F.qdrop, qcItem = F.qcItem,
         dungeons = dungeons,
     }
+    -- Flight masters: the client's TaxiNodes lists a few no flight path goes to or from (Powderfuse
+    -- Port, Tidegear Coast: no flight master stands there in the game). Those are left out, so they
+    -- are never suggested to unlock nor taken for the point just learned. The rest is ForeverDB's.
+    local travel, flown, dropped = {}, {}, 0
+    for k, v in pairs(F.travelData) do travel[k] = v end
+    for a, b in (F.travelData.flights or ""):gmatch("(%d+)>(%d+)>") do
+        flown[tonumber(a)], flown[tonumber(b)] = true, true
+    end
+    travel.nodes = {}
+    for id, n in pairs(F.travelData.nodes or {}) do
+        if flown[id] then travel.nodes[id] = n else dropped = dropped + 1 end
+    end
+    counts["flight masters"] = count(travel.nodes)
+    counts["flight masters with no flight path (left out)"] = dropped
+
     local world = {
         pace = F.pace,
         xpCurve = F.qxp.curve,
         xpDungeonMultiplier = F.qxp.dmul,
         zones = F.zoneData,
-        travel = F.travelData,
+        travel = travel,
         -- Map geometry ([uiMap] = { c = continent, t, l = world X/Y of the top-left corner, h, w = yards })
         -- and boats/zeppelins/trams between distant points, for distances and travel times.
         maps = F.routeMaps,
