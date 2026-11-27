@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The next stop shows the moment you finish a step**: accepting the quest the route asks for, turning it
+  in, finishing the objectives of a stop or learning a flight point on the way now moves the route and the
+  arrow to the next stop at once. Before, they waited for a new plan: half a second to two seconds of
+  waiting, then the plan itself spread over many frames, behind a ranking of all the zones when one was
+  running, so several seconds. That plan still runs quietly behind it and only changes the route when it
+  no longer holds (a quest you did not plan for, one dropped, half a level or more ahead, a skip).
 - **A finished quest is turned in soon**: the route on screen now takes you to the turn-in of a quest
   complete in your log within its next 2 h 30, early when that costs little. Before, it went wherever it
   was cheapest, which could be the end of the route: a level 36 Colonel Kurzen two minutes from

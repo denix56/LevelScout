@@ -402,6 +402,137 @@ local function gather()
     }
 end
 
+---------------------------------------------------------------------------------------------
+-- The shown route moves on at once
+---------------------------------------------------------------------------------------------
+-- A step of the shown route done as planned (its quest accepted or turned in, its objectives all
+-- finished) and a flight point on the way learned leave the route on screen at once, and the
+-- waypoint goes on to the next stop. A new plan takes a while to come: Engine.Replan waits for a
+-- burst of events to end and for a plan already running (a ranking of the zones), and then plans
+-- over many frames. The plan that follows only checks that the route still holds
+-- (Engine.HOLD_ROUTE) and puts it right where it does not: a quest that was not in the route, one
+-- dropped, a level, ... are not steps of it, and change nothing here.
+-- What is shown is then a copy of the plan without those steps; the plan as it was made is its
+-- `made`, and what a new plan is held to (the order kept, the leave step) is taken from that, as
+-- it was before: the route rebuilt from that order leaves the done steps out by itself.
+
+-- The plan as it was made, of one shown with steps taken off (see cutDone).
+local function madeOf(plan) return plan and plan.made or plan end
+
+-- Is this step of the route done? `byId`: the quest log by quest id.
+local function stepDone(step, key, byId)
+    if type(key) ~= "string" then return false end
+    local kind, id = key:match("^([PT]):(%d+)$")
+    id = tonumber(id)
+    if kind == "P" then return byId[id] ~= nil or (completed ~= nil and completed[id] == true) end
+    if kind == "T" then return completed ~= nil and completed[id] == true end
+    -- a stop of work: done when every objective it is for is finished
+    if not step.parts or #step.parts == 0 then return false end
+    -- (as the step log counts it, ns.Tracker; a quest turned in already has its work done)
+    for _, p in ipairs(step.parts) do
+        local q = byId[p.quest]
+        if not q then
+            if not (completed and completed[p.quest]) then return false end
+        elseif q.isFailed then
+            return false
+        elseif not q.isComplete then
+            local o = q.objectives and q.objectives[p.index]
+            if not (o and o.finished) then return false end
+        end
+    end
+    return true
+end
+
+-- Take the done steps (and the flight points now known) off the shown route: view.plan becomes a
+-- copy without them (its `made`: the plan as made), view.flightStops follows. `log`: the quest log
+-- (read here when nil). Nothing is published. Returns true when something was taken off.
+local function cutDone(log)
+    local view = Engine.view
+    local plan = view.plan
+    if not (plan and plan.steps and plan.order and #plan.order == #plan.steps and chardb) then return false end
+    local byId = {}
+    for _, q in ipairs(log or Game.GetQuestLog()) do byId[q.id] = q end
+    local steps, order, from, upTo, cut = {}, {}, {}, {}, false
+    local seconds, xp = plan.seconds, plan.xp
+    for i, step in ipairs(plan.steps) do
+        local done = stepDone(step, plan.order[i], byId)
+        if done then
+            cut = true
+            if seconds then seconds = seconds - (step.travel or 0) - (step.seconds or 0) end
+            if xp then xp = xp - (step.xp or 0) end
+        else
+            steps[#steps + 1], order[#order + 1] = step, plan.order[i]
+        end
+        -- the new index of the first step kept at or after i, and of the last one kept up to i
+        from[i], upTo[i] = done and #steps + 1 or #steps, #steps
+    end
+    local known = chardb.knownNodes or {}
+    local stops, stopsCut = {}, false
+    for _, stop in ipairs(view.flightStops or {}) do
+        local at = stop.at and (from[stop.at] or #steps + 1)
+        if known[stop.id] then
+            stopsCut = true
+        elseif at ~= stop.at then
+            local moved = {}
+            for k, v in pairs(stop) do moved[k] = v end
+            moved.at = at -- (a stop on the way to a step done is on the way to the next one now)
+            stops[#stops + 1], stopsCut = moved, true
+        else
+            stops[#stops + 1] = stop
+        end
+    end
+    if stopsCut then view.flightStops = stops end
+    if not cut then return stopsCut end
+    local copy = {}
+    for k, v in pairs(plan) do copy[k] = v end
+    copy.steps, copy.order, copy.made = steps, order, madeOf(plan)
+    copy.seconds, copy.xp = seconds and math.max(0, seconds) or nil, xp and math.max(0, xp) or nil
+    -- (the indices a plan keeps: its best moment to leave, where its slow tail starts, the stone's uses)
+    if plan.peak then copy.peak = math.max(math.min(1, #steps), upTo[plan.peak] or #steps) end
+    if plan.tailStart then copy.tailStart = from[plan.tailStart] or #steps + 1 end
+    if plan.hearth and plan.hearth.uses then
+        local h, uses = {}, {}
+        for k, v in pairs(plan.hearth) do h[k] = v end
+        for _, u in ipairs(plan.hearth.uses) do
+            local i = u.step and from[u.step]
+            if i and plan.steps[u.step] == steps[i] then
+                local moved = {}
+                for k, v in pairs(u) do moved[k] = v end
+                moved.step = i
+                uses[#uses + 1] = moved
+            end
+        end
+        h.uses, copy.hearth = uses, h
+    end
+    view.plan = copy
+    return true
+end
+
+-- An event the shown route expects (see above): the steps it did leave the route on screen, and
+-- the waypoint goes on to the next stop now. `log`: the quest log (read here when nil);
+-- `accepted`: a quest id just accepted, counted in the log whether or not the game lists it yet.
+-- Returns true when the route moved on.
+local function moveAlong(log, accepted)
+    local view = Engine.view
+    if not (view.plan and (view.status == "ready" or view.status == "planning")) then return false end
+    log = log or Game.GetQuestLog()
+    if accepted then
+        local listed = false
+        for _, q in ipairs(log) do if q.id == accepted then listed = true break end end
+        if not listed then
+            local with = { { id = accepted, objectives = {} } }
+            for i, q in ipairs(log) do with[i + 1] = q end
+            log = with
+        end
+    end
+    if not cutDone(log) then return false end
+    -- the step log: the step that was first is done now, not when the next plan comes
+    Tracker.OnPlan(view.plan, { now = Game.Now(), level = Game.GetPlayer().level, group = Game.GetGroupSize(),
+        log = log, completed = completed })
+    publish()
+    return true
+end
+
 local function moveOn(plan, ranked, itinerary)
     local view = Engine.view
     local was = view.moveOn
@@ -486,13 +617,16 @@ startItinerary = function(result)
                     chardb.seam = sm and { zone = sm.zone, to = sm.to, window = copy(sm.window), keys = copy(sm.keys),
                         leave = sm.leave, windowB = copy(sm.windowB), head = copy(sm.head), leaveB = sm.leaveB } or nil
                 end
-                if out.show and view.zone == zone and view.plan == shownPlan then
+                if out.show and view.zone == zone and madeOf(view.plan) == shownPlan then
                     view.plan, view.flightStops = out.show.plan, out.show.flightStops
                     local old = chardb.route
                     chardb.route = { zone = zone, order = Zones.Plain(view.plan).order, -- (the overlays are laid over it again)
                         from = old and old.zone == zone and old.from or nil, expect = old and old.zone == zone and old.expect or nil }
+                    -- (steps done while the next hours were worked out stay off it: see cutDone)
+                    local log = state.log
+                    if cutDone() then log = Game.GetQuestLog() end
                     Tracker.OnPlan(view.plan, { now = Game.Now(), level = state.level, group = state.groupSize,
-                        log = state.log, completed = completed })
+                        log = log, completed = completed })
                 end
             end
             view.trace = Engine.trace and out.trace or nil
@@ -819,7 +953,7 @@ local function run()
     -- comes on from there (see the job). The first plan of a session, a zone picked by hand, the player's
     -- asks (letGo), a class quest chain, a snapshot and a plan after a pause or an error show it as before.
     local quiet = Engine.HOLD_ROUTE and letGo == letGoDone and not snap and not chardb.chain
-        and view.status == "ready" and view.plan ~= nil and not view.plan.chain and #view.plan.steps > 0
+        and view.status == "ready" and view.plan ~= nil and not view.plan.chain and #madeOf(view.plan).steps > 0
         and view.zone ~= nil and view.zone == chardb.zone
     if full and quiet and not rankOwed then full, rankOwed = false, true end
     if quiet then
@@ -878,7 +1012,7 @@ local function run()
                 chainPlan = tried
                 -- the shown order (or the one saved with the character) is kept unless a new
                 -- one is clearly better, as for a zone
-                local was = view.plan
+                local was = madeOf(view.plan) -- (as made: a step taken off since is left out of the rebuilt one by itself)
                 local order = (was and was.chain == active.id and #was.steps > 0) and was.order or nil
                 local savedChain = chardb.chainRoute
                 if not was and savedChain and savedChain.chain == active.id then order = savedChain.order end
@@ -935,7 +1069,8 @@ local function run()
         -- (with quests taken along to the next zone, the route without them: its order rebuilt
         -- without Zones.WithBorder would plan them whole, their far turn-in included; and without the
         -- way across planned together)
-        local shown = (view.plan and not view.plan.chain) and Zones.Plain(view.plan) or nil
+        -- (the route as made: steps done since it are taken off the one on screen only, see cutDone)
+        local shown = (view.plan and not view.plan.chain) and Zones.Plain(madeOf(view.plan)) or nil
         local zone, fresh = chardb.zone, nil
         -- The order to keep: the shown route's; before the first plan of a session (login,
         -- /reload) the one saved with the character, so the route does not reshuffle over a relog.
@@ -1001,7 +1136,7 @@ local function run()
             local source = shown
             local before, rebuilt = shown.order, Zones.PlanZone(zone, ctx, shown.order)
             local now = rebuilt.order
-            local layer = Zones.SEAM and chardb.seam and chardb.seam.zone == zone and Zones.SeamLayer(view.plan) or nil
+            local layer = Zones.SEAM and chardb.seam and chardb.seam.zone == zone and Zones.SeamLayer(madeOf(view.plan)) or nil
             if layer then
                 source, before, now = layer, layer.order, Zones.WithSeam(zone, ctx, rebuilt, chardb.seam).order
             end
@@ -1132,6 +1267,12 @@ local function run()
             chardb.seam = nil
         end
         view.ranked, view.plan, view.zone = result.ranked, result.plan, result.zone
+        view.flightStops = result.flightStops -- unknown flight points close to the route (Zones.FlightStops)
+        -- Steps done while this plan was made (its quest log is from before them) stay off the route
+        -- on screen: the waypoint does not go back to them. (The event that did them asked for the plan
+        -- after this one, which is made from the log as it is now.)
+        local log = result.state.log
+        if cutDone() then log = Game.GetQuestLog() end
         view.zoneName = chain and chainTitle(result.plan) or mapName(result.zone)
         if chain then
             chardb.chainName = result.plan.chainName
@@ -1160,14 +1301,13 @@ local function run()
                     mapName(result.zone), mapName(c.zones[2]))
             end
             -- until the new itinerary is in, the move-on rule uses the one worked out before
-            moveOn(result.plan, result.ranked, view.itinerary)
+            moveOn(view.plan, result.ranked, view.itinerary)
         end
         view.updated = Game.Now()
         travel = result.travel
-        view.flightStops = result.flightStops -- unknown flight points close to the route (Zones.FlightStops)
         -- the step log: how long the step that was first really took (see ns.Tracker)
-        Tracker.OnPlan(result.plan, { now = view.updated, level = result.state.level, group = result.state.groupSize,
-            log = result.state.log, completed = completed })
+        Tracker.OnPlan(view.plan, { now = view.updated, level = result.state.level, group = result.state.groupSize,
+            log = log, completed = completed })
         view.flightsKnown = next(chardb.knownNodes) ~= nil
         -- No flight path known and the route starts in another zone: trips are walked only for
         -- that. Said once per character (the current step's row says it too).
@@ -1483,9 +1623,11 @@ function Engine.IsIgnored(questId) return chardb and chardb.ignored[questId] == 
 local handlers = {}
 -- A quest accepted. One the player had skipped is skipped no longer: taking it is choosing it
 -- (AutoQuest takes only the plan's quests). The client sends the quest id, or the log index and then the id.
+-- An accept of the shown route moves it on at once (moveAlong); the plan after it checks the route.
 function handlers.QUEST_ACCEPTED(a, b)
     local id = type(b) == "number" and b or a
     if type(id) == "number" and chardb then chardb.ignored[id] = nil end
+    if type(id) == "number" then moveAlong(nil, id) end
     Engine.Replan()
 end
 -- A quest of the chain being followed left the log: turned in, or dropped. Dropped (the game
@@ -1521,6 +1663,7 @@ function handlers.QUEST_TURNED_IN(questId)
     end
     if type(questId) == "number" and completed then completed[questId] = true end
     if type(questId) == "number" and chardb then chardb.ignored[questId] = nil end -- done: no longer "skipped"
+    moveAlong() -- (its turn-in step is done: the route on screen moves on at once)
     Engine.Replan()
 end
 -- What the tracker needs to know about the moment a sample is taken.
@@ -1560,8 +1703,12 @@ end
 function handlers.QUEST_LOG_UPDATE()
     local log = Game.GetQuestLog()
     Tracker.OnLog(log, trackInfo(true)) -- it compares with the log it saw last
-    -- Fires for many reasons; replan only when progress really changed.
-    if signature(log) ~= lastSignature then Engine.Replan() end
+    -- Fires for many reasons; replan only when progress really changed. A stop of work whose
+    -- objectives are all finished now leaves the route on screen at once (moveAlong).
+    if signature(log) ~= lastSignature then
+        moveAlong(log)
+        Engine.Replan()
+    end
 end
 -- A kill by us or our party: one try at every quest item that mob drops (learned solo only).
 function handlers.PARTY_KILL(_, targetGUID)
@@ -1729,14 +1876,14 @@ function handlers.TAXIMAP_OPENED()
     local function look()
         if not taxiOpen then return end
         looks = looks + 1
-        if readTaxi() then Engine.ReplanNow() end
+        if readTaxi() then moveAlong(); Engine.ReplanNow() end
         if looks < Engine.TAXI_LOOKS then Game.After(Engine.TAXI_EVERY, look) end
     end
     look()
 end
 function handlers.TAXIMAP_CLOSED()
     taxiOpen = false
-    if readTaxi() then Engine.ReplanNow() end -- (a list that came only at the last moment)
+    if readTaxi() then moveAlong(); Engine.ReplanNow() end -- (a list that came only at the last moment)
 end
 
 -- The flight node of our side closest to the player: id, name, yards.
@@ -1769,6 +1916,7 @@ function handlers.UI_INFO_MESSAGE(_, message)
         if not chardb.knownNodes[id] then
             chardb.knownNodes[id] = true
             ns.Print("Learned flight point: %s", tostring(name))
+            moveAlong() -- (a flight point on the way: the waypoint goes on to the next stop now)
             Engine.ReplanNow()
         end
     else
