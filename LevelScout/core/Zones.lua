@@ -123,6 +123,7 @@ function Zones.Context(state)
         count = count + 1
     end
     local start = state.map and state.x and Geo.Loc(state.map, state.x * 100, state.y * 100) or nil
+    local highNodes = Zones.HighNodes(world, state.level, side)
     return {
         level = state.level, pace = pace, side = side, drops = state.drops,
         -- one correction per data source of drop rates, from all our kills and drops
@@ -139,7 +140,8 @@ function Zones.Context(state)
         routeEscort = state.routeEscort == true,
         start = start, startMap = state.map,
         travel = Travel.New(world, { speed = state.speed or pace.r, ride = state.ride or pace.rm, side = side,
-            knownNodes = state.knownNodes, tram = state.tram }),
+            knownNodes = state.knownNodes, tram = state.tram, noUnlock = highNodes }),
+        highNodes = highNodes, -- flight points in zones above the level: never to be unlocked (Zones.HighNodes)
         tram = state.tram, -- "on" | "off" | "auto" (nil): the Deeprun Tram (see Travel.New)
         log = log, logCount = count, capacity = state.capacity,
         bagQuests = state.bagQuests, -- { [questId] = itemId }: quests an item in the bags starts
@@ -188,6 +190,22 @@ end
 local classInside = {} -- [class] = Zones.ClassInside's answer
 
 function Zones.Reset() zoneCache, dungeonCache, classInside, bindCache = {}, nil, {}, {} end
+
+--- Flight points in zones above the character's level: { [nodeId] = true }. A zone is above
+--- the level when it would not be offered yet (its suggested range starts more than
+--- Zones.EARLY levels higher, see Zones.Shortlist). Such points are not suggested to unlock,
+--- and no flight starts at one still to be unlocked. Points whose zone has no level range
+--- (cities) are never above it.
+function Zones.HighNodes(world, level, side)
+    local out = {}
+    local nodes = world and world.travel and world.travel.nodes
+    if not nodes or not level then return out end
+    for id, n in pairs(nodes) do
+        local info = n[4] and Zones.Info(n[4], side)
+        if info and info.lo and level < info.lo - Zones.EARLY then out[id] = true end
+    end
+    return out
+end
 
 -- Where to start a zone when the character's own position is unknown or far away: its
 -- busiest hub for this side.
@@ -664,7 +682,8 @@ Zones.FLIGHT_SOON = 30    -- seconds: the first place in the route within this o
 --- in the route is at most FLIGHT_DETOUR, at the first place that is within FLIGHT_SOON of
 --- that (a route often passes a flight master several times: the sooner it is unlocked, the
 --- sooner it can be used). `skip` = { [nodeId] = true }:
---- points the player does not want. Nothing is listed while no flight point is known at all
+--- points the player does not want. Points in zones above the level (ctx.highNodes) are left
+--- out, unless the route itself goes into that zone. Nothing is listed while no flight point is known at all
 --- (the flight map has not been read yet: every point would look new).
 function Zones.FlightStops(plan, ctx, skip)
     local out = {}
@@ -677,8 +696,13 @@ function Zones.FlightStops(plan, ctx, skip)
     -- (a leg that goes by hearthstone starts at the inn: Planner.HEARTH)
     local from = {}
     for i, step in ipairs(plan.steps) do from[i] = step.hearth and step.hearth.loc or points[i] end
+    -- (the zones the route goes into: a flight point there is fine whatever the zone's level)
+    local visited = {}
+    for _, p in ipairs(points) do if p.map then visited[p.map] = true end end
+    local high = ctx.highNodes or {}
     for id, n in pairs(nodes) do
-        if not known[id] and not (skip and skip[id]) and (n[7] == "n" or n[7] == ctx.side) and n[4] and n[5] and n[6] then
+        if not known[id] and not (skip and skip[id]) and (n[7] == "n" or n[7] == ctx.side) and n[4] and n[5] and n[6]
+            and not (high[id] and not visited[n[4]]) then
             local loc = { c = n[1], x = n[2], y = n[3], map = n[4], mx = n[5], my = n[6] }
             local best, detours = nil, {}
             for i = 1, #points do

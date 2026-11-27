@@ -325,7 +325,9 @@ function Travel.New(world, opts)
         local flySpeed = (travel.speeds and travel.speeds.fly) or 32
         for id, n in pairs(travel.nodes or {}) do
             local known = opts.knownNodes[id] and true or false
-            if known or (Travel.UNLOCK and self.side and (n[7] == "n" or n[7] == self.side)) then
+            -- (opts.noUnlock: points not to be unlocked, those in zones above the level)
+            if known or (Travel.UNLOCK and self.side and (n[7] == "n" or n[7] == self.side)
+                and not (opts.noUnlock and opts.noUnlock[id])) then
                 self.known[id] = known or nil
                 if not known then self.hasUnknown = true end
                 self.nodes[id] = Geo.WorldLoc(n[1], n[2], n[3])
