@@ -202,6 +202,13 @@ end
 --- us. Nothing is worked out in the air; on landing the way from there is taken at once.
 function Guide.Tick()
     if not followed then return Guide.mode end
+    -- Dead or a ghost: the way is not worked out again (the run from the graveyard would point at
+    -- another flight master); the waypoint stays as it was at death until we are alive again.
+    if Game.IsDead() then
+        pending, lastSeen = nil, nil
+        if manual then manual.pending = nil end
+        return Guide.mode
+    end
     if inFlight() then
         riding, pending = true, nil
         if manual then manual.pending = nil end

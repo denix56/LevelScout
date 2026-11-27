@@ -965,9 +965,20 @@ H.suite("Hearthstone in the game", function()
         eq(view.hearth, nil)
         env.name, env.count = "Goldshire", 0
         eq(replan(), nil, "not in the bags")
+        -- dead or a ghost: no plan is made at all (the route holds); alive again, the plan put off is made
         env.count, env.dead = 1, true
-        eq(replan(), nil, "dead")
-        env.dead, env.start, env.dur = false, SECRET, 3600
+        state = nil
+        ns.Engine.Replan(true)
+        ok(M.settle(), "planning finishes")
+        eq(state, nil, "dead: no plan")
+        M.fire("PLAYER_ALIVE")
+        ok(M.settle())
+        eq(state, nil, "released, still a ghost: no plan")
+        env.dead = false
+        M.fire("PLAYER_UNGHOST")
+        ok(M.settle(), "planning finishes")
+        ok(state and state.hearth, "alive again: planned, with the stone")
+        env.start, env.dur = SECRET, 3600
         eq(replan(), nil, "its cooldown is secret")
         env.start, env.dur = 0, 0
         ok(replan(), "and back")
